@@ -44,7 +44,10 @@ extern "C"
     /// @brief **3** - To use Wiseplay for processing
     STREAM_CRYPTO_KEY_SYSTEM_WISEPLAY,
 
-    /// @brief **4** - The maximum value to use in a list.
+    /// @brief **4** - To use ClearKey for processing
+    STREAM_CRYPTO_KEY_SYSTEM_CLEARKEY,
+
+    /// @brief **5** - The maximum value to use in a list.
     STREAM_CRYPTO_KEY_SYSTEM_COUNT
   };
   ///@}
@@ -100,6 +103,15 @@ extern "C"
 
     /// @brief Key id
     uint8_t kid[16];
+
+    /// @brief Encryption mode
+    uint16_t mode;
+
+    /// @brief Crypt blocks - number of blocks to encrypt in sample encryption pattern
+    uint8_t cryptBlocks;
+
+    /// @brief Skip blocks - number of blocks to skip in sample encryption pattern
+    uint8_t skipBlocks;
   };
   ///@}
   //----------------------------------------------------------------------------

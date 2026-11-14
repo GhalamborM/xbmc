@@ -7,41 +7,64 @@
  */
 #include "AutorunMediaJob.h"
 
-#include "Application.h"
 #include "ServiceBroker.h"
+#include "application/ApplicationComponents.h"
+#include "application/ApplicationPowerHandling.h"
 #include "dialogs/GUIDialogSelect.h"
 #include "guilib/GUIComponent.h"
 #include "guilib/GUIWindowManager.h"
-#include "guilib/LocalizeStrings.h"
 #include "interfaces/builtins/Builtins.h"
+#include "resources/LocalizeStrings.h"
+#include "resources/ResourcesComponent.h"
+#include "storage/MediaManager.h"
 #include "utils/StringUtils.h"
 #include "utils/Variant.h"
 
-CAutorunMediaJob::CAutorunMediaJob(const std::string &label, const std::string &path):
-  m_path(path),
-  m_label(label)
+CAutorunMediaJob::CAutorunMediaJob(const std::string& label,
+                                   const std::string& path,
+                                   uint64_t generation)
+  : m_path(path),
+    m_label(label)
 {
+#ifdef HAS_OPTICAL_DRIVE
+  m_generation = generation;
+#endif
 }
 
 bool CAutorunMediaJob::DoWork()
 {
+#ifdef HAS_OPTICAL_DRIVE
+  // The disc may already have been ejected while this job was queued
+  if (!CServiceBroker::GetMediaManager().IsDiscCurrent(m_path, m_generation))
+    return true;
+#endif
+
   CGUIDialogSelect* pDialog= CServiceBroker::GetGUI()->GetWindowManager().GetWindow<CGUIDialogSelect>(WINDOW_DIALOG_SELECT);
 
   // wake up and turn off the screensaver if it's active
-  g_application.WakeUpScreenSaverAndDPMS();
+  auto& components = CServiceBroker::GetAppComponents();
+  const auto appPower = components.GetComponent<CApplicationPowerHandling>();
+  appPower->WakeUpScreenSaverAndDPMS();
 
   pDialog->Reset();
   if (!m_label.empty())
     pDialog->SetHeading(CVariant{m_label});
   else
-    pDialog->SetHeading(CVariant{g_localizeStrings.Get(21331)});
+    pDialog->SetHeading(
+        CVariant{CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(21331)});
 
-  pDialog->Add(g_localizeStrings.Get(21332));
-  pDialog->Add(g_localizeStrings.Get(21333));
-  pDialog->Add(g_localizeStrings.Get(21334));
-  pDialog->Add(g_localizeStrings.Get(21335));
+  pDialog->Add(CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(21332));
+  pDialog->Add(CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(21333));
+  pDialog->Add(CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(21334));
+  pDialog->Add(CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(21335));
 
   pDialog->Open();
+
+#ifdef HAS_OPTICAL_DRIVE
+  // Opening the dialog waits for the user, so the disc may be gone by now
+  if (!CServiceBroker::GetMediaManager().IsDiscCurrent(m_path, m_generation))
+    return true;
+#endif
 
   int selection = pDialog->GetSelectedItem();
   if (selection >= 0)

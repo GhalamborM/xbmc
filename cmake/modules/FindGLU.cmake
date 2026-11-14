@@ -3,31 +3,23 @@
 # -----
 # Finds the GLU library
 #
-# This will define the following variables::
+# This will define the following target:
 #
-# GLU_FOUND - system has GLU
-# GLU_INCLUDE_DIRS - the GLU include directory
-# GLU_LIBRARIES - the GLU libraries
-# GLU_DEFINITIONS - the GLU definitions
-#
+#   ${APP_NAME_LC}::GLU   - The GLU library
 
-if(PKG_CONFIG_FOUND)
-  pkg_check_modules(PC_GLU glu QUIET)
+if(NOT TARGET ${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME})
+  include(cmake/scripts/common/ModuleHelpers.cmake)
+
+  set(${CMAKE_FIND_PACKAGE_NAME}_MODULE_LC glu)
+  set(${${CMAKE_FIND_PACKAGE_NAME}_MODULE_LC}_DISABLE_VERSION ON)
+
+  SETUP_BUILD_VARS()
+
+  SETUP_FIND_SPECS()
+
+  SEARCH_EXISTING_PACKAGES()
+
+  if(${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME}_FOUND)
+    add_library(${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME} ALIAS PkgConfig::${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME})
+  endif()
 endif()
-
-find_path(GLU_INCLUDE_DIR NAMES GL/glu.h
-                          PATHS ${PC_GLU_INCLUDEDIR})
-find_library(GLU_LIBRARY NAMES GLU
-                         PATHS ${PC_GLU_LIBDIR})
-
-include(FindPackageHandleStandardArgs)
-find_package_handle_standard_args(GLU
-                                  REQUIRED_VARS GLU_LIBRARY GLU_INCLUDE_DIR)
-
-if(GLU_FOUND)
-  set(GLU_LIBRARIES ${GLU_LIBRARY})
-  set(GLU_INCLUDE_DIRS ${GLU_INCLUDE_DIR})
-  set(GLU_DEFINITIONS -DHAS_GLU=1)
-endif()
-
-mark_as_advanced(GLU_INCLUDE_DIR GLU_LIBRARY)

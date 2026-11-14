@@ -20,17 +20,23 @@
 
 #include "platform/linux/sse4/DllLibSSE4.h"
 
+#include <cstdint>
 #include <list>
 #include <map>
 #include <memory>
+#include <mutex>
+#include <set>
+#include <string>
 #include <utility>
 #include <vector>
 
 #include <va/va.h>
 
-extern "C" {
-#include <libavutil/avutil.h>
+extern "C"
+{
 #include <libavfilter/avfilter.h>
+#include <libavutil/avutil.h>
+#include <libavutil/pixfmt.h>
 }
 
 using namespace Actor;
@@ -58,30 +64,105 @@ class CDecoder;
 class CVaapiBufferStats
 {
 public:
-  uint16_t decodedPics;
-  uint16_t processedPics;
-  uint16_t renderPics;
-  uint64_t latency;         // time decoder has waited for a frame, ideally there is no latency
-  int codecFlags;
-  bool canSkipDeint;
-  int processCmd;
-  bool isVpp;
+  uint16_t decodedPics{};
+  uint16_t processedPics{};
+  uint16_t renderPics{};
+  uint64_t latency{}; // time decoder has waited for a frame, ideally there is no latency
+  int codecFlags{};
+  bool canSkipDeint{};
+  int processCmd{};
+  bool isVpp{};
 
-  void IncDecoded() { CSingleLock l(m_sec); decodedPics++;}
-  void DecDecoded() { CSingleLock l(m_sec); decodedPics--;}
-  void IncProcessed() { CSingleLock l(m_sec); processedPics++;}
-  void DecProcessed() { CSingleLock l(m_sec); processedPics--;}
-  void IncRender() { CSingleLock l(m_sec); renderPics++;}
-  void DecRender() { CSingleLock l(m_sec); renderPics--;}
-  void Reset() { CSingleLock l(m_sec); decodedPics=0; processedPics=0;renderPics=0;latency=0;isVpp=false;}
-  void Get(uint16_t &decoded, uint16_t &processed, uint16_t &render, bool &vpp) {CSingleLock l(m_sec); decoded = decodedPics, processed=processedPics, render=renderPics; vpp=isVpp;}
-  void SetParams(uint64_t time, int flags) { CSingleLock l(m_sec); latency = time; codecFlags = flags; }
-  void GetParams(uint64_t &lat, int &flags) { CSingleLock l(m_sec); lat = latency; flags = codecFlags; }
-  void SetCmd(int cmd) { CSingleLock l(m_sec); processCmd = cmd; }
-  void GetCmd(int &cmd) { CSingleLock l(m_sec); cmd = processCmd; processCmd = 0; }
-  void SetCanSkipDeint(bool canSkip) { CSingleLock l(m_sec); canSkipDeint = canSkip; }
-  bool CanSkipDeint() { CSingleLock l(m_sec); if (canSkipDeint) return true; else return false;}
-  void SetVpp(bool vpp) {CSingleLock l(m_sec); isVpp = vpp;}
+  void IncDecoded()
+  {
+    std::unique_lock l(m_sec);
+    decodedPics++;
+  }
+  void DecDecoded()
+  {
+    std::unique_lock l(m_sec);
+    decodedPics--;
+  }
+  void IncProcessed()
+  {
+    std::unique_lock l(m_sec);
+    processedPics++;
+  }
+  void DecProcessed()
+  {
+    std::unique_lock l(m_sec);
+    processedPics--;
+  }
+  void IncRender()
+  {
+    std::unique_lock l(m_sec);
+    renderPics++;
+  }
+  void DecRender()
+  {
+    std::unique_lock l(m_sec);
+    renderPics--;
+  }
+  void Reset()
+  {
+    std::unique_lock l(m_sec);
+    decodedPics = 0;
+    processedPics = 0;
+    renderPics = 0;
+    latency = 0;
+    codecFlags = 0;
+    canSkipDeint = false;
+    processCmd = 0;
+    isVpp = false;
+  }
+  void Get(uint16_t& decoded, uint16_t& processed, uint16_t& render, bool& vpp)
+  {
+    std::unique_lock l(m_sec);
+    decoded = decodedPics, processed = processedPics, render = renderPics;
+    vpp = isVpp;
+  }
+  void SetParams(uint64_t time, int flags)
+  {
+    std::unique_lock l(m_sec);
+    latency = time;
+    codecFlags = flags;
+  }
+  void GetParams(uint64_t& lat, int& flags)
+  {
+    std::unique_lock l(m_sec);
+    lat = latency;
+    flags = codecFlags;
+  }
+  void SetCmd(int cmd)
+  {
+    std::unique_lock l(m_sec);
+    processCmd = cmd;
+  }
+  void GetCmd(int& cmd)
+  {
+    std::unique_lock l(m_sec);
+    cmd = processCmd;
+    processCmd = 0;
+  }
+  void SetCanSkipDeint(bool canSkip)
+  {
+    std::unique_lock l(m_sec);
+    canSkipDeint = canSkip;
+  }
+  bool CanSkipDeint()
+  {
+    std::unique_lock l(m_sec);
+    if (canSkipDeint)
+      return true;
+    else
+      return false;
+  }
+  void SetVpp(bool vpp)
+  {
+    std::unique_lock l(m_sec);
+    isVpp = vpp;
+  }
+
 private:
   CCriticalSection m_sec;
 };
@@ -113,8 +194,12 @@ struct CVaapiConfig
   VADisplay dpy;
   VAProfile profile;
   VAConfigAttrib attrib;
-  CProcessInfo *processInfo;
-  bool driverIsMesa;
+  CProcessInfo* processInfo;
+  int bitDepth;
+  // VA fourcc requested for the surface pool. Carried through to processed
+  // pictures so the renderer can pick its sampling path per-fourcc without
+  // re-inspecting the surface.
+  std::int32_t pixelFormat{};
 };
 
 /**
@@ -159,6 +244,7 @@ struct CVaapiProcessedPicture
     id = rhs.id;
     source = rhs.source;
     crop = rhs.crop;
+    fourcc = rhs.fourcc;
     return *this;
   };
 
@@ -167,7 +253,10 @@ struct CVaapiProcessedPicture
   AVFrame *frame;
   int id;
   CPostproc *source = nullptr;
-  bool crop;
+  bool crop = false;
+  // VA fourcc of the underlying surface. Set by COutput from
+  // CVaapiConfig::pixelFormat.
+  std::int32_t fourcc{};
 };
 
 class CVaapiRenderPicture : public CVideoBuffer
@@ -282,7 +371,7 @@ protected:
   CDecoder &m_vaapi;
 
   // extended state variables for state machine
-  int m_extTimeout;
+  std::chrono::milliseconds m_extTimeout = std::chrono::milliseconds::zero();
   /// \brief Whether at least one interlaced frame was encountered in the video stream (indicating that more interlaced frames could potentially follow)
   bool m_seenInterlaced;
   CVaapiConfig m_config;
@@ -335,22 +424,99 @@ public:
   static void FFReleaseBuffer(void *opaque, uint8_t *data);
 private:
   CVAAPIContext();
-  void Close();
   void SetVaDisplayForSystem();
   bool CreateContext();
-  void DestroyContext();
   void QueryCaps();
   bool CheckSuccess(VAStatus status, const std::string& function);
   bool IsValidDecoder(CDecoder *decoder);
   void SetValidDRMVaDisplayFromRenderNode();
   static CVAAPIContext *m_context;
   static CCriticalSection m_section;
-  VADisplay m_display;
+  VADisplay m_display = NULL;
+  // Diagnostics-only: nothing branches on this value (see Release()) --
+  // logged on change to make decoder-lifecycle issues visible.
   int m_refCount;
   int m_profileCount;
   VAProfile *m_profiles;
   std::vector<CDecoder*> m_decoders;
   int m_renderNodeFD{-1};
+};
+
+//-----------------------------------------------------------------------------
+// Importable surface formats
+//-----------------------------------------------------------------------------
+
+// Pairing of a VA fourcc, its VA_RT_FORMAT_* (used for surface-creation probe),
+// and the matching ffmpeg AVPixelFormat. Single source of truth: the probe
+// iterates this table, the caller queries it by AVPixelFormat. Future fourcc
+// support is added by extending the table; both directions stay in sync.
+struct VaFormatEntry
+{
+  std::uint32_t vaFourcc;
+  unsigned vaRtFormat;
+  AVPixelFormat pixFmt;
+};
+
+inline constexpr VaFormatEntry kVaFormatTable[] = {
+    {VA_FOURCC_NV12, VA_RT_FORMAT_YUV420, AV_PIX_FMT_NV12},
+    {VA_FOURCC_P010, VA_RT_FORMAT_YUV420_10BPP, AV_PIX_FMT_P010},
+#if defined(HAS_GLES)
+    // The GL renderer samples every surface as NV12 and has no shader for the
+    // 12-bit 4:2:0 / packed 4:2:2 / packed 4:4:4 layouts, so those are GLES-only.
+    {VA_FOURCC_P012, VA_RT_FORMAT_YUV420_12, AV_PIX_FMT_P012},
+    {VA_FOURCC_P016, VA_RT_FORMAT_YUV420_12, AV_PIX_FMT_P016},
+    {VA_FOURCC_Y210, VA_RT_FORMAT_YUV422_10, AV_PIX_FMT_Y210},
+    {VA_FOURCC_Y212, VA_RT_FORMAT_YUV422_12, AV_PIX_FMT_Y212},
+#if LIBAVUTIL_VERSION_INT >= AV_VERSION_INT(59, 45, 100)
+    {VA_FOURCC_Y216, VA_RT_FORMAT_YUV422_12, AV_PIX_FMT_Y216},
+#endif
+    {VA_FOURCC_AYUV, VA_RT_FORMAT_YUV444, AV_PIX_FMT_VUYA},
+    {VA_FOURCC_XYUV, VA_RT_FORMAT_YUV444, AV_PIX_FMT_VUYX},
+    {VA_FOURCC_Y410, VA_RT_FORMAT_YUV444_10, AV_PIX_FMT_XV30},
+    {VA_FOURCC_Y412, VA_RT_FORMAT_YUV444_12, AV_PIX_FMT_XV36},
+#if LIBAVUTIL_VERSION_INT >= AV_VERSION_INT(59, 46, 100)
+    {VA_FOURCC_Y416, VA_RT_FORMAT_YUV444_12, AV_PIX_FMT_XV48},
+#endif
+#endif
+};
+
+/*!
+ * \brief Tracks which VA surface formats the EGL interop layer can import.
+ *
+ * Caller-facing API uses AVPixelFormat (ffmpeg currency), matching the
+ * vocabulary used elsewhere in Kodi's codec and renderer code. Internally
+ * the AVPixelFormat is mapped to its VA fourcc via kVaFormatTable.
+ *
+ * Populated at startup by the probe layer (CVaapi2Texture::TestInteropFormats),
+ * which iterates kVaFormatTable and Adds each fourcc that passes a round-trip
+ * import test. Queried by the decoder when picking a VA profile.
+ */
+class CCapabilities
+{
+public:
+  /*!
+   * \brief Mark the given pixel format as importable on this system.
+   * \param pixFmt ffmpeg pixel format whose corresponding VA fourcc the
+   *               EGL interop layer was able to import.
+   * \note Silently ignores formats not present in kVaFormatTable.
+   */
+  void Add(AVPixelFormat pixFmt);
+
+  /*!
+   * \brief Test whether a pixel format is importable on this system.
+   * \param pixFmt ffmpeg pixel format to query.
+   * \return true if the matching VA fourcc has been Added.
+   */
+  bool Supports(AVPixelFormat pixFmt) const;
+
+  /*!
+   * \brief Render the populated set as a human-readable string for logging.
+   * \return Comma-separated list of ffmpeg pixel format names.
+   */
+  std::string ToString() const;
+
+private:
+  std::set<AVPixelFormat> m_pixFmts;
 };
 
 //-----------------------------------------------------------------------------
@@ -360,6 +526,8 @@ private:
 class IVaapiWinSystem
 {
 public:
+  virtual ~IVaapiWinSystem() = default;
+
   virtual VADisplay GetVADisplay() = 0;
   virtual void* GetEGLDisplay() { return nullptr; }
 };
@@ -397,6 +565,10 @@ public:
   static IHardwareDecoder* Create(CDVDStreamInfo &hint, CProcessInfo &processInfo, AVPixelFormat fmt);
   static void Register(IVaapiWinSystem *winSystem, bool deepColor);
 
+  // Importable surface caps. Populated by the renderer probe before
+  // CDecoder::Register runs; read by CDecoder::Open profile dispatch.
+  static CCapabilities& GetCaps() { return m_capFormats; }
+
   static IVaapiWinSystem* m_pWinSystem;
 
 protected:
@@ -421,7 +593,6 @@ protected:
   bool m_vaapiConfigured;
   CVaapiConfig  m_vaapiConfig;
   CVideoSurfaces m_videoSurfaces;
-  AVCodecContext* m_avctx;
   int m_getBufferError;
 
   COutput m_vaapiOutput;
@@ -432,8 +603,15 @@ protected:
   int m_codecControl;
   CProcessInfo& m_processInfo;
 
-  static bool m_capGeneral;
-  static bool m_capDeepColor;
+  static CCapabilities m_capFormats;
+
+private:
+  struct AVBufferRefDeleter
+  {
+    void operator()(AVBufferRef* p) const;
+  };
+
+  std::unique_ptr<AVBufferRef, AVBufferRefDeleter> m_deviceRef;
 };
 
 //-----------------------------------------------------------------------------
@@ -511,11 +689,11 @@ protected:
   bool CheckSuccess(VAStatus status, const std::string& function);
   void Dispose();
   void Advance();
-  VAConfigID m_configId;
-  VAContextID m_contextId;
+  VAConfigID m_configId = VA_INVALID_ID;
+  VAContextID m_contextId = VA_INVALID_ID;
   CVideoSurfaces m_videoSurfaces;
   std::deque<CVaapiDecodedPicture> m_decodedPics;
-  VABufferID m_filter;
+  VABufferID m_filter = VA_INVALID_ID;
   int m_forwardRefs, m_backwardRefs;
   int m_currentIdx;
   int m_frameCount;

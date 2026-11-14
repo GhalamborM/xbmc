@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <window>
-	<defaultcontrol>10</defaultcontrol>
+	<defaultcontrol always="true">10</defaultcontrol>
 	<include>Animation_DialogPopupOpenClose</include>
 	<controls>
 		<control type="group">
@@ -60,8 +60,8 @@
 					<top>0</top>
 					<bottom>0</bottom>
 					<right>0</right>
-					<visible>Control.HasFocus(10)</visible>
 					<texture colordiffuse="button_focus">lists/focus.png</texture>
+					<animation effect="fade" start="100" end="50" time="0">UnFocus</animation>
 				</control>
 				<control type="label">
 					<left>10</left>

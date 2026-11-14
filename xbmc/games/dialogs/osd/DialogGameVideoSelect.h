@@ -24,6 +24,9 @@ class CGUIGameVideoHandle;
 
 namespace GAME
 {
+/*!
+ * \ingroup games
+ */
 class CDialogGameVideoSelect : public CGUIDialog
 {
 public:
@@ -51,7 +54,19 @@ protected:
   virtual void OnItemFocus(unsigned int index) = 0;
   virtual unsigned int GetFocusedItem() const = 0;
   virtual void PostExit() = 0;
+  // override this to do something when an item is selected
+  virtual bool OnClickAction() { return false; }
+  // override this to do something when an item's context menu is opened
+  virtual bool OnMenuAction() { return false; }
+  // override this to do something when an item is overwritten with a new savestate
+  virtual bool OnOverwriteAction() { return false; }
+  // override this to do something when an item is renamed
+  virtual bool OnRenameAction() { return false; }
+  // override this to do something when an item is deleted
+  virtual bool OnDeleteAction() { return false; }
 
+  // GUI functions
+  virtual void RefreshList();
   void OnDescriptionChange(const std::string& description);
 
   std::shared_ptr<RETRO::CGUIGameVideoHandle> m_gameVideoHandle;
@@ -59,8 +74,6 @@ protected:
 private:
   void Update();
   void Clear();
-
-  void OnRefreshList();
 
   void SaveSettings();
 

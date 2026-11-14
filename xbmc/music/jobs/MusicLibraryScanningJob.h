@@ -11,6 +11,7 @@
 #include "music/infoscanner/MusicInfoScanner.h"
 #include "music/jobs/MusicLibraryJob.h"
 
+#include <atomic>
 #include <string>
 
 /*!
@@ -36,7 +37,7 @@ public:
 
   // specialization of CJob
   const char *GetType() const override { return "MusicLibraryScanningJob"; }
-  bool operator==(const CJob* job) const override;
+  bool Equals(const CJob* job) const override;
 
 protected:
   // implementation of CMusicLibraryJob
@@ -44,6 +45,7 @@ protected:
 
 private:
   MUSIC_INFO::CMusicInfoScanner m_scanner;
+  std::atomic<bool> m_cancelled{false};
   std::string m_directory;
   bool m_showProgress;
   int m_flags;

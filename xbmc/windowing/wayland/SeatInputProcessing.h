@@ -79,7 +79,7 @@ public:
  * Multi-seat support is not currently implemented completely, but each seat has
  * separate state.
  */
-class CSeatInputProcessing final : IInputHandlerPointer, IInputHandlerKeyboard
+class CSeatInputProcessing final : public IInputHandlerPointer, public IInputHandlerKeyboard
 {
 public:
   /**
@@ -102,7 +102,7 @@ public:
    *
    * \param scale new buffer-to-surface pixel ratio
    */
-  void SetCoordinateScale(std::int32_t scale);
+  void SetCoordinateScale(double scale);
 
 private:
   wayland::surface_t m_inputSurface;

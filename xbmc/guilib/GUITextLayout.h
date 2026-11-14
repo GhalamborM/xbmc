@@ -33,7 +33,7 @@ class CScrollInfo;
 // 5.  Each item in the vector is length-calculated, and then layout occurs governed by alignment and wrapping rules.
 // 6.  A new vector<CGUIString> is constructed
 
-typedef uint32_t character_t;
+typedef uint64_t character_t;
 typedef std::vector<character_t> vecText;
 
 class CGUIString
@@ -45,6 +45,10 @@ public:
 
   std::string GetAsString() const;
 
+  // The text is UTF-32 and the data stored in a character_t hold multiple information by bits:
+  // <32 bits: are unicode code bits
+  // 32-40 bits: are color bits
+  // 40-48 bits: are style bits (see FONT_STYLE_* flags)
   vecText m_text;
   bool m_carriageReturn; // true if we have a carriage return here
 };
@@ -60,23 +64,23 @@ public:
   void Render(float x,
               float y,
               float angle,
-              UTILS::COLOR::Color color,
-              UTILS::COLOR::Color shadowColor,
+              KODI::UTILS::COLOR::Color color,
+              KODI::UTILS::COLOR::Color shadowColor,
               uint32_t alignment,
               float maxWidth,
               bool solid = false);
   void RenderScrolling(float x,
                        float y,
                        float angle,
-                       UTILS::COLOR::Color color,
-                       UTILS::COLOR::Color shadowColor,
+                       KODI::UTILS::COLOR::Color color,
+                       KODI::UTILS::COLOR::Color shadowColor,
                        uint32_t alignment,
                        float maxWidth,
                        const CScrollInfo& scrollInfo);
   void RenderOutline(float x,
                      float y,
-                     UTILS::COLOR::Color color,
-                     UTILS::COLOR::Color outlineColor,
+                     KODI::UTILS::COLOR::Color color,
+                     KODI::UTILS::COLOR::Color outlineColor,
                      uint32_t alignment,
                      float maxWidth);
 
@@ -94,7 +98,9 @@ public:
   float GetTextWidth() const { return m_textWidth; }
 
   float GetTextWidth(const std::wstring &text) const;
-  
+
+  float GetTextWidth(const vecText& text) const;
+
   /*! \brief Returns the precalculated height of the text to be rendered (in constant time).
    \return height of text
   */
@@ -103,7 +109,7 @@ public:
   bool Update(const std::string &text, float maxWidth = 0, bool forceUpdate = false, bool forceLTRReadingOrder = false);
   bool UpdateW(const std::wstring &text, float maxWidth = 0, bool forceUpdate = false, bool forceLTRReadingOrder = false);
 
-  /*! \brief Update text from a pre-styled vecText/std::vector<UTILS::COLOR::Color> combination
+  /*! \brief Update text from a pre-styled vecText/std::vector<KODI::UTILS::COLOR::Color> combination
    Allows styled text to be passed directly to the text layout.
    \param text the styled text to set.
    \param colors the colors used on the text.
@@ -111,7 +117,7 @@ public:
    \param forceLTRReadingOrder whether to force left to right reading order, defaults to false.
    */
   void UpdateStyled(const vecText& text,
-                    const std::vector<UTILS::COLOR::Color>& colors,
+                    const std::vector<KODI::UTILS::COLOR::Color>& colors,
                     float maxWidth = 0,
                     bool forceLTRReadingOrder = false);
 
@@ -122,12 +128,18 @@ public:
   void SetWrap(bool bWrap=true);
   void SetMaxHeight(float fHeight);
 
+  /*! \brief Set the font used to render this text, replacing the one given at construction
+   Invalidates any cached layout so that the next call to Update()/UpdateW() re-lays out the
+   text using the new font, even if the text itself has not changed.
+   \param font the new font to use
+   */
+  void SetFont(CGUIFont* font);
 
   static void DrawText(CGUIFont* font,
                        float x,
                        float y,
-                       UTILS::COLOR::Color color,
-                       UTILS::COLOR::Color shadowColor,
+                       KODI::UTILS::COLOR::Color color,
+                       KODI::UTILS::COLOR::Color shadowColor,
                        const std::string& text,
                        uint32_t align);
   static void Filter(std::string &text);
@@ -136,9 +148,9 @@ protected:
   void LineBreakText(const vecText &text, std::vector<CGUIString> &lines);
   void WrapText(const vecText &text, float maxWidth);
   static void BidiTransform(std::vector<CGUIString> &lines, bool forceLTRReadingOrder);
-  static std::wstring BidiFlip(const std::wstring& text,
-                               bool forceLTRReadingOrder,
-                               int* visualToLogicalMap = nullptr);
+  static std::u32string BidiFlip(const std::u32string& text,
+                                 bool forceLTRReadingOrder,
+                                 int* visualToLogicalMap = nullptr);
   void CalcTextExtent();
   void UpdateCommon(const std::wstring &text, float maxWidth, bool forceLTRReadingOrder);
 
@@ -154,7 +166,7 @@ protected:
   void UseMonoFont(bool use) { m_font = use && m_monoFont ? m_monoFont : m_varFont; }
 
   // our text to render
-  std::vector<UTILS::COLOR::Color> m_colors;
+  std::vector<KODI::UTILS::COLOR::Color> m_colors;
   std::vector<CGUIString> m_lines;
   typedef std::vector<CGUIString>::iterator iLine;
 
@@ -167,7 +179,7 @@ protected:
   bool  m_wrap;            // wrapping (true if justify is enabled!)
   float m_maxHeight;
   // the default color (may differ from the font objects defaults)
-  UTILS::COLOR::Color m_textColor;
+  KODI::UTILS::COLOR::Color m_textColor;
 
   std::string m_lastUtf8Text;
   std::wstring m_lastText;
@@ -177,19 +189,20 @@ protected:
 private:
   inline bool IsSpace(character_t letter) const XBMC_FORCE_INLINE
   {
-    return (letter & 0xffff) == L' ';
+    return (letter & 0xffffffff) == L' ';
   };
   inline bool CanWrapAtLetter(character_t letter) const XBMC_FORCE_INLINE
   {
-    character_t ch = letter & 0xffff;
-    return ch == L' ' || (ch >=0x4e00 && ch <= 0x9fff);
+    character_t ch = letter & 0xffffffff;
+    //! @todo: unicode spaces are not handled, to check also all other GUI parts
+    return ch == L' ';
   };
   static void AppendToUTF32(const std::string &utf8, character_t colStyle, vecText &utf32);
   static void AppendToUTF32(const std::wstring &utf16, character_t colStyle, vecText &utf32);
   static void ParseText(const std::wstring& text,
                         uint32_t defaultStyle,
-                        UTILS::COLOR::Color defaultColor,
-                        std::vector<UTILS::COLOR::Color>& colors,
+                        KODI::UTILS::COLOR::Color defaultColor,
+                        std::vector<KODI::UTILS::COLOR::Color>& colors,
                         vecText& parsedText);
 };
 

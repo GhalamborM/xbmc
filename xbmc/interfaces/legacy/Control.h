@@ -13,7 +13,7 @@
 #include "Tuple.h"
 #include "guilib/GUIControl.h"
 #include "guilib/GUIFont.h"
-#include "input/Key.h"
+#include "input/actions/ActionIDs.h"
 #include "swighelper.h"
 #include "utils/ColorUtils.h"
 
@@ -693,7 +693,7 @@ namespace XBMCAddon
 #endif
 
 #ifndef SWIG
-      UTILS::COLOR::Color color;
+      KODI::UTILS::COLOR::Color color;
       std::string strTextureUp;
       std::string strTextureDown;
       std::string strTextureUpFocus;
@@ -738,7 +738,7 @@ namespace XBMCAddon
     ///                                 label's label. (e.g. '0xFFFF3300')
     /// @param alignment            [opt] integer - alignment of label
     /// - \ref kodi_gui_font_alignment "Flags for alignment" used as bits to have several together:
-    /// | Defination name   |   Bitflag  | Description                         |
+    /// | Definition name   |   Bitflag  | Description                         |
     /// |-------------------|:----------:|:------------------------------------|
     /// | XBFONT_LEFT       | 0x00000000 | Align X left
     /// | XBFONT_RIGHT      | 0x00000001 | Align X right
@@ -746,6 +746,7 @@ namespace XBMCAddon
     /// | XBFONT_CENTER_Y   | 0x00000004 | Align Y center
     /// | XBFONT_TRUNCATED  | 0x00000008 | Truncated text
     /// | XBFONT_JUSTIFIED  | 0x00000010 | Justify text
+    /// | XBFONT_TRUNCATED_LEFT | 0x00000020 | Truncated text from left
     /// @param hasPath              [opt] bool - True=stores a
     ///                                 path / False=no path
     /// @param angle                [opt] integer - angle of control.
@@ -840,8 +841,8 @@ namespace XBMCAddon
 
       std::string strFont;
       std::string strText;
-      UTILS::COLOR::Color textColor;
-      UTILS::COLOR::Color disabledColor;
+      KODI::UTILS::COLOR::Color textColor;
+      KODI::UTILS::COLOR::Color disabledColor;
       uint32_t align;
       bool bHasPath = false;
       int iAngle = 0;
@@ -879,7 +880,7 @@ namespace XBMCAddon
     ///                                 label's label. (e.g. '0xFFFF3300')
     /// @param alignment            [opt] integer - alignment of label
     /// - \ref kodi_gui_font_alignment "Flags for alignment" used as bits to have several together:
-    /// | Defination name   |   Bitflag  | Description                         |
+    /// | Definition name   |   Bitflag  | Description                         |
     /// |-------------------|:----------:|:------------------------------------|
     /// | XBFONT_LEFT       | 0x00000000 | Align X left
     /// | XBFONT_RIGHT      | 0x00000001 | Align X right
@@ -887,6 +888,7 @@ namespace XBMCAddon
     /// | XBFONT_CENTER_Y   | 0x00000004 | Align Y center
     /// | XBFONT_TRUNCATED  | 0x00000008 | Truncated text
     /// | XBFONT_JUSTIFIED  | 0x00000010 | Justify text
+    /// | XBFONT_TRUNCATED_LEFT | 0x00000020 | Truncated text from left
     /// @param focusTexture         [opt] string - filename for focus texture.
     /// @param noFocusTexture       [opt] string - filename for no focus texture.
     ///
@@ -1036,8 +1038,8 @@ namespace XBMCAddon
       std::string strText;
       std::string strTextureFocus;
       std::string strTextureNoFocus;
-      UTILS::COLOR::Color textColor;
-      UTILS::COLOR::Color disabledColor;
+      KODI::UTILS::COLOR::Color textColor;
+      KODI::UTILS::COLOR::Color disabledColor;
       uint32_t align;
 
       CGUIControl* Create() override;
@@ -1118,7 +1120,7 @@ namespace XBMCAddon
     /// @param space                    [opt] integer - space between items.
     /// @param alignmentY               [opt] integer - Y-axis alignment of items label
     /// - \ref kodi_gui_font_alignment "Flags for alignment" used as bits to have several together:
-    /// | Defination name   |   Bitflag  | Description                         |
+    /// | Definition name   |   Bitflag  | Description                         |
     /// |-------------------|:----------:|:------------------------------------|
     /// | XBFONT_LEFT       | 0x00000000 | Align X left
     /// | XBFONT_RIGHT      | 0x00000001 | Align X right
@@ -1126,6 +1128,7 @@ namespace XBMCAddon
     /// | XBFONT_CENTER_Y   | 0x00000004 | Align Y center
     /// | XBFONT_TRUNCATED  | 0x00000008 | Truncated text
     /// | XBFONT_JUSTIFIED  | 0x00000010 | Justify text
+    /// | XBFONT_TRUNCATED_LEFT | 0x00000020 | Truncated text from left
     /// @param shadowColor              [opt] hexstring - color of items
     ///                                     label's shadow. (e.g. '0xFF000000')
     ///
@@ -1499,7 +1502,7 @@ namespace XBMCAddon
       /// @brief \python_func{ getItemHeight() }
       /// Returns the control's current item height as an integer.
       ///
-      /// @return                       Current item heigh
+      /// @return                       Current item height
       ///
       ///
       ///--------------------------------------------------------------------------
@@ -1605,8 +1608,8 @@ namespace XBMCAddon
       std::string strFont;
       AddonClass::Ref<ControlSpin> pControlSpin;
 
-      UTILS::COLOR::Color textColor;
-      UTILS::COLOR::Color selectedColor;
+      KODI::UTILS::COLOR::Color textColor;
+      KODI::UTILS::COLOR::Color selectedColor;
       std::string strTextureButton;
       std::string strTextureButtonFocus;
 
@@ -1652,7 +1655,7 @@ namespace XBMCAddon
     /// @param textColor            [opt] hexstring - color of fadelabel's labels. (e.g. '0xFFFFFFFF')
     /// @param alignment            [opt] integer - alignment of label
     /// - \ref kodi_gui_font_alignment "Flags for alignment" used as bits to have several together:
-    /// | Defination name   |   Bitflag  | Description                         |
+    /// | Definition name   |   Bitflag  | Description                         |
     /// |-------------------|:----------:|:------------------------------------|
     /// | XBFONT_LEFT       | 0x00000000 | Align X left
     /// | XBFONT_RIGHT      | 0x00000001 | Align X right
@@ -1660,6 +1663,7 @@ namespace XBMCAddon
     /// | XBFONT_CENTER_Y   | 0x00000004 | Align Y center
     /// | XBFONT_TRUNCATED  | 0x00000008 | Truncated text
     /// | XBFONT_JUSTIFIED  | 0x00000010 | Justify text
+    /// | XBFONT_TRUNCATED_LEFT | 0x00000020 | Truncated text from left
     ///
     /// @note You can use the above as keywords for arguments and skip certain
     ///       optional arguments.\n
@@ -1757,7 +1761,7 @@ namespace XBMCAddon
 
 #ifndef SWIG
       std::string strFont;
-      UTILS::COLOR::Color textColor;
+      KODI::UTILS::COLOR::Color textColor;
       std::vector<std::string> vecLabels;
       uint32_t align;
 
@@ -1961,7 +1965,7 @@ namespace XBMCAddon
 
 #ifndef SWIG
       std::string strFont;
-      UTILS::COLOR::Color textColor;
+      KODI::UTILS::COLOR::Color textColor;
 
       CGUIControl* Create() override;
 
@@ -2078,7 +2082,7 @@ namespace XBMCAddon
 
       std::string strFileName;
       int aspectRatio = 0;
-      UTILS::COLOR::Color colorDiffuse;
+      KODI::UTILS::COLOR::Color colorDiffuse;
 
       CGUIControl* Create() override;
 #endif
@@ -2219,7 +2223,7 @@ namespace XBMCAddon
       std::string strTextureBg;
       std::string strTextureOverlay;
       int aspectRatio = 0;
-      UTILS::COLOR::Color colorDiffuse;
+      KODI::UTILS::COLOR::Color colorDiffuse;
 
       CGUIControl* Create() override;
       ControlProgress() = default;
@@ -2256,7 +2260,7 @@ namespace XBMCAddon
     /// @param textOffsetY          [opt] integer - y offset of label.
     /// @param alignment            [opt] integer - alignment of label
     /// - \ref kodi_gui_font_alignment "Flags for alignment" used as bits to have several together:
-    /// | Defination name   |   Bitflag  | Description                         |
+    /// | Definition name   |   Bitflag  | Description                         |
     /// |-------------------|:----------:|:------------------------------------|
     /// | XBFONT_LEFT       | 0x00000000 | Align X left
     /// | XBFONT_RIGHT      | 0x00000001 | Align X right
@@ -2264,6 +2268,7 @@ namespace XBMCAddon
     /// | XBFONT_CENTER_Y   | 0x00000004 | Align Y center
     /// | XBFONT_TRUNCATED  | 0x00000008 | Truncated text
     /// | XBFONT_JUSTIFIED  | 0x00000010 | Justify text
+    /// | XBFONT_TRUNCATED_LEFT | 0x00000020 | Truncated text from left
     /// @param font                 [opt] string - font used for label text.
     ///                                 (e.g. 'font13')
     /// @param textColor            [opt] hexstring - color of enabled
@@ -2429,10 +2434,10 @@ namespace XBMCAddon
 
       int textOffsetX = 0;
       int textOffsetY = 0;
-      UTILS::COLOR::Color align;
+      KODI::UTILS::COLOR::Color align;
       std::string strFont;
-      UTILS::COLOR::Color textColor;
-      UTILS::COLOR::Color disabledColor;
+      KODI::UTILS::COLOR::Color textColor;
+      KODI::UTILS::COLOR::Color disabledColor;
       int iAngle = 0;
       int shadowColor = 0;
       int focusedColor = 0;
@@ -2498,6 +2503,49 @@ namespace XBMCAddon
     };
     /// @}
 
+    // ControlVideoWindow class
+    ///
+    /// \defgroup python_xbmcgui_control_videowindow Subclass - ControlVideoWindow
+    /// \ingroup python_xbmcgui_control
+    /// @{
+    /// @brief **Used to embed the video window inside a group of other controls.**
+    ///
+    /// \python_class{ ControlVideoWindow(x, y, width, height) }
+    ///
+    /// The video window control is a placeholder that shows the video output of
+    /// the current playing video within an area of the skin, positioned and
+    /// sized like any other control.
+    ///
+    /// @note This class include also all calls from \ref python_xbmcgui_control "Control"
+    ///
+    /// @param x                    integer - x coordinate of control.
+    /// @param y                    integer - y coordinate of control.
+    /// @param width                integer - width of control.
+    /// @param height               integer - height of control.
+    ///
+    ///
+    ///--------------------------------------------------------------------------
+    ///
+    /// **Example:**
+    /// ~~~~~~~~~~~~~{.py}
+    /// ...
+    /// self.videowindow = xbmcgui.ControlVideoWindow(100, 250, 125, 75)
+    /// ...
+    /// ~~~~~~~~~~~~~
+    ///
+    class ControlVideoWindow : public Control
+    {
+    public:
+      ControlVideoWindow(long x, long y, long width, long height);
+
+#ifndef SWIG
+      CGUIControl* Create() override;
+
+      inline ControlVideoWindow() = default;
+#endif
+    };
+    /// @}
+
     // ControlRadioButton class
     ///
     /// \defgroup python_xbmcgui_control_radiobutton Subclass - ControlRadioButton
@@ -2537,7 +2585,7 @@ namespace XBMCAddon
     /// @param textOffsetY          [opt] integer - vertical text offset
     /// @param alignment            [opt] integer - alignment of label
     /// - \ref kodi_gui_font_alignment "Flags for alignment" used as bits to have several together:
-    /// | Defination name   |   Bitflag  | Description                         |
+    /// | Definition name   |   Bitflag  | Description                         |
     /// |-------------------|:----------:|:------------------------------------|
     /// | XBFONT_LEFT       | 0x00000000 | Align X left
     /// | XBFONT_RIGHT      | 0x00000001 | Align X right
@@ -2545,6 +2593,7 @@ namespace XBMCAddon
     /// | XBFONT_CENTER_Y   | 0x00000004 | Align Y center
     /// | XBFONT_TRUNCATED  | 0x00000008 | Truncated text
     /// | XBFONT_JUSTIFIED  | 0x00000010 | Justify text
+    /// | XBFONT_TRUNCATED_LEFT | 0x00000020 | Truncated text from left
     /// @param font                 [opt] string - font used for label text.
     ///                             (e.g. 'font13')
     /// @param textColor            [opt] hexstring - color of label when control
@@ -2732,14 +2781,14 @@ namespace XBMCAddon
       std::string strTextureRadioOffNoFocus;
       std::string strTextureRadioOnDisabled;
       std::string strTextureRadioOffDisabled;
-      UTILS::COLOR::Color textColor;
-      UTILS::COLOR::Color disabledColor;
+      KODI::UTILS::COLOR::Color textColor;
+      KODI::UTILS::COLOR::Color disabledColor;
       int textOffsetX = 0;
       int textOffsetY = 0;
      uint32_t align;
       int iAngle = 0;
-      UTILS::COLOR::Color shadowColor;
-      UTILS::COLOR::Color focusedColor;
+      KODI::UTILS::COLOR::Color shadowColor;
+      KODI::UTILS::COLOR::Color focusedColor;
 
       CGUIControl* Create() override;
 
@@ -2753,7 +2802,7 @@ namespace XBMCAddon
     /// @{
     /// @brief **Used for a volume slider.**
     ///
-    /// \python_class{ ControlSlider(x, y, width, height[, textureback, texture, texturefocus, orientation]) }
+    /// \python_class{ ControlSlider(x, y, width, height[, textureback, texture, texturefocus, orientation, texturebackdisabled, texturedisabled]) }
     ///
     /// The slider control is used for things where a sliding bar best represents
     /// the operation at hand (such as a volume control or seek control). You can
@@ -2769,6 +2818,8 @@ namespace XBMCAddon
     /// @param texture              [opt] string - image filename
     /// @param texturefocus         [opt] string - image filename
     /// @param orientation          [opt] integer - orientation of slider (xbmcgui.HORIZONTAL / xbmcgui.VERTICAL (default))
+    /// @param texturebackdisabled  [opt] string - image filename
+    /// @param texturedisabled      [opt] string - image filename
     ///
     ///
     /// @note You can use the above as keywords for arguments and skip certain
@@ -2791,10 +2842,16 @@ namespace XBMCAddon
     class ControlSlider : public Control
     {
     public:
-      ControlSlider(long x, long y, long width, long height,
+      ControlSlider(long x,
+                    long y,
+                    long width,
+                    long height,
                     const char* textureback = NULL,
                     const char* texture = NULL,
-                    const char* texturefocus = NULL, int orientation = 1);
+                    const char* texturefocus = NULL,
+                    int orientation = 1,
+                    const char* texturebackdisabled = NULL,
+                    const char* texturedisabled = NULL);
 
 #ifdef DOXYGEN_SHOULD_USE_THIS
       ///
@@ -2946,8 +3003,10 @@ namespace XBMCAddon
 
 #ifndef SWIG
       std::string strTextureBack;
+      std::string strTextureBackDisabled;
       std::string strTexture;
       std::string strTextureFoc;
+      std::string strTextureDisabled;
       int iOrientation;
 
       CGUIControl* Create() override;

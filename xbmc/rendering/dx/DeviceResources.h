@@ -16,12 +16,14 @@
 #include <memory>
 
 #include <concrt.h>
-#include <dxgi1_5.h>
+#include <dxgi1_6.h>
+#include <winrt/windows.foundation.h>
 #include <wrl.h>
 #include <wrl/client.h>
 
 struct RESOLUTION_INFO;
 struct DEBUG_INFO_RENDER;
+struct VideoDriverInfo;
 
 namespace DX
 {
@@ -67,7 +69,14 @@ namespace DX
     CD3DTexture& GetBackBuffer() { return m_backBufferTex; }
 
     void GetOutput(IDXGIOutput** ppOutput) const;
-    void GetAdapterDesc(DXGI_ADAPTER_DESC *desc) const;
+    /*!
+     * \brief Retrieve current output and output description. Use cached data first to avoid delays due
+     * to dxgi internal multithreading synchronization.
+     * \param output The output
+     * \param outputDesc The output description
+    */
+    void GetCachedOutputAndDesc(IDXGIOutput** output, DXGI_OUTPUT_DESC* outputDesc) const;
+    DXGI_ADAPTER_DESC GetAdapterDesc() const;
     void GetDisplayMode(DXGI_MODE_DESC *mode) const;
 
     D3D11_VIEWPORT GetScreenViewport() const { return m_screenViewport; }
@@ -94,7 +103,7 @@ namespace DX
     void Unregister(ID3DResource *resource);
 
     void FinishCommandList(bool bExecute = true) const;
-    void ClearDepthStencil() const;
+    void ClearDepthStencil(bool clearDepth) const;
     void ClearRenderTarget(ID3D11RenderTargetView* pRTView, float color[4]) const;
     void RegisterDeviceNotify(IDeviceNotify* deviceNotify);
 
@@ -104,6 +113,10 @@ namespace DX
 
     void SetMonitor(HMONITOR monitor);
     HMONITOR GetMonitor() const;
+    // re-select the rendering GPU after the high-performance GPU setting has changed
+    void OnGpuPreferenceChanged();
+    // rendering GPU doesn't own the display, frames are copied to the display GPU by Windows
+    bool IsCrossAdapter() const { return m_crossAdapter; }
 #if defined(TARGET_WINDOWS_DESKTOP)
     void SetWindow(HWND window);
 #elif defined(TARGET_WINDOWS_STORE)
@@ -112,9 +125,15 @@ namespace DX
     void SetWindowPos(winrt::Windows::Foundation::Rect rect);
 #endif // TARGET_WINDOWS_STORE
     bool IsNV12SharedTexturesSupported() const { return m_NV12SharedTexturesSupport; }
+    bool IsDXVA2SharedDecoderSurfaces() const { return m_DXVA2SharedDecoderSurfaces; }
+    bool IsSuperResolutionSupported() const { return m_DXVASuperResolutionSupport; }
+    bool UseFence() const { return m_DXVA2UseFence; }
 
     // Gets debug info from swapchain
     DEBUG_INFO_RENDER GetDebugInfo() const;
+    std::vector<DXGI_COLOR_SPACE_TYPE> GetSwapChainColorSpaces() const;
+    bool SetMultithreadProtected(bool enabled) const;
+    bool IsGCNOrOlder() const;
 
   private:
     class CBackBuffer : public CD3DTexture
@@ -134,8 +153,14 @@ namespace DX
     void OnDeviceLost(bool removed);
     void OnDeviceRestored();
     void HandleOutputChange(const std::function<bool(DXGI_OUTPUT_DESC)>& cmpFunc);
+    static bool IsSameAdapter(const DXGI_ADAPTER_DESC& a, const DXGI_ADAPTER_DESC& b);
+#if defined(TARGET_WINDOWS_DESKTOP)
+    static Microsoft::WRL::ComPtr<IDXGIAdapter1> GetHighPerformanceAdapter(IDXGIFactory1* factory);
+#endif
     bool CreateFactory();
     void CheckNV12SharedTexturesSupport();
+    VideoDriverInfo GetVideoDriverVersion() const;
+    void CheckDXVA2SharedDecoderSurfaces();
 
     HWND m_window{ nullptr };
 #if defined(TARGET_WINDOWS_STORE)
@@ -144,6 +169,8 @@ namespace DX
     Microsoft::WRL::ComPtr<IDXGIFactory2> m_dxgiFactory;
     Microsoft::WRL::ComPtr<IDXGIAdapter1> m_adapter;
     Microsoft::WRL::ComPtr<IDXGIOutput1> m_output;
+    DXGI_OUTPUT_DESC m_outputDesc{};
+    bool m_crossAdapter{false};
 
     Microsoft::WRL::ComPtr<ID3D11Device1> m_d3dDevice;
     Microsoft::WRL::ComPtr<ID3D11DeviceContext1> m_d3dContext;
@@ -178,5 +205,8 @@ namespace DX
     bool m_IsHDROutput;
     bool m_IsTransferPQ;
     bool m_NV12SharedTexturesSupport{false};
+    bool m_DXVA2SharedDecoderSurfaces{false};
+    bool m_DXVASuperResolutionSupport{false};
+    bool m_DXVA2UseFence{false};
   };
 }

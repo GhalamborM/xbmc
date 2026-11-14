@@ -8,22 +8,11 @@
 
 #pragma once
 
-#include "PlayListPlayer.h"
+#include "messaging/ApplicationMessenger.h"
+#include "playlists/PlayListTypes.h"
 #include "video/VideoDatabase.h"
 #include "video/VideoThumbLoader.h"
 #include "windows/GUIMediaWindow.h"
-
-enum VideoSelectAction
-{
-  SELECT_ACTION_CHOOSE          = 0,
-  SELECT_ACTION_PLAY_OR_RESUME,
-  SELECT_ACTION_RESUME,
-  SELECT_ACTION_INFO,
-  SELECT_ACTION_MORE,
-  SELECT_ACTION_PLAY,
-  SELECT_ACTION_PLAYPART,
-  SELECT_ACTION_QUEUE
-};
 
 class CGUIWindowVideoBase : public CGUIMediaWindow, public IBackgroundLoaderObserver
 {
@@ -32,23 +21,15 @@ public:
   ~CGUIWindowVideoBase(void) override;
   bool OnMessage(CGUIMessage& message) override;
   bool OnAction(const CAction &action) override;
+  bool OnPopupMenu(int iItem) override;
 
-  void PlayMovie(const CFileItem *item, const std::string &player = "");
-  static void GetResumeItemOffset(const CFileItem *item, int64_t& startoffset, int& partNumber);
-  static bool HasResumeItemOffset(const CFileItem *item);
-
-  virtual void OnItemInfo(const CFileItem& fileItem, ADDON::ScraperPtr& scraper);
-
-
-  /*! \brief Show the resume menu for this item (if it has a resume bookmark)
-   If a resume bookmark is found, we set the item's m_lStartOffset to STARTOFFSET_RESUME.
-   Note that we do this in favour of setting the resume point, as we need additional
-   information from the database (in particular, the playerState) when resuming some items
-   (eg ISO/VIDEO_TS).
-   \param item item to check for a resume bookmark
-   \return true if an option was chosen, false if the resume menu was cancelled.
+  /*! \brief Gets called to process the "info" action for the given file item
+   Default implementation shows a dialog containing information for the movie/episode/...
+   represented by the file item.
+   \param fileItem the item for which information is to be presented.
+   \return true if information was presented, false otherwise.
    */
-  static bool ShowResumeMenu(CFileItem &item);
+  bool OnItemInfo(const CFileItem& fileItem);
 
   /*! \brief Append a set of search items to a results list using a specific prepend label
    Sorts the search items first, then appends with the given prependLabel to the results list.
@@ -67,11 +48,20 @@ public:
    */
   static void OnAssignContent(const std::string &path);
 
-  /*! \brief checks the database for a resume position and puts together a string
-   \param item selected item
-   \return string containing the resume position or an empty string if there is no resume position
+  /*! \brief Load video information from the database for these items (public static version)
+   Useful for grabbing information for file listings, from watched status to full metadata
+   \param items the items to load information for.
+   \param database open database object to retrieve the data from
+   \param allowReplaceLabels allow label replacement if according GUI setting is enabled
+   \param getDetails bitmask specifying which additional video details to load
    */
-  static std::string GetResumeString(const CFileItem &item);
+  static void LoadVideoInfo(CFileItemList& items,
+                            CVideoDatabase& database,
+                            bool allowReplaceLabels = true,
+                            int getDetails = VideoDbDetailsNone);
+
+  bool PlayItem(const std::shared_ptr<CFileItem>& item, const std::string& player);
+  void OnQueueItem(const std::shared_ptr<CFileItem>& item, int iItem, bool first = false);
 
 protected:
   void OnScan(const std::string& strPath, bool scanAll = false);
@@ -79,6 +69,7 @@ protected:
   bool GetDirectory(const std::string &strDirectory, CFileItemList &items) override;
   void OnItemLoaded(CFileItem* pItem) override {};
   void GetGroupedItems(CFileItemList &items) override;
+  void OnFilterItems(const std::string& filter) override;
 
   bool CheckFilterAdvanced(CFileItemList &items) const override;
   bool CanContainFilter(const std::string &strDirectory) const override;
@@ -91,45 +82,91 @@ protected:
   virtual void DoSearch(const std::string& strSearch, CFileItemList& items) {}
   std::string GetStartFolder(const std::string &dir) override;
 
-  bool OnClick(int iItem, const std::string &player = "") override;
   bool OnSelect(int iItem) override;
   /*! \brief react to an Info action on a view item
    \param item the selected item
    \return true if the action is performed, false otherwise
    */
   bool OnItemInfo(int item);
-  /*! \brief perform a given action on a file
-   \param item the selected item
-   \param action the action to perform
-   \return true if the action is performed, false otherwise
-   */
-  bool OnFileAction(int item, int action, const std::string& player);
-
   void OnRestartItem(int iItem, const std::string &player = "");
-  bool OnResumeItem(int iItem, const std::string &player = "");
-  void PlayItem(int iItem, const std::string &player = "");
+  bool OnPlayOrResumeItem(int iItem, const std::string& player = "");
   bool OnPlayMedia(int iItem, const std::string &player = "") override;
+  bool OnPlayMedia(const std::shared_ptr<CFileItem>& item, const std::string& player);
   bool OnPlayAndQueueMedia(const CFileItemPtr& item, const std::string& player = "") override;
   using CGUIMediaWindow::LoadPlayList;
-  void LoadPlayList(const std::string& strPlayList, int iPlayList = PLAYLIST_VIDEO);
+  void LoadPlayList(const std::string& strPlayList,
+                    KODI::PLAYLIST::Id playlistId = KODI::PLAYLIST::Id::TYPE_VIDEO);
 
-  bool ShowIMDB(CFileItemPtr item, const ADDON::ScraperPtr& content, bool fromDB);
+  /*!
+   \brief Lookup the information of an item and display an Info dialog
+   If item has changed then refresh the active underlying list
+   \param item the item to lookup
+   \param content
+   \param listItemPath path of the list item the information was requested for
+   \return true: the information of the item was modified. false: no change.
+   */
+  bool ShowInfoAndRefresh(const CFileItemPtr& item,
+                          const ADDON::ScraperPtr& content,
+                          const std::string& listItemPath);
 
-  void AddItemToPlayList(const CFileItemPtr &pItem, CFileItemList &queuedItems);
+  /*!
+   \brief Update the list item of a movie in place after its information or art was changed
+   \param listItemPath path of the list item to update
+   \param originalFile file of the movie the change was requested for
+   \param item the changed movie
+   \param infoRefreshed true if the movie was refreshed, false if only its art changed
+   \param listedDetails details of the list item before the information dialog, if infoRefreshed
+   \return true if the list item was updated, false if the list has to be refreshed instead
+   */
+  bool UpdateMovieListItem(const std::string& listItemPath,
+                           const std::string& originalFile,
+                           const CFileItem& item,
+                           bool infoRefreshed,
+                           const CVideoInfoTag* listedDetails);
 
   void OnSearch();
   void OnSearchItemFound(const CFileItem* pSelItem);
-  int GetScraperForItem(CFileItem *item, ADDON::ScraperPtr &info, VIDEO::SScanSettings& settings);
+  int GetScraperForItem(CFileItem* item,
+                        ADDON::ScraperPtr& info,
+                        KODI::VIDEO::SScanSettings& settings);
 
   static bool OnUnAssignContent(const std::string &path, int header, int text);
 
   static bool StackingAvailable(const CFileItemList &items);
 
-  bool OnPlayStackPart(int item);
+  void UpdateVideoVersionItems();
+  void UpdateVideoVersionItemsLabel(const std::string& directory);
 
   CGUIDialogProgress* m_dlgProgress;
   CVideoDatabase m_database;
 
   CVideoThumbLoader m_thumbLoader;
+  bool m_restartThumbLoader{false}; //!< stopped for playback, restarted if the window stays active
+  KODI::MESSAGING::ThreadMessageCallback m_restartThumbLoaderCallback{
+      [](void* window) { static_cast<CGUIWindowVideoBase*>(window)->RestartThumbLoader(); }, this};
   bool m_stackingAvailable;
+
+private:
+  void RestartThumbLoader();
+
+  enum class ShowInfoResult
+  {
+    RESULT_ERROR, // some error occurred
+    RESULT_OK_UPDATED, // no error, data updated
+    RESULT_OK_NOT_UPDATED, // no error, data not updated
+    RESULT_OK_ART_UPDATED, // no error, only the art of the item updated
+    RESULT_OK_INFO_REFRESHED, // no error, item refreshed from its scraper or nfo
+  };
+
+  /*!
+   \brief Lookup the information of an item and display an Info dialog
+   \param item the item to lookup
+   \param content
+   \param[out] updatedItem the item as last shown by the dialog, set for RESULT_OK_ART_UPDATED
+   and RESULT_OK_INFO_REFRESHED
+   \return the result.
+   */
+  ShowInfoResult ShowInfo(const std::shared_ptr<CFileItem>& item,
+                          const std::shared_ptr<ADDON::CScraper>& content,
+                          std::shared_ptr<CFileItem>& updatedItem);
 };

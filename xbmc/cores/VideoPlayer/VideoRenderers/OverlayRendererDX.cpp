@@ -1,29 +1,32 @@
 /*
- *  Copyright (C) 2005-2018 Team Kodi
+ *  Copyright (C) 2005-2026 Team Kodi
  *  This file is part of Kodi - https://kodi.tv
  *
  *  SPDX-License-Identifier: GPL-2.0-or-later
  *  See LICENSES/README.md for more information.
  */
 
-#include "Application.h"
-#include "cores/VideoPlayer/DVDCodecs/Overlay/DVDOverlayImage.h"
-#include "cores/VideoPlayer/DVDCodecs/Overlay/DVDOverlaySpu.h"
-#include "cores/VideoPlayer/DVDCodecs/Overlay/DVDOverlaySSA.h"
-#include "guilib/D3DResource.h"
-#include "windowing/GraphicContext.h"
-#include "guilib/GUIShaderDX.h"
+#include "OverlayRendererDX.h"
+
 #include "OverlayRenderer.h"
 #include "OverlayRendererUtil.h"
-#include "OverlayRendererDX.h"
-#include "rendering/dx/RenderContext.h"
+#include "application/Application.h"
+#include "cores/VideoPlayer/DVDCodecs/Overlay/DVDOverlayImage.h"
+#include "cores/VideoPlayer/DVDCodecs/Overlay/DVDOverlaySSA.h"
+#include "cores/VideoPlayer/DVDCodecs/Overlay/DVDOverlaySpu.h"
+#include "guilib/D3DResource.h"
+#include "guilib/GUIShaderDX.h"
 #include "rendering/dx/DeviceResources.h"
+#include "rendering/dx/RenderContext.h"
 #include "utils/log.h"
+#include "windowing/GraphicContext.h"
 
 #ifndef ASSERT
 #include <crtdbg.h>
 #define ASSERT(f) _ASSERTE((f))
 #endif
+
+#include <cmath>
 
 using namespace OVERLAY;
 using namespace DirectX;
@@ -39,14 +42,14 @@ static bool LoadTexture(int width, int height, int stride
 {
   if (!texture->Create(width, height, 1, D3D11_USAGE_IMMUTABLE, format, pixels, stride))
   {
-    CLog::Log(LOGERROR, "{} - failed to allocate texture.", __FUNCTION__);
+    CLog::LogF(LOGERROR, "failed to allocate texture.");
     return false;
   }
 
   D3D11_TEXTURE2D_DESC desc = {};
   if (!texture->GetDesc(&desc))
   {
-    CLog::Log(LOGERROR, "{} - failed to get texture description.", __FUNCTION__);
+    CLog::LogF(LOGERROR, "failed to get texture description.");
     texture->Release();
     return false;
   }
@@ -58,11 +61,16 @@ static bool LoadTexture(int width, int height, int stride
   return true;
 }
 
+std::shared_ptr<COverlay> COverlay::Create(ASS_Image* images, float width, float height)
+{
+  return std::make_shared<COverlayQuadsDX>(images, width, height);
+}
+
 COverlayQuadsDX::COverlayQuadsDX(ASS_Image* images, float width, float height)
 {
   m_width  = 1.0;
   m_height = 1.0;
-  m_align  = ALIGN_VIDEO;
+  m_align = ALIGN_SCREEN;
   m_pos    = POSITION_RELATIVE;
   m_x      = 0.0f;
   m_y      = 0.0f;
@@ -74,12 +82,13 @@ COverlayQuadsDX::COverlayQuadsDX(ASS_Image* images, float width, float height)
 
   float u, v;
   if (!LoadTexture(quads.size_x, quads.size_y, quads.size_x, DXGI_FORMAT_R8_UNORM,
-                   quads.data.data(), &u, &v, &m_texture))
+                   quads.texture.data(), &u, &v, &m_texture))
   {
     return;
   }
 
-  Vertex *vt = new Vertex[6 * quads.quad.size()], *vt_orig = vt;
+  Vertex* vt = new Vertex[6 * quads.quad.size()];
+  Vertex* vt_orig = vt;
   SQuad* vs = quads.quad.data();
 
   float scale_u = u / quads.size_x;
@@ -132,7 +141,7 @@ COverlayQuadsDX::COverlayQuadsDX(ASS_Image* images, float width, float height)
   if (!m_vertex.Create(D3D11_BIND_VERTEX_BUFFER, 6 * m_count, sizeof(Vertex), DXGI_FORMAT_UNKNOWN,
                        D3D11_USAGE_IMMUTABLE, vt))
   {
-    CLog::Log(LOGERROR, "{} - failed to create vertex buffer", __FUNCTION__);
+    CLog::LogF(LOGERROR, "failed to create vertex buffer");
     m_texture.Release();
   }
 
@@ -155,11 +164,15 @@ void COverlayQuadsDX::Render(SRenderState &state)
   ID3D11DeviceContext* pContext = DX::DeviceResources::Get()->GetD3DContext();
   CGUIShaderDX* pGUIShader = DX::Windowing()->GetGUIShader();
 
-  XMMATRIX world, view, proj;
-  pGUIShader->GetWVP(world, view, proj);
+  if (pGUIShader == nullptr)
+    return;
 
-  if (CServiceBroker::GetWinSystem()->GetGfxContext().GetStereoMode() == RENDER_STEREO_MODE_SPLIT_HORIZONTAL
-   || CServiceBroker::GetWinSystem()->GetGfxContext().GetStereoMode() == RENDER_STEREO_MODE_SPLIT_VERTICAL)
+  const XMMATRIX world = pGUIShader->GetWorld();
+
+  if (CServiceBroker::GetWinSystem()->GetGfxContext().GetStereoMode() ==
+          RenderStereoMode::SPLIT_HORIZONTAL ||
+      CServiceBroker::GetWinSystem()->GetGfxContext().GetStereoMode() ==
+          RenderStereoMode::SPLIT_VERTICAL)
   {
     CRect rect;
     DX::Windowing()->GetViewPort(rect);
@@ -168,8 +181,8 @@ void COverlayQuadsDX::Render(SRenderState &state)
                                   static_cast<int>(rect.Height()));
   }
 
-  XMMATRIX trans = XMMatrixTranslation(state.x, state.y, 0.0f);
-  XMMATRIX scale = XMMatrixScaling(state.width, state.height, 1.0f);
+  const XMMATRIX trans = XMMatrixTranslation(state.x, state.y, 0.0f);
+  const XMMATRIX scale = XMMatrixScaling(state.width, state.height, 1.0f);
 
   pGUIShader->SetWorld(XMMatrixMultiply(XMMatrixMultiply(world, scale), trans));
 
@@ -182,92 +195,117 @@ void COverlayQuadsDX::Render(SRenderState &state)
   pContext->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
   DX::Windowing()->SetAlphaBlendEnable(true);
+  pGUIShader->SetDepth(-1.f);
   pGUIShader->Begin(SHADER_METHOD_RENDER_FONT);
 
   pGUIShader->SetShaderViews(1, m_texture.GetAddressOfSRV());
   pGUIShader->Draw(m_count * 6, 0);
 
   // restoring transformation
-  pGUIShader->SetWVP(world, view, proj);
+  pGUIShader->SetWorld(world);
   pGUIShader->RestoreBuffers();
+}
+
+std::shared_ptr<COverlay> COverlay::Create(const CDVDOverlayImage& o, CRect& rSource)
+{
+  return std::make_shared<COverlayImageDX>(o, rSource);
 }
 
 COverlayImageDX::~COverlayImageDX()
 {
 }
 
-COverlayImageDX::COverlayImageDX(CDVDOverlayImage* o)
+COverlayImageDX::COverlayImageDX(const CDVDOverlayImage& o, CRect& rSource)
 {
-  std::vector<uint32_t> rgba;
-  int stride;
-  if (!o->palette.empty())
+  if (o.palette.empty())
   {
-    m_pma  = !!USE_PREMULTIPLIED_ALPHA;
-    rgba   = convert_rgba(o, m_pma);
-    stride = o->width * 4;
+    m_pma = false;
+    const uint32_t* rgba = reinterpret_cast<const uint32_t*>(o.pixels.data());
+    Load(rgba, o.width, o.height, o.linesize);
   }
   else
   {
-    m_pma  = false;
-    rgba = std::vector<uint32_t>(o->data.data(), o->data.data() + o->data.size());
-    stride = o->linesize;
+    std::vector<uint32_t> rgba(static_cast<size_t>(o.width) * o.height);
+    m_pma = !!USE_PREMULTIPLIED_ALPHA;
+
+    std::vector<uint32_t> convertedPalette;
+    const std::vector<uint32_t>* paletteOverride = nullptr;
+
+    // convert HDR PGS subtitles to SDR when video output is not PQ
+    if (o.m_isHDROverlay && !DX::Windowing()->IsTransferPQ())
+    {
+      convertedPalette = o.palette;
+      OVERLAY::ConvertPQPaletteToSRGB(convertedPalette);
+      paletteOverride = &convertedPalette;
+    }
+
+    convert_rgba(o, m_pma, rgba, paletteOverride);
+    Load(rgba.data(), o.width, o.height, o.width * 4);
   }
 
-  if (rgba.empty())
+  if (o.source_width > 0 && o.source_height > 0)
   {
-    CLog::Log(LOGERROR, "COverlayImageDX::COverlayImageDX - failed to convert overlay to rgb");
-    return;
-  }
-
-  Load(rgba.data(), o->width, o->height, stride);
-  if (reinterpret_cast<uint8_t*>(rgba.data()) != o->data.data())
-    rgba.clear();
-
-  if(o->source_width && o->source_height)
-  {
-    float center_x = (float)(0.5f * o->width + o->x) / o->source_width;
-    float center_y = (float)(0.5f * o->height + o->y) / o->source_height;
-
-    m_align = ALIGN_SCREEN_AR;
     m_pos = POSITION_RELATIVE;
-    m_x = center_x;
-    m_y = center_y;
-    m_width = static_cast<float>(o->width);
-    m_height = static_cast<float>(o->height);
-    m_source_width = static_cast<float>(o->source_width);
-    m_source_height = static_cast<float>(o->source_height);
+    m_x = (0.5f * o.width + o.x) / o.source_width;
+    m_y = (0.5f * o.height + o.y) / o.source_height;
+
+    const float subRatio{static_cast<float>(o.source_width) / o.source_height};
+    const float vidRatio{rSource.Width() / rSource.Height()};
+
+    // We always consider aligning 4/3 subtitles to the video,
+    // for example SD DVB subtitles (4/3) must be stretched on fullhd video
+
+    if (std::fabs(subRatio - vidRatio) < 0.001f || IsSquareResolution(subRatio))
+    {
+      m_align = ALIGN_VIDEO;
+      m_width = static_cast<float>(o.width) / o.source_width;
+      m_height = static_cast<float>(o.height) / o.source_height;
+    }
+    else
+    {
+      // We should have a re-encoded/cropped (removed black bars) video source.
+      // Then we cannot align to video otherwise the subtitles will be deformed
+      // better align to screen by keeping the aspect-ratio.
+      m_align = ALIGN_SCREEN_AR;
+      m_width = static_cast<float>(o.width);
+      m_height = static_cast<float>(o.height);
+      m_source_width = static_cast<float>(o.source_width);
+      m_source_height = static_cast<float>(o.source_height);
+    }
   }
   else
   {
-    m_align  = ALIGN_VIDEO;
-    m_pos    = POSITION_ABSOLUTE;
-    m_x      = (float)o->x;
-    m_y      = (float)o->y;
-    m_width  = (float)o->width;
-    m_height = (float)o->height;
+    m_align = ALIGN_VIDEO;
+    m_pos = POSITION_ABSOLUTE;
+    m_x = static_cast<float>(o.x);
+    m_y = static_cast<float>(o.y);
+    m_width = static_cast<float>(o.width);
+    m_height = static_cast<float>(o.height);
   }
 }
 
-COverlayImageDX::COverlayImageDX(CDVDOverlaySpu* o)
+std::shared_ptr<COverlay> COverlay::Create(const CDVDOverlaySpu& o)
+{
+  return std::make_shared<COverlayImageDX>(o);
+}
+
+COverlayImageDX::COverlayImageDX(const CDVDOverlaySpu& o)
 {
   int min_x, max_x, min_y, max_y;
-  std::vector<uint32_t> rgba = convert_rgba(o, USE_PREMULTIPLIED_ALPHA, min_x, max_x, min_y, max_y);
-  if (rgba.empty())
-  {
-    CLog::Log(LOGERROR, "COverlayImageDX::COverlayImageDX - failed to convert overlay to rgb");
-    return;
-  }
-  Load(rgba.data() + min_x + min_y * o->width, max_x - min_x, max_y - min_y, o->width * 4);
+  std::vector<uint32_t> rgba(static_cast<size_t>(o.width) * o.height);
 
-  m_align  = ALIGN_VIDEO;
-  m_pos    = POSITION_ABSOLUTE;
-  m_x      = (float)(min_x + o->x);
-  m_y      = (float)(min_y + o->y);
-  m_width  = (float)(max_x - min_x);
-  m_height = (float)(max_y - min_y);
+  convert_rgba(o, USE_PREMULTIPLIED_ALPHA, min_x, max_x, min_y, max_y, rgba);
+  Load(rgba.data() + min_x + min_y * o.width, max_x - min_x, max_y - min_y, o.width * 4);
+
+  m_align = ALIGN_VIDEO;
+  m_pos = POSITION_ABSOLUTE;
+  m_x = static_cast<float>(min_x + o.x);
+  m_y = static_cast<float>(min_y + o.y);
+  m_width = static_cast<float>(max_x - min_x);
+  m_height = static_cast<float>(max_y - min_y);
 }
 
-void COverlayImageDX::Load(uint32_t* rgba, int width, int height, int stride)
+void COverlayImageDX::Load(const uint32_t* rgba, int width, int height, int stride)
 {
   float u, v;
   if(!LoadTexture(width
@@ -295,7 +333,7 @@ void COverlayImageDX::Load(uint32_t* rgba, int width, int height, int stride)
 
   if (!m_vertex.Create(D3D11_BIND_VERTEX_BUFFER, 4, sizeof(Vertex), DXGI_FORMAT_UNKNOWN, D3D11_USAGE_IMMUTABLE, vt))
   {
-    CLog::Log(LOGERROR, "{} - failed to create vertex buffer", __FUNCTION__);
+    CLog::LogF(LOGERROR, "failed to create vertex buffer");
     m_texture.Release();
   }
 }
@@ -309,11 +347,15 @@ void COverlayImageDX::Render(SRenderState &state)
   ID3D11DeviceContext* pContext = DX::DeviceResources::Get()->GetD3DContext();
   CGUIShaderDX* pGUIShader = DX::Windowing()->GetGUIShader();
 
-  XMMATRIX world, view, proj;
-  pGUIShader->GetWVP(world, view, proj);
+  if (pGUIShader == nullptr)
+    return;
 
-  if (CServiceBroker::GetWinSystem()->GetGfxContext().GetStereoMode() == RENDER_STEREO_MODE_SPLIT_HORIZONTAL
-   || CServiceBroker::GetWinSystem()->GetGfxContext().GetStereoMode() == RENDER_STEREO_MODE_SPLIT_VERTICAL)
+  const XMMATRIX world = pGUIShader->GetWorld();
+
+  if (CServiceBroker::GetWinSystem()->GetGfxContext().GetStereoMode() ==
+          RenderStereoMode::SPLIT_HORIZONTAL ||
+      CServiceBroker::GetWinSystem()->GetGfxContext().GetStereoMode() ==
+          RenderStereoMode::SPLIT_VERTICAL)
   {
     CRect rect;
     DX::Windowing()->GetViewPort(rect);
@@ -335,6 +377,7 @@ void COverlayImageDX::Render(SRenderState &state)
   pContext->IASetVertexBuffers(0, 1, &vertexBuffer, &stride, &offset);
   pContext->IASetPrimitiveTopology(D3D10_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
 
+  pGUIShader->SetDepth(-1.f);
   pGUIShader->Begin(SHADER_METHOD_RENDER_TEXTURE_NOBLEND);
   DX::Windowing()->SetAlphaBlendEnable(true);
 
@@ -342,6 +385,6 @@ void COverlayImageDX::Render(SRenderState &state)
   pGUIShader->Draw(4, 0);
 
   // restoring transformation
-  pGUIShader->SetWVP(world, view, proj);
+  pGUIShader->SetWorld(world);
   pGUIShader->RestoreBuffers();
 }

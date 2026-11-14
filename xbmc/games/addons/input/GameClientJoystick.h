@@ -10,8 +10,12 @@
 
 #include "games/controllers/ControllerTypes.h"
 #include "input/joysticks/interfaces/IInputHandler.h"
+#include "peripherals/PeripheralTypes.h"
 
 #include <memory>
+#include <mutex>
+#include <set>
+#include <string>
 
 namespace KODI
 {
@@ -27,6 +31,7 @@ class CPortInput;
 
 /*!
  * \ingroup games
+ *
  * \brief Handles game controller events for games.
  *
  * Listens to game controller events and forwards them to the games (as game_input_event).
@@ -70,10 +75,28 @@ public:
   bool OnThrottleMotion(const std::string& feature,
                         float position,
                         unsigned int motionTimeMs) override;
+  void OnInputFrame() override {}
+  JOYSTICK::IInputReceiver* InputReceiver(void) override;
 
+  // Input accessors
+  const std::string& GetPortAddress() const { return m_portAddress; }
+  ControllerPtr GetController() const { return m_controller; }
+  std::string GetControllerAddress() const;
+  PERIPHERALS::PeripheralPtr GetSource() const { return m_sourcePeripheral; }
+  std::string GetSourceLocation() const;
+  float GetActivation() const;
+
+  // Input mutators
+  void SetSource(PERIPHERALS::PeripheralPtr sourcePeripheral);
+  void ClearSource();
+
+  // Input handlers
   bool SetRumble(const std::string& feature, float magnitude);
+  void EnableRumble(bool bEnabled);
 
 private:
+  void StopMotors();
+
   // Construction parameters
   CGameClient& m_gameClient;
   const std::string m_portAddress;
@@ -81,6 +104,17 @@ private:
 
   // Input parameters
   std::unique_ptr<CPortInput> m_portInput;
+  PERIPHERALS::PeripheralPtr m_sourcePeripheral;
+
+  // Motor events are reported once each, not once per frame of rumble
+  bool m_bLoggedRumble{false};
+  bool m_bLoggedRumbleFailure{false};
+  bool m_bLoggedRumbleUnwired{false};
+
+  // Motors left running, stopped when the controller is detached
+  std::set<std::string> m_activeMotors;
+  bool m_bRumbleEnabled{true};
+  std::mutex m_rumbleMutex;
 };
 } // namespace GAME
 } // namespace KODI

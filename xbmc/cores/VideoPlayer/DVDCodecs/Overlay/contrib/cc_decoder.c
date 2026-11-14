@@ -30,9 +30,6 @@ extern "C" {
 
 #include "cc_decoder.h"
 
-/* colors specified by the EIA 608 standard */
-enum { WHITE, GREEN, BLUE, CYAN, RED, YELLOW, MAGENTA, BLACK };
-
 /* --------------------- misc. EIA 608 definitions -------------------*/
 
 /* mapping from PAC row code to actual CC row */
@@ -63,27 +60,27 @@ const char* get_char_override(uint8_t charset, uint8_t c)
     switch (c)
     {
       case 0x27:
-        return u8"\u2019";
+        return "\u2019";
       case 0x2a:
-        return u8"\u00e1";
+        return "\u00e1";
       case 0x5c:
-        return u8"\u00e9";
+        return "\u00e9";
       case 0x5e:
-        return u8"\u00ed";
+        return "\u00ed";
       case 0x5f:
-        return u8"\u00f3";
+        return "\u00f3";
       case 0x60:
-        return u8"\u00fa";
+        return "\u00fa";
       case 0x7b:
-        return u8"\u00e7";
+        return "\u00e7";
       case 0x7c:
-        return u8"\u00f7";
+        return "\u00f7";
       case 0x7d:
-        return u8"\u00d1";
+        return "\u00d1";
       case 0x7e:
-        return u8"\u00f1";
+        return "\u00f1";
       case 0x7f:
-        return u8"\u2588";
+        return "\u2588";
       default:
         break;
     }
@@ -93,37 +90,37 @@ const char* get_char_override(uint8_t charset, uint8_t c)
     switch (c)
     {
       case 0x30:
-        return u8"\u00ae";
+        return "\u00ae";
       case 0x31:
-        return u8"\u00b0";
+        return "\u00b0";
       case 0x32:
-        return u8"\u00bd";
+        return "\u00bd";
       case 0x33:
-        return u8"\u00bf";
+        return "\u00bf";
       case 0x34:
-        return u8"\u2122";
+        return "\u2122";
       case 0x35:
-        return u8"\u00a2";
+        return "\u00a2";
       case 0x36:
-        return u8"\u00a3";
+        return "\u00a3";
       case 0x37:
-        return u8"\u266a";
+        return "\u266a";
       case 0x38:
-        return u8"\u00e0";
+        return "\u00e0";
       case 0x39:
-        return u8"\u00A0";
+        return "\u00A0";
       case 0x3a:
-        return u8"\u00e8";
+        return "\u00e8";
       case 0x3b:
-        return u8"\u00e2";
+        return "\u00e2";
       case 0x3c:
-        return u8"\u00ea";
+        return "\u00ea";
       case 0x3d:
-        return u8"\u00ee";
+        return "\u00ee";
       case 0x3e:
-        return u8"\u00f4";
+        return "\u00f4";
       case 0x3f:
-        return u8"\u00fb";
+        return "\u00fb";
       default:
         break;
     }
@@ -133,69 +130,69 @@ const char* get_char_override(uint8_t charset, uint8_t c)
     switch (c)
     {
       case 0x20:
-        return u8"\u00c1";
+        return "\u00c1";
       case 0x21:
-        return u8"\u00c9";
+        return "\u00c9";
       case 0x22:
-        return u8"\u00d3";
+        return "\u00d3";
       case 0x23:
-        return u8"\u00da";
+        return "\u00da";
       case 0x24:
-        return u8"\u00dc";
+        return "\u00dc";
       case 0x25:
-        return u8"\u00fc";
+        return "\u00fc";
       case 0x26:
-        return u8"\u00b4";
+        return "\u00b4";
       case 0x27:
-        return u8"\u00a1";
+        return "\u00a1";
       case 0x28:
-        return u8"*";
+        return "*";
       case 0x29:
-        return u8"\u2018";
+        return "\u2018";
       case 0x2a:
-        return u8"-";
+        return "-";
       case 0x2b:
-        return u8"\u00a9";
+        return "\u00a9";
       case 0x2c:
-        return u8"\u2120";
+        return "\u2120";
       case 0x2d:
-        return u8"\u00b7";
+        return "\u00b7";
       case 0x2e:
-        return u8"\u201c";
+        return "\u201c";
       case 0x2f:
-        return u8"\u201d";
+        return "\u201d";
       case 0x30:
-        return u8"\u00c0";
+        return "\u00c0";
       case 0x31:
-        return u8"\u00c2";
+        return "\u00c2";
       case 0x32:
-        return u8"\u00c7";
+        return "\u00c7";
       case 0x33:
-        return u8"\u00c8";
+        return "\u00c8";
       case 0x34:
-        return u8"\u00ca";
+        return "\u00ca";
       case 0x35:
-        return u8"\u00cb";
+        return "\u00cb";
       case 0x36:
-        return u8"\u00eb";
+        return "\u00eb";
       case 0x37:
-        return u8"\u00ce";
+        return "\u00ce";
       case 0x38:
-        return u8"\u00cf";
+        return "\u00cf";
       case 0x39:
-        return u8"\u00ef";
+        return "\u00ef";
       case 0x3a:
-        return u8"\u00d4";
+        return "\u00d4";
       case 0x3b:
-        return u8"\u00d9";
+        return "\u00d9";
       case 0x3c:
-        return u8"\u00f9";
+        return "\u00f9";
       case 0x3d:
-        return u8"\u00db";
+        return "\u00db";
       case 0x3e:
-        return u8"\u00ab";
+        return "\u00ab";
       case 0x3f:
-        return u8"\u00bb";
+        return "\u00bb";
       default:
         break;
     }
@@ -205,69 +202,69 @@ const char* get_char_override(uint8_t charset, uint8_t c)
     switch (c)
     {
       case 0x20:
-        return u8"\u00c3";
+        return "\u00c3";
       case 0x21:
-        return u8"\u00e3";
+        return "\u00e3";
       case 0x22:
-        return u8"\u00cd";
+        return "\u00cd";
       case 0x23:
-        return u8"\u00cc";
+        return "\u00cc";
       case 0x24:
-        return u8"\u00ec";
+        return "\u00ec";
       case 0x25:
-        return u8"\u00d2";
+        return "\u00d2";
       case 0x26:
-        return u8"\u00f2";
+        return "\u00f2";
       case 0x27:
-        return u8"\u00d5";
+        return "\u00d5";
       case 0x28:
-        return u8"\u00f5";
+        return "\u00f5";
       case 0x29:
-        return u8"{";
+        return "{";
       case 0x2a:
-        return u8"}";
+        return "}";
       case 0x2b:
-        return u8"\\";
+        return "\\";
       case 0x2c:
-        return u8"^";
+        return "^";
       case 0x2d:
-        return u8"_";
+        return "_";
       case 0x2e:
-        return u8"|";
+        return "|";
       case 0x2f:
-        return u8"~";
+        return "~";
       case 0x30:
-        return u8"\u00c4";
+        return "\u00c4";
       case 0x31:
-        return u8"\u00e4";
+        return "\u00e4";
       case 0x32:
-        return u8"\u00d6";
+        return "\u00d6";
       case 0x33:
-        return u8"\u00f6";
+        return "\u00f6";
       case 0x34:
-        return u8"\u00df";
+        return "\u00df";
       case 0x35:
-        return u8"\u00a5";
+        return "\u00a5";
       case 0x36:
-        return u8"\u00a4";
+        return "\u00a4";
       case 0x37:
-        return u8"\u00a6";
+        return "\u00a6";
       case 0x38:
-        return u8"\u00c5";
+        return "\u00c5";
       case 0x39:
-        return u8"\u00e5";
+        return "\u00e5";
       case 0x3a:
-        return u8"\u00d8";
+        return "\u00d8";
       case 0x3b:
-        return u8"\u00f8";
+        return "\u00f8";
       case 0x3c:
-        return u8"\u250c";
+        return "\u250c";
       case 0x3d:
-        return u8"\u2510";
+        return "\u2510";
       case 0x3e:
-        return u8"\u2514";
+        return "\u2514";
       case 0x3f:
-        return u8"\u2518";
+        return "\u2518";
       default:
         break;
     }
@@ -419,6 +416,41 @@ static void ccmem_exit(cc_memory_t *buf)
 /*FIXME: anything to deallocate?*/
 }
 
+static void cea608_process_style_modifiers(cc_decoder_t* dec)
+{
+  const int channel_no = dec->on_buf->channel_no;
+  const int row_pos = dec->on_buf->channel[channel_no].rowpos;
+  const cc_row_t current_row = dec->on_buf->channel[channel_no].rows[row_pos];
+  // ANSI CTA-608E:
+  // If, when a displayable character is received, it overwrites an existing PAC
+  // or mid-row code, and there are already characters to the right of the new character,
+  // these existing characters shall assume the same attributes as the new character.
+  // This adoption can result in a whole caption row suddenly changing color,
+  // underline, italics, and/or flash attributes.
+  const int cursor_position = current_row.pos;
+  // default style: white, black background, no italic, no underline
+  cc_attribute_t textattr = {0, 0, WHITE, BLACK};
+  for (int pos = cursor_position; pos >= 0 && pos <= CC_COLUMNS; pos--)
+  {
+    const cc_attribute_t ccAttribute = current_row.cells[pos].attributes;
+    if (ccAttribute.italic > 0)
+    {
+      // italics resets color to white
+      textattr.foreground = WHITE;
+      textattr.italic = 1;
+    }
+    if (ccAttribute.underline > 0)
+    {
+      textattr.underline = 1;
+    }
+    if (ccAttribute.foreground > WHITE && ccAttribute.foreground <= BLACK && textattr.italic == 0)
+    {
+      textattr.foreground = ccAttribute.foreground;
+    }
+  }
+  dec->textattr = textattr;
+}
+
 void ccmem_tobuf(cc_decoder_t *dec)
 {
   cc_buffer_t *buf = &dec->on_buf->channel[dec->on_buf->channel_no];
@@ -456,6 +488,8 @@ void ccmem_tobuf(cc_decoder_t *dec)
           break;
       for (j = f; j <= l; j++)
       {
+        if (dec->textlen >= (int)sizeof(dec->text) - 4)
+          break;
         const char* chbytes =
             get_char_override(buf->rows[i].cells[j].charset, buf->rows[i].cells[j].c);
         if (chbytes != NULL)
@@ -471,7 +505,8 @@ void ccmem_tobuf(cc_decoder_t *dec)
           dec->text[dec->textlen++] = (unsigned char)buf->rows[i].cells[j].c;
         }
       }
-      dec->text[dec->textlen++] = '\n';
+      if (dec->textlen < (int)sizeof(dec->text) - 1)
+        dec->text[dec->textlen++] = '\n';
     }
   }
 
@@ -488,7 +523,7 @@ void ccmem_tobuf(cc_decoder_t *dec)
       dec->text[dec->textlen++] = '\0';
     }
   }
-
+  cea608_process_style_modifiers(dec);
   dec->callback(0, dec->userdata);
 }
 
@@ -505,12 +540,21 @@ static cc_buffer_t *active_ccbuffer(cc_decoder_t *dec)
   return &mem->channel[mem->channel_no];
 }
 
+static void cc_hide_displayed(cc_decoder_t* dec)
+{
+  for (int i = 0; i < CC_ROWS * CC_COLUMNS + 1; i++)
+  {
+    dec->text[i] = '\0';
+  }
+  dec->callback(0, dec->userdata);
+}
+
 static void cc_swap_buffers(cc_decoder_t *dec)
 {
   cc_memory_t *temp;
 
   /* hide caption in displayed memory */
-  /* cc_hide_displayed(dec); */
+  cc_hide_displayed(dec);
 
   temp = dec->on_buf;
   dec->on_buf = dec->off_buf;
@@ -675,7 +719,7 @@ static void cc_decode_misc_control_code(cc_decoder_t* dec, int channel, uint8_t 
     break;
 
   case 0x2c:             /* EDM - erase displayed memory */
-    /* cc_hide_displayed(dec); */
+    cc_hide_displayed(dec);
     ccmem_clear(dec->on_buf);
     break;
 

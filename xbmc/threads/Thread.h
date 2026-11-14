@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2005-2018 Team Kodi
+ *  Copyright (C) 2005-2026 Team Kodi
  *  This file is part of Kodi - https://kodi.tv
  *
  *  SPDX-License-Identifier: GPL-2.0-or-later
@@ -14,8 +14,6 @@
 
 #include "Event.h"
 
-#include "threads/platform/ThreadImpl.h"
-
 #include <atomic>
 #include <future>
 #ifdef TARGET_DARWIN
@@ -25,8 +23,29 @@
 #include <string>
 #include <thread>
 
-class IRunnable;
+enum class ThreadPriority
+{
+  LOWEST,
+  BELOW_NORMAL,
+  NORMAL,
+  ABOVE_NORMAL,
+  HIGHEST,
 
+  /*!
+   * \brief Do not use this for priority. It is only needed to count the
+   *        amount of values in the ThreadPriority enum.
+   *
+   */
+  PRIORITY_COUNT,
+};
+
+enum class ThreadTask
+{
+  AUDIO,
+};
+
+class IRunnable;
+class IThreadImpl;
 class CThread
 {
 protected:
@@ -58,20 +77,25 @@ public:
     return std::this_thread::get_id();
   }
 
-  // -----------------------------------------------------------------------------------
-  // These are platform specific and can be found in ./platform/[platform]/ThreadImpl.cpp
-  // -----------------------------------------------------------------------------------
-  static int GetMinPriority(void);
-  static int GetMaxPriority(void);
-  static int GetNormalPriority(void);
-  static std::uintptr_t GetCurrentThreadNativeHandle();
-  static uint64_t GetCurrentThreadNativeId();
+  /*!
+   * \brief Set the threads priority. This uses the platforms
+   *        native threading library to do so.
+   *
+   */
+  bool SetPriority(const ThreadPriority& priority);
 
-  // Get and set the thread's priority
-  int GetPriority(void);
-  bool SetPriority(const int iPriority);
+  /*!
+   * \brief Assign the current thread a task for OS scheduling (platform dependent)
+   * \param[in] task Type of task
+   * \return true for success, false for failure
+   */
+  bool SetTask(const ThreadTask& task);
 
-  // -----------------------------------------------------------------------------------
+  /*!
+   * \brief Revert the current thread to normal scheduling (platform dependent)
+   * \return true for success, false for failure
+   */
+  bool RevertTask();
 
   static CThread* GetCurrentThread();
 
@@ -96,7 +120,7 @@ protected:
                                         std::chrono::milliseconds(-1) /* indicates wait forever*/)
   {
     XbmcThreads::CEventGroup group{&event, &m_StopEvent};
-    CEvent* result =
+    const CEvent* result =
         duration < std::chrono::milliseconds::zero() ? group.wait() : group.wait(duration);
     return  result == &event ? WAIT_SIGNALED :
       (result == NULL ? WAIT_TIMEDOUT : WAIT_INTERRUPTED);
@@ -104,14 +128,6 @@ protected:
 
 private:
   void Action();
-
-  // -----------------------------------------------------------------------------------
-  // These are platform specific and can be found in ./platform/[platform]/ThreadImpl.cpp
-  // -----------------------------------------------------------------------------------
-  void SetThreadInfo(); // called from the spawned thread
-  void TermHandler();
-  void SetSignalHandlers();
-  // -----------------------------------------------------------------------------------
 
   bool m_bAutoDelete = false;
   CEvent m_StopEvent;
@@ -121,8 +137,9 @@ private:
 
   std::string m_ThreadName;
   std::thread* m_thread = nullptr;
-  std::future<bool> m_future;
+  // identifies m_thread across a restart, which may reuse the address of a deleted thread
+  uint64_t m_threadGeneration = 0;
+  std::shared_future<bool> m_future;
 
-  // Platform specific hangers-on
-  ThreadLwpId m_lwpId = 0;
+  std::unique_ptr<IThreadImpl> m_impl;
 };

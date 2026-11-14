@@ -8,14 +8,13 @@
 
 #pragma once
 
-#include <map>
 #include <string>
 #include <vector>
 
 class TiXmlElement;
 namespace XFILE
 {
-class CCurlFile;
+class IHttpClient;
 }
 
 class CScraperUrl
@@ -29,20 +28,17 @@ public:
 
   struct SUrlEntry
   {
-    explicit SUrlEntry(std::string url = "")
-      : m_url(std::move(url)), m_type(UrlType::General), m_post(false), m_isgz(false), m_season(-1)
-    {
-    }
+    explicit SUrlEntry(std::string url = "") : m_url(std::move(url)) {}
 
     std::string m_spoof;
     std::string m_url;
     std::string m_cache;
     std::string m_aspect;
     std::string m_preview;
-    UrlType m_type;
-    bool m_post;
-    bool m_isgz;
-    int m_season;
+    UrlType m_type = UrlType::General;
+    bool m_post = false;
+    bool m_isgz = false;
+    int m_season = -1;
   };
 
   CScraperUrl();
@@ -108,7 +104,7 @@ public:
 
   static bool Get(const SUrlEntry& scrURL,
                   std::string& strHTML,
-                  XFILE::CCurlFile& http,
+                  XFILE::IHttpClient& http,
                   const std::string& cacheContext);
 
   // ATTENTION: this member MUST NOT be used directly except from databases

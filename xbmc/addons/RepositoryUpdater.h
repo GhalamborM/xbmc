@@ -8,20 +8,32 @@
 
 #pragma once
 
-#include "XBDateTime.h"
-#include "addons/AddonEvents.h"
-#include "addons/Repository.h"
+#include "jobs/IJobCallback.h"
+#include "powermanagement/PowerState.h"
 #include "settings/lib/ISettingCallback.h"
 #include "threads/CriticalSection.h"
 #include "threads/Timer.h"
 #include "utils/EventStream.h"
 
+#include <memory>
 #include <vector>
+
+class CDateTime;
 
 namespace ADDON
 {
 
-class CRepositoryUpdater : private ITimerCallback, private IJobCallback, public ISettingCallback
+class CAddonMgr;
+
+class CRepository;
+using RepositoryPtr = std::shared_ptr<CRepository>;
+
+class CRepositoryUpdateJob;
+
+class CRepositoryUpdater : private ITimerCallback,
+                           private IJobCallback,
+                           public ISettingCallback,
+                           public CPowerState
 {
 public:
   explicit CRepositoryUpdater(CAddonMgr& addonMgr);
@@ -44,12 +56,20 @@ public:
    */
   void Await();
 
+  enum class UpdateScheduleType
+  {
+    /*! Update should be scheduled as the first update after application start or setting change. */
+    First,
+    /*! Update should be scheduled as a regular update during application runtime. */
+    Regular
+  };
+
   /**
    * Schedule an automatic update to run based on settings and previous update
    * times. May be called when there are external changes this updater must know
    * about. Any previously scheduled update will be cancelled.
    */
-  void ScheduleUpdate();
+  void ScheduleUpdate(UpdateScheduleType scheduleType);
 
   /**
    * Returns the time of the last check (oldest). Invalid time if never checked.
@@ -73,13 +93,11 @@ private:
 
   void OnTimeout() override;
 
-  void OnEvent(const ADDON::AddonEvent& event);
-
   CDateTime ClosestNextCheck() const;
 
   CCriticalSection m_criticalSection;
   CTimer m_timer;
-  CEvent m_doneEvent;
+  CEvent m_doneEvent{true};
   std::vector<CRepositoryUpdateJob*> m_jobs;
   CAddonMgr& m_addonMgr;
 

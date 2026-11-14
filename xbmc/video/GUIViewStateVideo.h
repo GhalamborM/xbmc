@@ -16,11 +16,20 @@ public:
   explicit CGUIViewStateWindowVideo(const CFileItemList& items) : CGUIViewState(items) {}
 
 protected:
-  VECSOURCES& GetSources() override;
-  std::string GetLockType() override;
-  int GetPlaylist() const override;
+  std::vector<CMediaSource>& GetSources() override;
+  std::optional<KODI::MEDIA::MediaSection> GetLockType() override;
+  KODI::PLAYLIST::Id GetPlaylist() const override;
   std::string GetExtensions() override;
   bool AutoPlayNextItem() override;
+};
+
+class CGUIViewStateVideoPlaylist : public CGUIViewStateWindowVideo
+{
+public:
+  explicit CGUIViewStateVideoPlaylist(const CFileItemList& items);
+
+protected:
+  void SaveViewState() override;
 };
 
 class CGUIViewStateWindowVideoNav : public CGUIViewStateWindowVideo
@@ -31,7 +40,7 @@ public:
 
 protected:
   void SaveViewState() override;
-  VECSOURCES& GetSources() override;
+  std::vector<CMediaSource>& GetSources() override;
 };
 
 class CGUIViewStateWindowVideoPlaylist : public CGUIViewStateWindowVideo
@@ -43,7 +52,7 @@ protected:
   void SaveViewState() override;
   bool HideExtensions() override;
   bool HideParentDirItems() override;
-  VECSOURCES& GetSources() override;
+  std::vector<CMediaSource>& GetSources() override;
   bool AutoPlayNextItem() override { return false; }
 };
 

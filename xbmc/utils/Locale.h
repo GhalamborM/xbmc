@@ -56,10 +56,6 @@ public:
    */
   const std::string& GetTerritoryCode() const { return m_territory; }
   /*!
-   \brief Returns the codeset of the locale.
-   */
-  const std::string& GetCodeset() const { return m_codeset; }
-  /*!
    \brief Returns the modifier of the locale.
    */
   const std::string& GetModifier() const { return m_modifier; }
@@ -73,15 +69,6 @@ public:
    is represented as a (upper-case) two character ISO 3166-1 Alpha-2 code.
    */
   std::string ToString() const;
-  /*!
-   \brief Returns the full string representation of the locale in lowercase.
-
-   \details The format of the string representation is
-   `language[_territory][.codeset][@modifier]]` where the language is
-   represented as a two character ISO 639-1 code and the territory is
-   represented as a two character ISO 3166-1 Alpha-2 code.
-   */
-  std::string ToStringLC() const;
   /*!
    \brief Returns the short string representation of the locale.
 
@@ -131,6 +118,18 @@ public:
   */
   std::string FindBestMatch(const std::set<std::string>& locales) const;
 
+  struct StringHash
+  {
+    using is_transparent = void; // Enables heterogeneous operations.
+    std::size_t operator()(std::string_view sv) const
+    {
+      std::hash<std::string_view> hasher;
+      return hasher(sv);
+    }
+  };
+  using LocalizedStringsMap =
+      std::unordered_map<std::string, std::string, StringHash, std::equal_to<>>;
+
   /*!
   \brief Tries to find the locale in the given list that matches this locale
          best.
@@ -142,7 +141,7 @@ public:
   \remark Used from \ref CAddonInfo::GetTranslatedText to prevent copy from map
           to set.
   */
-  std::string FindBestMatch(const std::unordered_map<std::string, std::string>& locales) const;
+  std::string FindBestMatch(const LocalizedStringsMap& locales) const;
 
 private:
   static bool CheckValidity(const std::string& language, const std::string& territory, const std::string& codeset, const std::string& modifier);

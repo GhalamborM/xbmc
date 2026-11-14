@@ -8,15 +8,23 @@
 
 #include "RetroPlayerInput.h"
 
-#include "peripherals/EventPollHandle.h"
+#include "cores/RetroPlayer/process/RPProcessInfo.h"
+#include "cores/RetroPlayer/rendering/RenderContext.h"
+#include "games/addons/GameClient.h"
+#include "games/addons/input/GameClientInput.h"
 #include "peripherals/Peripherals.h"
+#include "peripherals/events/EventPollHandle.h"
 #include "utils/log.h"
 
 using namespace KODI;
 using namespace RETRO;
 
-CRetroPlayerInput::CRetroPlayerInput(PERIPHERALS::CPeripherals& peripheralManager)
-  : m_peripheralManager(peripheralManager)
+CRetroPlayerInput::CRetroPlayerInput(PERIPHERALS::CPeripherals& peripheralManager,
+                                     CRPProcessInfo& processInfo,
+                                     GAME::GameClientPtr gameClient)
+  : m_peripheralManager(peripheralManager),
+    m_processInfo(processInfo),
+    m_gameClient(std::move(gameClient))
 {
   CLog::Log(LOGDEBUG, "RetroPlayer[INPUT]: Initializing input");
 
@@ -30,12 +38,38 @@ CRetroPlayerInput::~CRetroPlayerInput()
   m_inputPollHandle.reset();
 }
 
+void CRetroPlayerInput::StartAgentManager()
+{
+  if (!m_bAgentManagerStarted)
+  {
+    m_bAgentManagerStarted = true;
+    m_processInfo.GetRenderContext().StartAgentInput(m_gameClient);
+  }
+}
+
+void CRetroPlayerInput::StopAgentManager()
+{
+  if (m_bAgentManagerStarted)
+  {
+    m_bAgentManagerStarted = false;
+    m_processInfo.GetRenderContext().StopAgentInput();
+  }
+}
+
 void CRetroPlayerInput::SetSpeed(double speed)
 {
   if (speed != 0)
+  {
     m_inputPollHandle->Activate();
+    m_gameClient->Input().EnableRumble(true);
+  }
   else
+  {
     m_inputPollHandle->Deactivate();
+
+    // A paused game can't stop its own motors
+    m_gameClient->Input().EnableRumble(false);
+  }
 }
 
 void CRetroPlayerInput::EnableInput(bool bEnabled)

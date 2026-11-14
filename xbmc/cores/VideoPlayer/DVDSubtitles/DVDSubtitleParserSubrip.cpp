@@ -18,11 +18,6 @@ CDVDSubtitleParserSubrip::CDVDSubtitleParserSubrip(std::unique_ptr<CDVDSubtitleS
 {
 }
 
-CDVDSubtitleParserSubrip::~CDVDSubtitleParserSubrip()
-{
-  Dispose();
-}
-
 bool CDVDSubtitleParserSubrip::Open(CDVDStreamInfo& hints)
 {
   if (!CDVDSubtitleParserText::Open())
@@ -41,7 +36,7 @@ bool CDVDSubtitleParserSubrip::Open(CDVDStreamInfo& hints)
   {
     StringUtils::Trim(line);
 
-    if (line.length() > 0)
+    if (!line.empty())
     {
       char sep;
       int hh1, mm1, ss1, ms1, hh2, mm2, ss2, ms2;
@@ -65,10 +60,10 @@ bool CDVDSubtitleParserSubrip::Open(CDVDStreamInfo& hints)
           StringUtils::Trim(line);
 
           // empty line, next subtitle is about to start
-          if (line.length() <= 0)
+          if (line.empty())
             break;
 
-          if (convText.size() > 0)
+          if (!convText.empty())
             convText += "\n";
           TagConv.ConvertLine(line);
           convText += line;
@@ -86,9 +81,4 @@ bool CDVDSubtitleParserSubrip::Open(CDVDStreamInfo& hints)
   m_collection.Add(CreateOverlay());
 
   return true;
-}
-
-void CDVDSubtitleParserSubrip::Dispose()
-{
-  CDVDSubtitleParserCollection::Dispose();
 }

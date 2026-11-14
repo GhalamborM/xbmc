@@ -17,10 +17,13 @@
 #include "filesystem/FileDirectoryFactory.h"
 #include "guilib/GUIComponent.h"
 #include "guilib/GUIWindowManager.h"
-#include "guilib/LocalizeStrings.h"
+#include "resources/LocalizeStrings.h"
+#include "resources/ResourcesComponent.h"
 #include "utils/StringUtils.h"
 #include "utils/URIUtils.h"
 #include "utils/log.h"
+
+#include <memory>
 
 using namespace XFILE;
 
@@ -28,7 +31,6 @@ CFileOperationJob::CFileOperationJob()
   : m_items(),
     m_strDestFile(),
     m_avgSpeed(),
-    m_currentOperation(),
     m_currentFile()
 { }
 
@@ -40,7 +42,6 @@ CFileOperationJob::CFileOperationJob(FileAction action, CFileItemList & items,
     m_items(),
     m_strDestFile(strDestFile),
     m_avgSpeed(),
-    m_currentOperation(),
     m_currentFile(),
     m_displayProgress(displayProgress),
     m_heading(heading),
@@ -49,14 +50,16 @@ CFileOperationJob::CFileOperationJob(FileAction action, CFileItemList & items,
   SetFileOperation(action, items, strDestFile);
 }
 
-void CFileOperationJob::SetFileOperation(FileAction action, CFileItemList &items, const std::string &strDestFile)
+void CFileOperationJob::SetFileOperation(FileAction action,
+                                         const CFileItemList& items,
+                                         const std::string& strDestFile)
 {
   m_action = action;
   m_strDestFile = strDestFile;
 
   m_items.Clear();
   for (int i = 0; i < items.Size(); i++)
-    m_items.Add(CFileItemPtr(new CFileItem(*items[i])));
+    m_items.Add(std::make_shared<CFileItem>(*items[i]));
 }
 
 bool CFileOperationJob::DoWork()
@@ -97,7 +100,7 @@ bool CFileOperationJob::DoProcessFile(FileAction action, const std::string& strF
       time += data.st_size;
   }
 
-  fileOperations.push_back(CFileOperation(action, strFileA, strFileB, time));
+  fileOperations.emplace_back(action, strFileA, strFileB, time);
 
   totalTime += time;
 
@@ -131,14 +134,18 @@ bool CFileOperationJob::DoProcessFolder(FileAction action, const std::string& st
 
   if (action == ActionMove)
   {
-    fileOperations.push_back(CFileOperation(ActionDeleteFolder, strPath, "", 1));
+    fileOperations.emplace_back(ActionDeleteFolder, strPath, "", 1);
     totalTime += 1.0;
   }
 
   return true;
 }
 
-bool CFileOperationJob::DoProcess(FileAction action, CFileItemList & items, const std::string& strDestFile, FileOperationList &fileOperations, double &totalTime)
+bool CFileOperationJob::DoProcess(FileAction action,
+                                  const CFileItemList& items,
+                                  const std::string& strDestFile,
+                                  FileOperationList& fileOperations,
+                                  double& totalTime)
 {
   for (int iItem = 0; iItem < items.Size(); ++iItem)
   {
@@ -155,21 +162,21 @@ bool CFileOperationJob::DoProcess(FileAction action, CFileItemList & items, cons
         // get filename from label instead of path
         strFileName = pItem->GetLabel();
 
-        if (!pItem->m_bIsFolder && !URIUtils::HasExtension(strFileName))
+        if (!pItem->IsFolder() && !URIUtils::HasExtension(strFileName))
         {
           // FIXME: for now we only work well if the url has the extension
           // we should map the content type to the extension otherwise
           strFileName += URIUtils::GetExtension(pItem->GetPath());
         }
 
-        strFileName = CUtil::MakeLegalFileName(strFileName);
+        strFileName = CUtil::MakeLegalFileName(std::move(strFileName));
       }
 
       std::string strnewDestFile;
       if (!strDestFile.empty()) // only do this if we have a destination
         strnewDestFile = URIUtils::ChangeBasePath(pItem->GetPath(), strFileName, strDestFile); // Convert (URL) encoding + slashes (if source / target differ)
 
-      if (pItem->m_bIsFolder)
+      if (pItem->IsFolder())
       {
         // in ActionReplace mode all subdirectories will be removed by the below
         // DoProcessFolder(ActionDelete) call as well, so ActionCopy is enough when
@@ -217,20 +224,20 @@ std::string CFileOperationJob::GetActionString(FileAction action)
   {
     case ActionCopy:
     case ActionReplace:
-      result = g_localizeStrings.Get(115);
+      result = CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(115);
       break;
 
     case ActionMove:
-      result = g_localizeStrings.Get(116);
+      result = CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(116);
       break;
 
     case ActionDelete:
     case ActionDeleteFolder:
-      result = g_localizeStrings.Get(117);
+      result = CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(117);
       break;
 
     case ActionCreateFolder:
-      result = g_localizeStrings.Get(119);
+      result = CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(119);
       break;
 
     default:
@@ -245,7 +252,6 @@ bool CFileOperationJob::CFileOperation::ExecuteOperation(CFileOperationJob *base
   bool bResult = true;
 
   base->m_currentFile = CURL(m_strFileA).GetFileNameWithoutPath();
-  base->m_currentOperation = GetActionString(m_action);
 
   if (base->ShouldCancel((unsigned int)current, 100))
     return false;
@@ -327,7 +333,7 @@ bool CFileOperationJob::CFileOperation::OnFileCallback(void* pContext, int iperc
   return !data->base->ShouldCancel((unsigned)current, 100);
 }
 
-bool CFileOperationJob::operator==(const CJob* job) const
+bool CFileOperationJob::Equals(const CJob* job) const
 {
   if (strcmp(job->GetType(), GetType()) != 0)
     return false;

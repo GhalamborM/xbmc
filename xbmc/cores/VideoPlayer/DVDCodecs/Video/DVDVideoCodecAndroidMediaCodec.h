@@ -37,17 +37,7 @@ class CDVDMediaCodecOnFrameAvailable;
 class CJNIByteBuffer;
 class CBitstreamConverter;
 
-struct DemuxCryptoInfo;
 struct mpeg2_sequence;
-
-
-typedef struct amc_demux
-{
-  uint8_t* pData;
-  int iSize;
-  double dts;
-  double pts;
-} amc_demux;
 
 class CMediaCodecVideoBufferPool;
 
@@ -61,7 +51,7 @@ public:
            int textureId,
            std::shared_ptr<CJNISurfaceTexture> surfaceTexture,
            std::shared_ptr<CDVDMediaCodecOnFrameAvailable> frameAvailable,
-           std::shared_ptr<CJNIXBMCVideoView> videoView);
+           std::shared_ptr<jni::CJNIXBMCVideoView> videoView);
 
   // meat and potatoes
   bool WaitForFrame(int millis);
@@ -69,6 +59,8 @@ public:
   void ReleaseOutputBuffer(bool render,
                            int64_t displayTime,
                            CMediaCodecVideoBufferPool* pool = nullptr);
+  // MediaCodec took the output buffer back without it being released
+  void InvalidateOutputBuffer() { m_bufferId = -1; }
   // SurfaceTexture released
   int GetBufferId() const;
   int GetTextureId() const;
@@ -84,7 +76,7 @@ private:
   // CDVDVideoCodecAndroidMediaCodec and LinuxRenderGLES.
   std::shared_ptr<CJNISurfaceTexture> m_surfacetexture;
   std::shared_ptr<CDVDMediaCodecOnFrameAvailable> m_frameready;
-  std::shared_ptr<CJNIXBMCVideoView> m_videoview;
+  std::shared_ptr<jni::CJNIXBMCVideoView> m_videoview;
 };
 
 class CMediaCodecVideoBufferPool : public IVideoBufferPool
@@ -103,6 +95,9 @@ public:
   std::shared_ptr<CJNIMediaCodec> GetMediaCodec();
   void ResetMediaCodec();
   void ReleaseMediaCodecBuffers();
+  void InvalidateMediaCodecBuffers();
+  // Held while an output buffer is released and while MediaCodec is flushed
+  CCriticalSection& GetCriticalSection() { return m_criticalSection; }
 
 private:
   CCriticalSection m_criticalSection;
@@ -151,28 +146,25 @@ protected:
   CDVDStreamInfo m_hints;
   std::string m_mime;
   std::string m_codecname;
-  int m_colorFormat;
   std::string m_formatname;
-  bool m_opened;
+  bool m_opened = false;
   bool m_needSecureDecoder = false;
   int m_codecControlFlags;
   int m_state;
 
-  std::shared_ptr<CJNIXBMCVideoView> m_jnivideoview;
+  std::shared_ptr<jni::CJNIXBMCVideoView> m_jnivideoview;
   CJNISurface m_jnivideosurface;
-  unsigned int m_textureId;
+  unsigned int m_textureId = 0;
   std::shared_ptr<CJNIMediaCodec> m_codec;
   CJNIMediaCrypto* m_crypto = nullptr;
   std::shared_ptr<CJNISurfaceTexture> m_surfaceTexture;
   std::shared_ptr<CDVDMediaCodecOnFrameAvailable> m_frameAvailable;
-
-  amc_demux m_demux_pkt;
   std::shared_ptr<CMediaCodecVideoBufferPool> m_videoBufferPool;
 
-  uint32_t m_OutputDuration, m_fpsDuration;
-  int64_t m_lastPTS;
+  uint32_t m_OutputDuration = 0, m_fpsDuration = 0;
+  int64_t m_lastPTS = -1;
   int64_t m_invalidPTSValue = 0;
-  double m_dtsShift;
+  double m_dtsShift = DVD_NOPTS_VALUE;
 
   static std::atomic<bool> m_InstanceGuard;
 
@@ -181,10 +173,8 @@ protected:
 
   int m_indexInputBuffer;
   bool m_render_surface;
-  mpeg2_sequence* m_mpeg2_sequence;
-  int m_src_offset[4];
-  int m_src_stride[4];
-  bool m_useDTSforPTS;
+  mpeg2_sequence* m_mpeg2_sequence = nullptr;
+  bool m_useDTSforPTS = false;
 
   // CJNISurfaceHolderCallback interface
 public:

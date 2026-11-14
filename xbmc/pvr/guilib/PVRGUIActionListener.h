@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include "interfaces/IActionListener.h"
+#include "input/actions/interfaces/IActionListener.h"
 #include "settings/lib/ISettingCallback.h"
 
 namespace PVR
@@ -16,9 +16,8 @@ namespace PVR
 
 class CPVRManager;
 enum class ChannelSwitchMode;
-enum class PVREvent;
 
-class CPVRGUIActionListener : public IActionListener, public ISettingCallback
+class CPVRGUIActionListener : public KODI::ACTION::IActionListener, public ISettingCallback
 {
 public:
   CPVRGUIActionListener();
@@ -33,8 +32,6 @@ public:
   // ISettingCallback implementation
   void OnSettingChanged(const std::shared_ptr<const CSetting>& setting) override;
   void OnSettingAction(const std::shared_ptr<const CSetting>& setting) override;
-
-  void OnPVRManagerEvent(const PVREvent& event);
 
 private:
   CPVRGUIActionListener(const CPVRGUIActionListener&) = delete;

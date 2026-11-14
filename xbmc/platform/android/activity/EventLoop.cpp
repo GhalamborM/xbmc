@@ -8,17 +8,12 @@
 
 #include "EventLoop.h"
 
-#include "AndroidExtra.h"
 #include "XBMCApp.h"
-
-#include <dlfcn.h>
 
 #define IS_FROM_SOURCE(v, s) ((v & s) == s)
 
 CEventLoop::CEventLoop(android_app* application)
-  : m_enabled(false),
-    m_application(application),
-    m_activityHandler(NULL), m_inputHandler(NULL)
+  : m_application(application), m_activityHandler(NULL), m_inputHandler(NULL)
 {
   if (m_application == NULL)
     return;
@@ -28,33 +23,30 @@ CEventLoop::CEventLoop(android_app* application)
   m_application->onInputEvent = inputCallback;
 }
 
-void CEventLoop::run(IActivityHandler &activityHandler, IInputHandler &inputHandler)
+void CEventLoop::run(IActivityHandler& activityHandler, IInputHandler& inputHandler)
 {
-  int ident;
-  int events;
-  struct android_poll_source* source;
-
   m_activityHandler = &activityHandler;
   m_inputHandler = &inputHandler;
 
   CXBMCApp::android_printf("CEventLoop: starting event loop");
-  while (true)
-  {
-    // We will block forever waiting for events.
-    while ((ident = ALooper_pollAll(-1, NULL, &events, (void**)&source)) >= 0)
-    {
-      // Process this event.
-      if (source != NULL)
-        source->process(m_application, source);
 
-      // Check if we are exiting.
-      if (m_application->destroyRequested)
-      {
-        CXBMCApp::android_printf("CEventLoop: we are being destroyed");
-        return;
-      }
+  while (!m_application->destroyRequested)
+  {
+    android_poll_source* source = nullptr;
+    int result = ALooper_pollOnce(-1, nullptr, nullptr, reinterpret_cast<void**>(&source));
+
+    if (result == ALOOPER_POLL_ERROR)
+    {
+      CXBMCApp::android_printf("CEventLoop: ALooper_pollOnce returned an error");
+      break;
     }
+
+    // Process this event.
+    if (source != nullptr)
+      source->process(m_application, source);
   }
+
+  CXBMCApp::android_printf("CEventLoop: we are being destroyed");
 }
 
 void CEventLoop::processActivity(int32_t command)
@@ -70,7 +62,7 @@ void CEventLoop::processActivity(int32_t command)
       m_activityHandler->onCreateWindow(m_application->window);
 
       // set the proper DPI value
-      m_inputHandler->setDPI(CXBMCApp::GetDPI());
+      m_inputHandler->setDPI(CXBMCApp::Get().GetDPI());
       break;
 
     case APP_CMD_WINDOW_RESIZED:

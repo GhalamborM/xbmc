@@ -3,59 +3,79 @@
 # -------
 # Finds the libCEC library
 #
-# This will define the following variables::
+# This will define the following target:
 #
-# CEC_FOUND - system has libCEC
-# CEC_INCLUDE_DIRS - the libCEC include directory
-# CEC_LIBRARIES - the libCEC libraries
-# CEC_DEFINITIONS - the libCEC compile definitions
-#
-# and the following imported targets::
-#
-#   CEC::CEC   - The libCEC library
+#   ${APP_NAME_LC}::CEC - The libCEC library
 
-if(PKG_CONFIG_FOUND)
-  pkg_check_modules(PC_CEC libcec QUIET)
-endif()
+if(NOT TARGET ${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME})
+  include(cmake/scripts/common/ModuleHelpers.cmake)
 
-find_path(CEC_INCLUDE_DIR NAMES libcec/cec.h libCEC/CEC.h
-                          PATHS ${PC_CEC_INCLUDEDIR})
+  macro(buildmacroCEC)
 
-if(PC_CEC_VERSION)
-  set(CEC_VERSION ${PC_CEC_VERSION})
-elseif(CEC_INCLUDE_DIR AND EXISTS "${CEC_INCLUDE_DIR}/libcec/version.h")
-  file(STRINGS "${CEC_INCLUDE_DIR}/libcec/version.h" cec_version_str REGEX "^[\t ]+LIBCEC_VERSION_TO_UINT\\(.*\\)")
-  string(REGEX REPLACE "^[\t ]+LIBCEC_VERSION_TO_UINT\\(([0-9]+), ([0-9]+), ([0-9]+)\\)" "\\1.\\2.\\3" CEC_VERSION "${cec_version_str}")
-  unset(cec_version_str)
-endif()
+    set(${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_VERSION ${${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_VER})
 
-if(NOT CEC_FIND_VERSION)
-  set(CEC_FIND_VERSION 4.0.0)
-endif()
+    set(${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_SHARED_LIB TRUE)
 
-find_library(CEC_LIBRARY NAMES cec
-                         PATHS ${PC_CEC_LIBDIR})
-
-include(FindPackageHandleStandardArgs)
-find_package_handle_standard_args(CEC
-                                  REQUIRED_VARS CEC_LIBRARY CEC_INCLUDE_DIR
-                                  VERSION_VAR CEC_VERSION)
-
-if(CEC_FOUND)
-  set(CEC_LIBRARIES ${CEC_LIBRARY})
-  set(CEC_INCLUDE_DIRS ${CEC_INCLUDE_DIR})
-  set(CEC_DEFINITIONS -DHAVE_LIBCEC=1)
-
-  if(NOT TARGET CEC::CEC)
-    add_library(CEC::CEC UNKNOWN IMPORTED)
-    if(CEC_LIBRARY)
-      set_target_properties(CEC::CEC PROPERTIES
-                                     IMPORTED_LOCATION "${CEC_LIBRARY}")
+    if(CORE_SYSTEM_NAME STREQUAL "osx")
+      set(${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_LOCATION_POSTFIX "dylib")
     endif()
-    set_target_properties(CEC::CEC PROPERTIES
-                                   INTERFACE_INCLUDE_DIRECTORIES "${CEC_INCLUDE_DIR}"
-                                   INTERFACE_COMPILE_DEFINITIONS HAVE_LIBCEC=1)
+
+    set(CMAKE_ARGS -DBUILD_SHARED_LIBS=ON
+                   -DSKIP_PYTHON_WRAPPER=ON
+                   -DDISABLE_BUILDINFO=ON
+                   -DDISABLE_CLIENT=ON
+                   -DDISABLE_STATIC=ON
+                   -DCMAKE_INSTALL_BINDIR=bin
+                   -DCMAKE_INSTALL_LIBDIR=lib
+                   -DCMAKE_INSTALL_INCLUDEDIR=include
+                   -DCMAKE_PLATFORM_NO_VERSIONED_SONAME=ON)
+
+    BUILD_DEP_TARGET()
+
+    if(CORE_SYSTEM_NAME STREQUAL "osx")
+      find_program(INSTALL_NAME_TOOL NAMES install_name_tool)
+      add_custom_command(TARGET ${${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_BUILD_NAME} POST_BUILD
+                         COMMAND ${INSTALL_NAME_TOOL} -id ${${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_LIBRARY} ${${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_LIBRARY})
+    endif()
+  endmacro()
+
+  set(${CMAKE_FIND_PACKAGE_NAME}_MODULE_LC cec)
+  set(${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME libcec)
+
+  SETUP_BUILD_VARS()
+
+  SETUP_FIND_SPECS()
+
+  SEARCH_EXISTING_PACKAGES()
+
+  if(("${${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME}_VERSION}" VERSION_LESS ${${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_VER} AND ENABLE_INTERNAL_CEC) OR
+     (((CORE_SYSTEM_NAME STREQUAL linux AND NOT "webos" IN_LIST CORE_PLATFORM_NAME_LC) OR CORE_SYSTEM_NAME STREQUAL freebsd) AND ENABLE_INTERNAL_CEC) OR
+     (DEFINED ${CMAKE_FIND_PACKAGE_NAME}_FORCE_BUILD))
+    message(STATUS "Building ${${CMAKE_FIND_PACKAGE_NAME}_MODULE_LC}: \(version \"${${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_VER}\"\)")
+    cmake_language(EVAL CODE "
+      buildmacro${CMAKE_FIND_PACKAGE_NAME}()
+    ")
+  endif()
+
+  if(${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME}_FOUND)
+    set(${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_COMPILE_DEFINITIONS HAVE_LIBCEC)
+
+    if((TARGET libcec::cec-shared OR TARGET libcec::cec) AND NOT TARGET ${${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_BUILD_NAME})
+      if(TARGET libcec::cec)
+        set(target_name cec)
+      else()
+        set(target_name cec-shared)
+      endif()
+      add_library(${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME} ALIAS libcec::${target_name})
+    elseif(TARGET PkgConfig::${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME} AND NOT TARGET ${${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_BUILD_NAME})
+      add_library(${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME} ALIAS PkgConfig::${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME})
+    else()
+      SETUP_BUILD_TARGET()
+      add_dependencies(${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME} ${${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_BUILD_NAME})
+    endif()
+
+    ADD_TARGET_COMPILE_DEFINITION()
+
+    ADD_MULTICONFIG_BUILDMACRO()
   endif()
 endif()
-
-mark_as_advanced(CEC_INCLUDE_DIR CEC_LIBRARY)

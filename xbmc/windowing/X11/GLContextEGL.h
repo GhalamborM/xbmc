@@ -9,11 +9,18 @@
 #pragma once
 
 #include "GLContext.h"
-#include "system_egl.h"
 #include "threads/CriticalSection.h"
 
+#include <cstdint>
+
+#include "system_egl.h"
+
 #include <EGL/eglext.h>
+#ifdef HAVE_EGLEXTANGLE
+#include <EGL/eglext_angle.h>
+#else
 #include <EGL/eglextchromium.h>
+#endif
 #include <X11/Xutil.h>
 
 class CGLContextEGL : public CGLContext
@@ -28,12 +35,18 @@ public:
   void SetVSync(bool enable) override;
   void SwapBuffers() override;
   void QueryExtensions() override;
+  bool IsBufferAgeSupported() override { return IsExtSupported("EGL_EXT_buffer_age"); }
+  int GetBufferAge() override;
   uint64_t GetVblankTiming(uint64_t &msc, uint64_t &interval) override;
 
+  bool BindTextureUploadContext();
+  bool UnbindTextureUploadContext();
+  bool HasContext();
+
   EGLint m_renderingApi;
-  EGLDisplay m_eglDisplay;
-  EGLSurface m_eglSurface;
-  EGLContext m_eglContext;
+  EGLDisplay m_eglDisplay = EGL_NO_DISPLAY;
+  EGLSurface m_eglSurface = EGL_NO_SURFACE;
+  EGLContext m_eglContext = EGL_NO_CONTEXT;
   EGLConfig m_eglConfig;
 protected:
   bool SuitableCheck(EGLDisplay eglDisplay, EGLConfig config);
@@ -54,4 +67,7 @@ protected:
   CCriticalSection m_syncLock;
 
   bool m_usePB = false;
+
+  EGLContext m_eglUploadContext = EGL_NO_CONTEXT;
+  mutable CCriticalSection m_textureUploadLock;
 };

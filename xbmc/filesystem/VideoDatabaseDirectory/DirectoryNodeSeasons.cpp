@@ -10,43 +10,62 @@
 
 #include "FileItem.h"
 #include "QueryParams.h"
-#include "guilib/LocalizeStrings.h"
+#include "ServiceBroker.h"
+#include "resources/LocalizeStrings.h"
+#include "resources/ResourcesComponent.h"
 #include "utils/StringUtils.h"
 #include "video/VideoDatabase.h"
 
 using namespace XFILE::VIDEODATABASEDIRECTORY;
 
 CDirectoryNodeSeasons::CDirectoryNodeSeasons(const std::string& strName, CDirectoryNode* pParent)
-  : CDirectoryNode(NODE_TYPE_SEASONS, strName, pParent)
+  : CDirectoryNode(NodeType::SEASONS, strName, pParent)
 {
 
 }
 
-NODE_TYPE CDirectoryNodeSeasons::GetChildType() const
+NodeType CDirectoryNodeSeasons::GetChildType() const
 {
-  return NODE_TYPE_EPISODES;
+  return NodeType::EPISODES;
 }
 
 std::string CDirectoryNodeSeasons::GetLocalizedName() const
 {
   switch (GetID())
   {
-  case 0:
-    return g_localizeStrings.Get(20381); // Specials
-  case -1:
-    return g_localizeStrings.Get(20366); // All Seasons
-  case -2:
+    case 0:
+      return CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(20381); // Specials
+    case -1:
+      return CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(20366); // All Seasons
+    case -2:
+    {
+      CDirectoryNode* pParent = GetParent();
+      if (pParent)
+        return pParent->GetLocalizedName();
+      return "";
+    }
+    default:
+      return GetSeasonTitle();
+  }
+}
+
+std::string CDirectoryNodeSeasons::GetSeasonTitle() const
+{
+  std::string season;
+  CVideoDatabase db;
+  if (db.Open())
   {
-    CDirectoryNode *pParent = GetParent();
-    if (pParent)
-      return pParent->GetLocalizedName();
-    return "";
+    CQueryParams params;
+    CollectQueryParams(params);
+
+    season = db.GetTvShowNamedSeasonById(params.GetTvShowId(), params.GetSeason());
   }
-  default:
-    std::string season =
-        StringUtils::Format(g_localizeStrings.Get(20358), GetID()); // Season <season>
-    return season;
-  }
+  if (season.empty())
+    season =
+        StringUtils::Format(CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(20358),
+                            GetID()); // Season <n>
+
+  return season;
 }
 
 bool CDirectoryNodeSeasons::GetContent(CFileItemList& items) const

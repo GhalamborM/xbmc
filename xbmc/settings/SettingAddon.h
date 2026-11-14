@@ -11,23 +11,32 @@
 #include "addons/IAddon.h"
 #include "settings/lib/Setting.h"
 
+namespace ADDON
+{
+enum class AddonType;
+}
+class TiXmlNode;
+
 class CSettingAddon : public CSettingString
 {
 public:
-  CSettingAddon(const std::string &id, CSettingsManager *settingsManager = nullptr);
-  CSettingAddon(const std::string &id, int label, const std::string &value, CSettingsManager *settingsManager = nullptr);
-  CSettingAddon(const std::string &id, const CSettingAddon &setting);
+  CSettingAddon(std::string_view id, CSettingsManager* settingsManager = nullptr);
+  CSettingAddon(std::string_view id,
+                int label,
+                const std::string& value,
+                CSettingsManager* settingsManager = nullptr);
+  CSettingAddon(std::string_view id, const CSettingAddon& setting);
   ~CSettingAddon() override = default;
 
-  SettingPtr Clone(const std::string &id) const override;
+  SettingPtr Clone(std::string_view id) const override;
 
   bool Deserialize(const TiXmlNode *node, bool update = false) override;
 
-  ADDON::TYPE GetAddonType() const { return m_addonType; }
-  void SetAddonType(ADDON::TYPE addonType) { m_addonType = addonType; }
+  ADDON::AddonType GetAddonType() const { return m_addonType; }
+  void SetAddonType(ADDON::AddonType addonType) { m_addonType = addonType; }
 
 private:
   void copyaddontype(const CSettingAddon &setting);
 
-  ADDON::TYPE m_addonType = ADDON::ADDON_UNKNOWN;
+  ADDON::AddonType m_addonType{};
 };

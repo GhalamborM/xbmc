@@ -17,8 +17,10 @@
 
 #include "platform/posix/filesystem/SMBWSDiscovery.h"
 
+#include <algorithm>
 #include <array>
 #include <chrono>
+#include <mutex>
 #include <stdio.h>
 #include <string>
 #include <utility>
@@ -26,6 +28,7 @@
 #include <arpa/inet.h>
 #include <fmt/format.h>
 #include <sys/select.h>
+#include <sys/socket.h>
 #include <unistd.h>
 
 using namespace WSDiscovery;
@@ -34,7 +37,7 @@ namespace WSDiscovery
 {
 
 // Templates for SOAPXML messages for WS-Discovery messages
-static const std::string soap_msg_templ =
+static constexpr std::string_view soap_msg_templ =
     "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
     "<soap:Envelope "
     "xmlns:soap=\"http://www.w3.org/2003/05/soap-envelope\" "
@@ -54,41 +57,41 @@ static const std::string soap_msg_templ =
     "{}"
     "</soap:Envelope>\n";
 
-static const std::string hello_body = "<soap:Body>\n"
-                                      "<wsd:Hello>\n"
-                                      "<wsa:EndpointReference>\n"
-                                      "<wsa:Address>urn:uuid:{}</wsa:Address>\n"
-                                      "</wsa:EndpointReference>\n"
-                                      "<wsd:Types>wsdp:Device pub:Computer</wsd:Types>\n"
-                                      "<wsd:MetadataVersion>1</wsd:MetadataVersion>\n"
-                                      "</wsd:Hello>\n"
-                                      "</soap:Body>\n";
+static constexpr std::string_view hello_body = "<soap:Body>\n"
+                                               "<wsd:Hello>\n"
+                                               "<wsa:EndpointReference>\n"
+                                               "<wsa:Address>urn:uuid:{}</wsa:Address>\n"
+                                               "</wsa:EndpointReference>\n"
+                                               "<wsd:Types>wsdp:Device pub:Computer</wsd:Types>\n"
+                                               "<wsd:MetadataVersion>1</wsd:MetadataVersion>\n"
+                                               "</wsd:Hello>\n"
+                                               "</soap:Body>\n";
 
-static const std::string bye_body = "<soap:Body>\n"
-                                    "<wsd:Bye>\n"
-                                    "<wsa:EndpointReference>\n"
-                                    "<wsa:Address>urn:uuid:{}</wsa:Address>\n"
-                                    "</wsa:EndpointReference>\n"
-                                    "<wsd:Types>wsdp:Device pub:Computer</wsd:Types>\n"
-                                    "<wsd:MetadataVersion>2</wsd:MetadataVersion>\n"
-                                    "</wsd:Bye>\n"
-                                    "</soap:Body>\n";
+static constexpr std::string_view bye_body = "<soap:Body>\n"
+                                             "<wsd:Bye>\n"
+                                             "<wsa:EndpointReference>\n"
+                                             "<wsa:Address>urn:uuid:{}</wsa:Address>\n"
+                                             "</wsa:EndpointReference>\n"
+                                             "<wsd:Types>wsdp:Device pub:Computer</wsd:Types>\n"
+                                             "<wsd:MetadataVersion>2</wsd:MetadataVersion>\n"
+                                             "</wsd:Bye>\n"
+                                             "</soap:Body>\n";
 
-static const std::string probe_body = "<soap:Body>\n"
-                                      "<wsd:Probe>\n"
-                                      "<wsd:Types>wsdp:Device</wsd:Types>\n"
-                                      "</wsd:Probe>\n"
-                                      "</soap:Body>\n";
+static constexpr std::string_view probe_body = "<soap:Body>\n"
+                                               "<wsd:Probe>\n"
+                                               "<wsd:Types>wsdp:Device</wsd:Types>\n"
+                                               "</wsd:Probe>\n"
+                                               "</soap:Body>\n";
 
-static const std::string resolve_body = "<soap:Body>\n"
-                                        "<wsd:Resolve>\n"
-                                        "<wsa:EndpointReference>\n"
-                                        "<wsa:Address>"
-                                        "{}"
-                                        "</wsa:Address>\n"
-                                        "</wsa:EndpointReference>\n"
-                                        "</wsd:Resolve>\n"
-                                        "</soap:Body>\n";
+static constexpr std::string_view resolve_body = "<soap:Body>\n"
+                                                 "<wsd:Resolve>\n"
+                                                 "<wsa:EndpointReference>\n"
+                                                 "<wsa:Address>"
+                                                 "{}"
+                                                 "</wsa:Address>\n"
+                                                 "</wsa:EndpointReference>\n"
+                                                 "</wsd:Resolve>\n"
+                                                 "</soap:Body>\n";
 
 // These are the only actions we concern ourselves with for our WS-D implementation
 static const std::string WSD_ACT_HELLO = "http://schemas.xmlsoap.org/ws/2005/04/discovery/Hello";
@@ -120,7 +123,7 @@ static const std::array<std::pair<std::string, std::string>, 1> address_tag{
 static const std::array<std::pair<std::string, std::string>, 1> types_tag{
     {{"<wsd:Types>", "</wsd:Types>"}}};
 
-static const std::string get_msg =
+static constexpr std::string_view get_msg =
     "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
     "<soap:Envelope "
     "xmlns:pnpx=\"http://schemas.microsoft.com/windows/pnpx/2005/10\" "
@@ -156,10 +159,11 @@ CWSDiscoveryListenerUDP::~CWSDiscoveryListenerUDP()
 {
 }
 
-void CWSDiscoveryListenerUDP::Stop()
+void CWSDiscoveryListenerUDP::Stop(bool bWait)
 {
-  StopThread(true);
-  CLog::Log(LOGINFO, "CWSDiscoveryListenerUDP::Stop - Stopped");
+  StopThread(bWait);
+  if (bWait && m_started.exchange(false))
+    CLog::Log(LOGINFO, "CWSDiscoveryListenerUDP::Stop - Stopped");
 }
 
 void CWSDiscoveryListenerUDP::Start()
@@ -175,8 +179,9 @@ void CWSDiscoveryListenerUDP::Start()
   WSInstance.SetItems(m_vecWSDInfo);
 
   // Create thread and set low priority
+  m_started = true;
   Create();
-  SetPriority(GetMinPriority());
+  SetPriority(ThreadPriority::LOWEST);
   CLog::Log(LOGINFO, "CWSDiscoveryListenerUDP::Start - Started");
 }
 
@@ -255,7 +260,7 @@ void CWSDiscoveryListenerUDP::Process()
   while (!m_bStop)
   {
     FD_SET(fd, &rset);
-    timeout.tv_sec = 3;
+    timeout.tv_sec = 1;
     timeout.tv_usec = 0;
     nready = select((fd + 1), &rset, NULL, NULL, &timeout);
 
@@ -271,7 +276,9 @@ void CWSDiscoveryListenerUDP::Process()
       bufferoutput = "";
       char msgbuf[UDPBUFFSIZE];
       socklen_t addrlen = sizeof(addr);
-      int nbytes = recvfrom(fd, msgbuf, UDPBUFFSIZE, 0, (struct sockaddr*)&addr, &addrlen);
+      int nbytes = recvfrom(fd, msgbuf, UDPBUFFSIZE - 1, 0, (struct sockaddr*)&addr, &addrlen);
+      if (nbytes <= 0)
+        continue;
       msgbuf[nbytes] = '\0';
       // turn msgbuf into std::string
       bufferoutput.append(msgbuf, nbytes);
@@ -319,8 +326,8 @@ bool CWSDiscoveryListenerUDP::DispatchCommand()
 {
   Command sendCommand;
   {
-    CSingleLock lock(crit_commandqueue);
-    if (m_commandbuffer.size() <= 0)
+    std::unique_lock lock(crit_commandqueue);
+    if (m_commandbuffer.empty())
       return false;
 
     auto it = m_commandbuffer.begin();
@@ -352,7 +359,7 @@ void CWSDiscoveryListenerUDP::AddCommand(const std::string& message,
                                          const std::string& extraparameter /* = "" */)
 {
 
-  CSingleLock lock(crit_commandqueue);
+  std::unique_lock lock(crit_commandqueue);
 
   std::string msg{};
 
@@ -444,7 +451,7 @@ void CWSDiscoveryListenerUDP::ParseBuffer(const std::string& buffer)
   }
 
   {
-    CSingleLock lock(crit_wsdqueue);
+    std::unique_lock lock(crit_wsdqueue);
     auto searchitem = std::find_if(m_vecWSDInfo.begin(), m_vecWSDInfo.end(),
                                    [info](const wsd_req_info& item) { return item == info; });
 
@@ -553,7 +560,7 @@ const std::string CWSDiscoveryListenerUDP::wsd_tag_find(
   return "";
 }
 
-const bool CWSDiscoveryListenerUDP::equalsAddress(const wsd_req_info& lhs, const wsd_req_info& rhs)
+bool CWSDiscoveryListenerUDP::equalsAddress(const wsd_req_info& lhs, const wsd_req_info& rhs) const
 {
   return lhs.address == rhs.address;
 }

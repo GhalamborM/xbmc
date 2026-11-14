@@ -13,57 +13,53 @@
 \brief
 */
 
-#include "Album.h"
-#include "MediaSource.h"
-#include "MusicDbUrl.h"
 #include "addons/Scraper.h"
 #include "dbwrappers/Database.h"
+#include "media/MediaType.h"
+#include "music/AudioType.h"
 #include "settings/LibExportSettings.h"
+#include "utils/Artwork.h"
 #include "utils/SortUtils.h"
 
+#include <cctype>
+#include <map>
+#include <set>
+#include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
+class CAlbum;
 class CArtist;
+class CArtistCredit;
+class CDiscoAlbum;
 class CFileItem;
+class CMediaSource;
+class CMusicDbUrl;
+class CMusicRole;
+class CSong;
+enum class ReleaseType;
+class ReplayGain;
+class TiXmlNode;
 
 namespace dbiplus
 {
 class field_value;
-typedef std::vector<field_value> sql_record;
+using sql_record = std::vector<field_value>;
 } // namespace dbiplus
-
-#include <set>
-#include <string>
 
 // return codes of Cleaning up the Database
 // numbers are strings from strings.po
-#define ERROR_OK 317
-#define ERROR_CANCEL 0
-#define ERROR_DATABASE 315
-#define ERROR_REORG_SONGS 319
-#define ERROR_REORG_ARTIST 321
-#define ERROR_REORG_OTHER 323
-#define ERROR_REORG_PATH 325
-#define ERROR_REORG_ALBUM 327
-#define ERROR_WRITING_CHANGES 329
-#define ERROR_COMPRESSING 332
-
-#define NUM_SONGS_BEFORE_COMMIT 500
-
-/*!
- \ingroup music
- \brief A set of std::string objects, used for CMusicDatabase
- \sa ISETPATHS, CMusicDatabase
- */
-typedef std::set<std::string> SETPATHS;
-
-/*!
- \ingroup music
- \brief The SETPATHS iterator
- \sa SETPATHS, CMusicDatabase
- */
-typedef std::set<std::string>::iterator ISETPATHS;
+constexpr int ERROR_OK = 317;
+constexpr int ERROR_CANCEL = 0;
+constexpr int ERROR_DATABASE = 315;
+constexpr int ERROR_REORG_SONGS = 319;
+constexpr int ERROR_REORG_ARTIST = 321;
+constexpr int ERROR_REORG_OTHER = 323;
+constexpr int ERROR_REORG_PATH = 325;
+constexpr int ERROR_REORG_ALBUM = 327;
+constexpr int ERROR_WRITING_CHANGES = 329;
+constexpr int ERROR_COMPRESSING = 332;
 
 /*!
 \ingroup music
@@ -71,13 +67,13 @@ typedef std::set<std::string>::iterator ISETPATHS;
 \sa CMusicDatabase::GetArtForItem()
 */
 
-typedef struct
+struct ArtForThumbLoader
 {
   std::string mediaType;
   std::string artType;
   std::string prefix;
   std::string url;
-} ArtForThumbLoader;
+};
 
 class CGUIDialogProgress;
 class CFileItemList;
@@ -93,7 +89,7 @@ class CFileItemList;
  Here is the database layout:
   \image html musicdatabase.png
 
- \sa CAlbum, CSong, VECSONGS, CMapSong, VECARTISTS, VECALBUMS, VECGENRES
+ \sa CAlbum, CSong, CMapSong
  */
 class CMusicDatabase : public CDatabase
 {
@@ -101,16 +97,16 @@ class CMusicDatabase : public CDatabase
   friend class TestDatabaseUtilsHelper;
 
 public:
-  CMusicDatabase(void);
-  ~CMusicDatabase(void) override;
+  CMusicDatabase();
+  ~CMusicDatabase() override;
 
   bool Open() override;
   bool CommitTransaction() override;
   void EmptyCache();
-  void Clean();
+  void Clean() const;
   int Cleanup(CGUIDialogProgress* progressDialog = nullptr);
-  bool LookupCDDBInfo(bool bRequery = false);
-  void DeleteCDDBInfo();
+  bool LookupCDDBInfo(bool bRequery = false) const;
+  void DeleteCDDBInfo() const;
 
   /////////////////////////////////////////////////
   // Song CRUD
@@ -122,9 +118,9 @@ public:
    \param strTitle [in] the title of the song (required to be non-empty)
    \param strMusicBrainzTrackID [in] the MusicBrainz track ID of the song
    \param strPathAndFileName [in] the path and filename to the song
-   \param strComment [in] the ids of the added songs
+   \param strComment [in] the comment of the song
    \param strMood [in] the mood of the added song
-   \param strThumb [in] the ids of the added songs
+   \param strThumb [in] the thumb of the song
    \param artistDisp [in] the assembled artist name(s) display string
    \param artistSort [in] the artist name(s) sort string
    \param genres [in] a vector of genres to which this song belongs
@@ -140,6 +136,11 @@ public:
    \param rating [in] a rating for the song
    \param userrating [in] a userrating (my rating) for the song
    \param votes [in] a vote counter for the song rating
+   \param iBPM [in] the beats per minute of a song
+   \param iBitRate [in] the bitrate of the song file
+   \param iSampleRate [in] the sample rate of the song file
+   \param iChannels [in] the number of audio channels in the song file
+   \param songVideoURL [in] url to video of the song
    \param replayGain [in] album and track replaygain and peak values
    \return the id of the song
    */
@@ -171,13 +172,15 @@ public:
               int iBitRate,
               int iSampleRate,
               int iChannels,
+              const std::string& songVideoURL,
               const ReplayGain& replayGain);
   bool GetSong(int idSong, CSong& song);
 
+  GetResult TryGetSong(int idSong, CSong& song);
   /*! \brief Update a song and all its nested entities (genres, artists, contributors)
     \param song [in/out] the song to update, artist ids are returned in artist credits
     \param bArtists to update artist credits and contributors, default is true
-    \param bArtists to check and log if artist links have changed, default is true
+    \param bArtistLinks to check and log if artist links have changed, default is true
     \return true if successful
    */
   bool UpdateSong(CSong& song, bool bArtists = true, bool bArtistLinks = true);
@@ -187,9 +190,9 @@ public:
    \param strTitle [in] the title of the song (required to be non-empty)
    \param strMusicBrainzTrackID [in] the MusicBrainz track ID of the song
    \param strPathAndFileName [in] the path and filename to the song
-   \param strComment [in] the ids of the added songs
+   \param strComment [in] the comment of the song
    \param strMood [in] the mood of the added song
-   \param strThumb [in] the ids of the added songs
+   \param strThumb [in] the thumb of the song
    \param artistDisp [in] the artist name(s) display string
    \param artistSort [in] the artist name(s) sort string
    \param genres [in] a vector of genres to which this song belongs
@@ -210,6 +213,7 @@ public:
    \param iBitRate [in] the bitrate of the song file
    \param iSampleRate [in] the sample rate of the song file
    \param iChannels [in] the number of audio channels in the song file
+   \param songVideoURL [in] url link to a video of the song
    \return the id of the song
    */
   int UpdateSong(int idSong,
@@ -238,13 +242,18 @@ public:
                  int iBPM,
                  int iBitRate,
                  int iSampleRate,
-                 int iChannels);
+                 int iChannels,
+                 const std::string& songVideoURL);
 
   //// Misc Song
   bool GetSongByFileName(const std::string& strFileName, CSong& song, int64_t startOffset = 0);
-  bool GetSongsByPath(const std::string& strPath, MAPSONGS& songmap, bool bAppendToMap = false);
+  bool GetSongsByPath(const std::string& strPath,
+                      std::map<std::string, std::vector<CSong>>& songmap,
+                      bool bAppendToMap = false);
   bool Search(const std::string& search, CFileItemList& items);
-  bool RemoveSongsFromPath(const std::string& path, MAPSONGS& songmap, bool exact = true);
+  bool RemoveSongsFromPath(const std::string& path,
+                           std::map<std::string, std::vector<CSong>>& songmap,
+                           bool exact = true);
   void CheckArtistLinksChanged();
   bool SetSongUserrating(const std::string& filePath, int userrating);
   bool SetSongUserrating(int idSong, int userrating);
@@ -259,7 +268,7 @@ public:
   /*! \brief Add an album and all its songs to the database
   \param album the album to add
   \param idSource the music source id
-  \return the id of the album
+  \return true if successful
   */
   bool AddAlbum(CAlbum& album, int idSource);
 
@@ -272,6 +281,7 @@ public:
   /*! \brief Add an album to the database
    \param strAlbum the album title
    \param strMusicBrainzAlbumID the Musicbrainz Id
+   \param strReleaseGroupMBID the MusicBrainz release group id
    \param strArtist the album artist name(s) display string
    \param strArtistSort the album artist name(s) sort string
    \param strGenre the album genre(s)
@@ -298,7 +308,7 @@ public:
                const std::string& strType,
                const std::string& strReleaseStatus,
                bool bCompilation,
-               CAlbum::ReleaseType releaseType);
+               AudioType::Type releaseType);
 
   /*! \brief retrieve an album, optionally with all songs.
    \param idAlbum the database id of the album.
@@ -307,6 +317,9 @@ public:
    \return true if the album is retrieved, false otherwise.
    */
   bool GetAlbum(int idAlbum, CAlbum& album, bool getSongs = true);
+
+  //! An album with no songs is retrieved with an empty song list, not reported as missing.
+  GetResult TryGetAlbum(int idAlbum, CAlbum& album, bool getSongs = true);
   int UpdateAlbum(int idAlbum,
                   const std::string& strAlbum,
                   const std::string& strMusicBrainzAlbumID,
@@ -329,10 +342,10 @@ public:
                   const std::string& strOrigReleaseDate,
                   bool bBoxedSet,
                   bool bCompilation,
-                  CAlbum::ReleaseType releaseType,
+                  AudioType::Type releaseType,
                   bool bScrapedMBID);
   bool ClearAlbumLastScrapedTime(int idAlbum);
-  bool HasAlbumBeenScraped(int idAlbum);
+  bool HasAlbumBeenScraped(int idAlbum) const;
 
   /////////////////////////////////////////////////
   // Audiobook
@@ -344,7 +357,7 @@ public:
   /*! \brief Checks if the given path is inside a folder that has already been scanned into the library
    \param path the path we want to check
    */
-  bool InsideScannedPath(const std::string& path);
+  bool InsideScannedPath(const std::string& path) const;
 
   //// Misc Album
   int GetAlbumIdByPath(const std::string& path);
@@ -357,10 +370,10 @@ public:
                                   std::string& strReview);
   bool SearchAlbumsByArtistName(const std::string& strArtist, CFileItemList& items);
   int GetAlbumByMatch(const CAlbum& album);
-  std::string GetAlbumById(int id);
-  std::string GetAlbumDiscTitle(int idAlbum, int idDisc);
+  std::string GetAlbumById(int id) const;
+  std::string GetAlbumDiscTitle(int idAlbum, int idDisc) const;
   bool SetAlbumUserrating(const int idAlbum, int userrating);
-  int GetAlbumDiscsCount(int idAlbum);
+  int GetAlbumDiscsCount(int idAlbum) const;
 
   /////////////////////////////////////////////////
   // Artist CRUD
@@ -375,8 +388,13 @@ public:
                 const std::string& strMusicBrainzArtistID,
                 bool bScrapedMBID = false);
   bool GetArtist(int idArtist, CArtist& artist, bool fetchAll = false);
+
+  //! fetchAll also retrieves the discography and video links.
+  GetResult TryGetArtist(int idArtist, CArtist& artist, bool fetchAll = false);
   bool GetArtistExists(int idArtist);
-  int GetLastArtist();
+
+  GetResult TryGetArtistExists(int idArtist);
+  int GetLastArtist() const;
   int GetArtistFromMBID(const std::string& strMusicBrainzArtistID, std::string& artistname);
   int UpdateArtist(int idArtist,
                    const std::string& strArtist,
@@ -398,25 +416,27 @@ public:
                    const std::string& strYearsActive,
                    const std::string& strImage);
   bool UpdateArtistScrapedMBID(int idArtist, const std::string& strMusicBrainzArtistID);
-  bool GetTranslateBlankArtist() { return m_translateBlankArtist; }
+  bool GetTranslateBlankArtist() const { return m_translateBlankArtist; }
   void SetTranslateBlankArtist(bool translate) { m_translateBlankArtist = translate; }
-  bool HasArtistBeenScraped(int idArtist);
+  bool HasArtistBeenScraped(int idArtist) const;
   bool ClearArtistLastScrapedTime(int idArtist);
   int AddArtistDiscography(int idArtist, const CDiscoAlbum& discoAlbum);
   bool DeleteArtistDiscography(int idArtist);
   bool GetArtistDiscography(int idArtist, CFileItemList& items);
+  bool AddArtistVideoLinks(const CArtist& artist);
+  bool DeleteArtistVideoLinks(const int idArtist);
 
-  std::string GetArtistById(int id);
+  std::string GetArtistById(int id) const;
   int GetArtistByName(const std::string& strArtist);
   int GetArtistByMatch(const CArtist& artist);
   bool GetArtistFromSong(int idSong, CArtist& artist);
-  bool IsSongArtist(int idSong, int idArtist);
-  bool IsSongAlbumArtist(int idSong, int idArtist);
-  std::string GetRoleById(int id);
+  bool IsSongArtist(int idSong, int idArtist) const;
+  bool IsSongAlbumArtist(int idSong, int idArtist) const;
+  std::string GetRoleById(int id) const;
 
   /*! \brief Propagate artist sort name into the concatenated artist sort name strings
   held for songs and albums
-  \param int idArtist to propagate sort name for, -1 means all artists
+  \param idArtist to propagate sort name for, -1 means all artists
   */
   bool UpdateArtistSortNames(int idArtist = -1);
 
@@ -425,7 +445,7 @@ public:
   /////////////////////////////////////////////////
   int AddPath(const std::string& strPath);
 
-  bool GetPaths(std::set<std::string>& paths);
+  bool GetPaths(std::set<std::string, std::less<>>& paths);
   bool SetPathHash(const std::string& path, const std::string& hash);
   bool GetPathHash(const std::string& path, std::string& hash);
   bool GetAlbumPaths(int idAlbum, std::vector<std::pair<std::string, int>>& paths);
@@ -462,38 +482,34 @@ public:
   bool GetSourcesByAlbum(int idAlbum, CFileItem* item);
   bool GetSourcesBySong(int idSong, const std::string& strPath, CFileItem* item);
   int GetSourceByName(const std::string& strSource);
-  std::string GetSourceById(int id);
+  std::string GetSourceById(int id) const;
 
   /////////////////////////////////////////////////
   // Genres
   /////////////////////////////////////////////////
   int AddGenre(std::string& strGenre);
-  std::string GetGenreById(int id);
+  std::string GetGenreById(int id) const;
   int GetGenreByName(const std::string& strGenre);
 
   /////////////////////////////////////////////////
   // Link tables
   /////////////////////////////////////////////////
-  bool AddAlbumArtist(int idArtist, int idAlbum, const std::string& strArtist, int iOrder);
+  bool AddAlbumArtist(int idArtist, int idAlbum, std::string_view strArtist, int iOrder);
   bool GetAlbumsByArtist(int idArtist, std::vector<int>& albums);
   bool GetArtistsByAlbum(int idAlbum, CFileItem* item);
   bool GetArtistsByAlbum(int idAlbum, std::vector<std::string>& artistIDs);
   bool DeleteAlbumArtistsByAlbum(int idAlbum);
 
-  int AddRole(const std::string& strRole);
-  bool AddSongArtist(int idArtist,
-                     int idSong,
-                     const std::string& strRole,
-                     const std::string& strArtist,
-                     int iOrder);
+  int AddRole(std::string_view strRole);
   bool AddSongArtist(
-      int idArtist, int idSong, int idRole, const std::string& strArtist, int iOrder);
+      int idArtist, int idSong, std::string_view strRole, std::string_view strArtist, int iOrder);
+  bool AddSongArtist(int idArtist, int idSong, int idRole, std::string_view strArtist, int iOrder);
   int AddSongContributor(int idSong,
                          const std::string& strRole,
                          const std::string& strArtist,
                          const std::string& strSort);
   void AddSongContributors(int idSong,
-                           const VECMUSICROLES& contributors,
+                           const std::vector<CMusicRole>& contributors,
                            const std::string& strSort);
   int GetRoleByName(const std::string& strRole);
   bool GetRolesByArtist(int idArtist, CFileItem* item);
@@ -507,40 +523,40 @@ public:
   bool GetGenresByAlbum(int idAlbum, CFileItem* item);
 
   bool GetGenresByArtist(int idArtist, CFileItem* item);
-  bool GetIsAlbumArtist(int idArtist, CFileItem* item);
+  bool GetIsAlbumArtist(int idArtist, CFileItem* item) const;
 
   /////////////////////////////////////////////////
   // Top 100
   /////////////////////////////////////////////////
   bool GetTop100(const std::string& strBaseDir, CFileItemList& items);
-  bool GetTop100Albums(VECALBUMS& albums);
+  bool GetTop100Albums(std::vector<CAlbum>& albums);
   bool GetTop100AlbumSongs(const std::string& strBaseDir, CFileItemList& item);
 
   /////////////////////////////////////////////////
   // Recently added
   /////////////////////////////////////////////////
-  bool GetRecentlyAddedAlbums(VECALBUMS& albums, unsigned int limit = 0);
+  bool GetRecentlyAddedAlbums(std::vector<CAlbum>& albums, unsigned int limit = 0);
   bool GetRecentlyAddedAlbumSongs(const std::string& strBaseDir,
                                   CFileItemList& item,
                                   unsigned int limit = 0);
-  bool GetRecentlyPlayedAlbums(VECALBUMS& albums);
+  bool GetRecentlyPlayedAlbums(std::vector<CAlbum>& albums);
   bool GetRecentlyPlayedAlbumSongs(const std::string& strBaseDir, CFileItemList& item);
 
   /////////////////////////////////////////////////
   // Compilations
   /////////////////////////////////////////////////
-  int GetCompilationAlbumsCount();
+  int GetCompilationAlbumsCount() const;
 
   ////////////////////////////////////////////////
   // Boxsets
   ////////////////////////////////////////////////
-  bool IsAlbumBoxset(int idAlbum);
-  int GetBoxsetsCount();
+  bool IsAlbumBoxset(int idAlbum) const;
+  int GetBoxsetsCount() const;
 
   int GetSinglesCount();
 
-  int GetArtistCountForRole(int role);
-  int GetArtistCountForRole(const std::string& strRole);
+  int GetArtistCountForRole(int role) const;
+  int GetArtistCountForRole(const std::string& strRole) const;
 
   /*! \brief Increment the playcount of an item
    Increments the playcount and updates the last played date
@@ -568,12 +584,12 @@ public:
                    const Filter& filter = Filter());
   bool GetArtistsNav(const std::string& strBaseDir,
                      CFileItemList& items,
+                     const SortDescription& sortDescription,
                      bool albumArtistsOnly = false,
                      int idGenre = -1,
                      int idAlbum = -1,
                      int idSong = -1,
                      const Filter& filter = Filter(),
-                     const SortDescription& sortDescription = SortDescription(),
                      bool countOnly = false);
   bool GetCommonNav(const std::string& strBaseDir,
                     const std::string& table,
@@ -591,58 +607,54 @@ public:
                          bool countOnly = false);
   bool GetAlbumsNav(const std::string& strBaseDir,
                     CFileItemList& items,
+                    const SortDescription& sortDescription,
                     int idGenre = -1,
                     int idArtist = -1,
                     const Filter& filter = Filter(),
-                    const SortDescription& sortDescription = SortDescription(),
                     bool countOnly = false);
   bool GetDiscsNav(const std::string& strBaseDir,
                    CFileItemList& items,
+                   const SortDescription& sortDescription,
                    int idAlbum,
                    const Filter& filter = Filter(),
-                   const SortDescription& sortDescription = SortDescription(),
                    bool countOnly = false);
   bool GetAlbumsByYear(const std::string& strBaseDir, CFileItemList& items, int year);
   bool GetSongsNav(const std::string& strBaseDir,
                    CFileItemList& items,
+                   const SortDescription& sortDescription,
                    int idGenre,
                    int idArtist,
-                   int idAlbum,
-                   const SortDescription& sortDescription = SortDescription());
+                   int idAlbum);
   bool GetSongsByYear(const std::string& baseDir, CFileItemList& items, int year);
-  bool GetSongsByWhere(const std::string& baseDir,
-                       const Filter& filter,
-                       CFileItemList& items,
-                       const SortDescription& sortDescription = SortDescription());
   bool GetSongsFullByWhere(const std::string& baseDir,
-                           const Filter& filter,
                            CFileItemList& items,
-                           const SortDescription& sortDescription = SortDescription(),
+                           const SortDescription& sortDescription,
+                           const Filter& filter,
                            bool artistData = false);
   bool GetAlbumsByWhere(const std::string& baseDir,
-                        const Filter& filter,
                         CFileItemList& items,
-                        const SortDescription& sortDescription = SortDescription(),
+                        const SortDescription& sortDescription,
+                        const Filter& filter,
                         bool countOnly = false);
   bool GetDiscsByWhere(const std::string& baseDir,
-                       const Filter& filter,
                        CFileItemList& items,
-                       const SortDescription& sortDescription = SortDescription(),
+                       const SortDescription& sortDescription,
+                       const Filter& filter,
                        bool countOnly = false);
   bool GetDiscsByWhere(CMusicDbUrl& musicUrl,
-                       const Filter& filter,
                        CFileItemList& items,
-                       const SortDescription& sortDescription = SortDescription(),
+                       const SortDescription& sortDescription,
+                       const Filter& filter,
                        bool countOnly = false);
   bool GetArtistsByWhere(const std::string& strBaseDir,
-                         const Filter& filter,
                          CFileItemList& items,
-                         const SortDescription& sortDescription = SortDescription(),
+                         const SortDescription& sortDescription,
+                         const Filter& filter,
                          bool countOnly = false);
   int GetDiscsCount(const std::string& baseDir, const Filter& filter = Filter());
   int GetSongsCount(const Filter& filter = Filter());
   bool GetFilter(CDbUrl& musicUrl, Filter& filter, SortDescription& sorting) override;
-  int GetOrderFilter(const std::string& type, const SortDescription& sorting, Filter& filter);
+  int GetOrderFilter(KODI::MEDIA::TYPE type, const SortDescription& sorting, Filter& filter) const;
 
   /////////////////////////////////////////////////
   // Party Mode
@@ -658,28 +670,28 @@ public:
   // JSON-RPC
   /////////////////////////////////////////////////
   bool GetGenresJSON(CFileItemList& items, bool bSources = false);
-  bool GetArtistsByWhereJSON(const std::set<std::string>& fields,
+  bool GetArtistsByWhereJSON(const std::set<std::string, std::less<>>& fields,
                              const std::string& baseDir,
                              CVariant& result,
                              int& total,
-                             const SortDescription& sortDescription = SortDescription());
-  bool GetAlbumsByWhereJSON(const std::set<std::string>& fields,
+                             const SortDescription& sortDescription);
+  bool GetAlbumsByWhereJSON(const std::set<std::string, std::less<>>& fields,
                             const std::string& baseDir,
                             CVariant& result,
                             int& total,
-                            const SortDescription& sortDescription = SortDescription());
-  bool GetSongsByWhereJSON(const std::set<std::string>& fields,
+                            const SortDescription& sortDescription);
+  bool GetSongsByWhereJSON(const std::set<std::string, std::less<>>& fields,
                            const std::string& baseDir,
                            CVariant& result,
                            int& total,
-                           const SortDescription& sortDescription = SortDescription());
+                           const SortDescription& sortDescription);
 
   /////////////////////////////////////////////////
   // Scraper
   /////////////////////////////////////////////////
-  bool SetScraper(int id, const CONTENT_TYPE& content, const ADDON::ScraperPtr& scraper);
+  bool SetScraper(int id, ADDON::ContentType content, const ADDON::ScraperPtr& scraper);
   bool SetScraperAll(const std::string& strBaseDir, const ADDON::ScraperPtr& scraper);
-  bool GetScraper(int id, const CONTENT_TYPE& content, ADDON::ScraperPtr& scraper);
+  bool GetScraper(int id, ADDON::ContentType content, ADDON::ScraperPtr& scraper);
 
   /*! \brief Check whether a given scraper is in use.
    \param scraperID the scraper to check for.
@@ -692,14 +704,14 @@ public:
   /////////////////////////////////////////////////
   bool GetItems(const std::string& strBaseDir,
                 CFileItemList& items,
-                const Filter& filter = Filter(),
-                const SortDescription& sortDescription = SortDescription());
+                const SortDescription& sortDescription,
+                const Filter& filter = Filter());
   bool GetItems(const std::string& strBaseDir,
                 const std::string& itemType,
                 CFileItemList& items,
-                const Filter& filter = Filter(),
-                const SortDescription& sortDescription = SortDescription());
-  std::string GetItemById(const std::string& itemType, int id);
+                const SortDescription& sortDescription,
+                const Filter& filter = Filter());
+  std::string GetItemById(const std::string& itemType, int id) const;
 
   /////////////////////////////////////////////////
   // XML
@@ -718,35 +730,20 @@ public:
   void SetPropertiesForFileItem(CFileItem& item);
   static void SetPropertiesFromArtist(CFileItem& item, const CArtist& artist);
   static void SetPropertiesFromAlbum(CFileItem& item, const CAlbum& album);
-  void SetItemUpdated(int mediaId, const std::string& mediaType);
+  void SetItemUpdated(int mediaId, KODI::MEDIA::TYPE mediaType);
 
   /////////////////////////////////////////////////
   // Art
   /////////////////////////////////////////////////
-  /*! \brief Sets art for a database item.
-   Sets a single piece of art for a database item.
-   \param mediaId the id in the media (song/artist/album) table.
-   \param mediaType the type of media, which corresponds to the table the item resides in (song/artist/album).
-   \param artType the type of art to set, e.g. "thumb", "fanart"
-   \param url the url to the art (this is the original url, not a cached url).
-   \sa GetArtForItem
-   */
-  void SetArtForItem(int mediaId,
-                     const std::string& mediaType,
-                     const std::string& artType,
-                     const std::string& url);
+  using CDatabase::GetArtForItem;
+  using CDatabase::SetArtForItem;
 
-  /*! \brief Sets art for a database item.
-   Sets multiple pieces of art for a database item.
-   \param mediaId the id in the media (song/artist/album) table.
-   \param mediaType the type of media, which corresponds to the table the item resides in (song/artist/album).
-   \param art a map of <type, url> where type is "thumb", "fanart", etc. and url is the original url of the art.
-   \sa GetArtForItem
+  /*! \brief Sets each piece of \p art for a database item, carrying on past one that fails.
+   \return false if any piece could not be set
    */
-  void SetArtForItem(int mediaId,
+  bool SetArtForItem(int mediaId,
                      const std::string& mediaType,
-                     const std::map<std::string, std::string>& art);
-
+                     const KODI::ART::Artwork& art) override;
 
   /*! \brief Fetch all related art for a database item.
   Fetches multiple pieces of art for a database item including that for related media types
@@ -772,55 +769,9 @@ public:
                      std::vector<ArtForThumbLoader>& art);
 
   /*! \brief Fetch art for a database item.
-   Fetches multiple pieces of art for a database item.
-   \param mediaId the id in the media (song/artist/album) table.
-   \param mediaType the type of media, which corresponds to the table the item resides in (song/artist/album).
-   \param art [out] a map of <type, url> where type is "thumb", "fanart", etc. and url is the original url of the art.
    \return true if art is retrieved, false if no art is found.
-   \sa SetArtForItem
    */
-  bool GetArtForItem(int mediaId,
-                     const std::string& mediaType,
-                     std::map<std::string, std::string>& art);
-
-  /*! \brief Fetch art for a database item.
-   Fetches a single piece of art for a database item.
-   \param mediaId the id in the media (song/artist/album) table.
-   \param mediaType the type of media, which corresponds to the table the item resides in (song/artist/album).
-   \param artType the type of art to retrieve, eg "thumb", "fanart".
-   \return the original URL to the piece of art, if available.
-   \sa SetArtForItem
-   */
-  std::string GetArtForItem(int mediaId, const std::string& mediaType, const std::string& artType);
-
-  /*! \brief Remove art for a database item.
-  Removes  a single piece of art for a database item.
-  \param mediaId the id in the media (song/artist/album) table.
-  \param mediaType the type of media, which corresponds to the table the item resides in (song/artist/album).
-  \param artType the type of art to remove, eg "thumb", "fanart".
-  \return true if art is removed, false if no art is found.
-  \sa RemoveArtForItem
-  */
-  bool RemoveArtForItem(int mediaId, const MediaType& mediaType, const std::string& artType);
-
-  /*! \brief Remove art for a database item.
-  Removes multiple pieces of art for a database item.
-  \param mediaId the id in the media (song/artist/album) table.
-  \param mediaType the type of media, which corresponds to the table the item resides in (song/artist/album).
-  \param arttypes a set of types, e.g. "thumb", "fanart", etc. to be removed.
-  \return true if art is removed, false if no art is found.
-  \sa RemoveArtForItem
-  */
-  bool RemoveArtForItem(int mediaId,
-                        const MediaType& mediaType,
-                        const std::set<std::string>& artTypes);
-
-  /*! \brief Fetch the distinct types of art held in the database for a type of media.
-  \param mediaType the type of media, which corresponds to the table the item resides in (song/artist/album).
-  \param artTypes [out] the types of art e.g. "thumb", "fanart", etc.
-  \return true if art is found, false if no art is found.
-  */
-  bool GetArtTypes(const MediaType& mediaType, std::vector<std::string>& artTypes);
+  bool GetArtForItem(int mediaId, const std::string& mediaType, KODI::ART::Artwork& art) override;
 
   /*! \brief Fetch the distinct types of available-but-unassigned art held in the
   database for a specific media item.
@@ -828,7 +779,7 @@ public:
   \param mediaType the type of media, which corresponds to the table the item resides in (artist/album).
   \return the types of art e.g. "thumb", "fanart", etc.
   */
-  std::vector<std::string> GetAvailableArtTypesForItem(int mediaId, const MediaType& mediaType);
+  std::vector<std::string> GetAvailableArtTypesForItem(int mediaId, KODI::MEDIA::TYPE mediaType);
 
   /*! \brief Fetch the list of available-but-unassigned art URLs held in the
   database for a specific media item and art type.
@@ -838,7 +789,7 @@ public:
   \return list of URLs
   */
   std::vector<CScraperUrl::SUrlEntry> GetAvailableArtForItem(int mediaId,
-                                                             const MediaType& mediaType,
+                                                             KODI::MEDIA::TYPE mediaType,
                                                              const std::string& artType);
 
   /////////////////////////////////////////////////
@@ -861,25 +812,28 @@ public:
   */
   void SetMusicTagScanVersion(int version = 0);
 
-  std::string GetLibraryLastUpdated();
+  std::string GetLibraryLastUpdated() const;
   void SetLibraryLastUpdated();
-  std::string GetLibraryLastCleaned();
+  std::string GetLibraryLastCleaned() const;
   void SetLibraryLastCleaned();
-  std::string GetArtistLinksUpdated();
+  std::string GetArtistLinksUpdated() const;
   void SetArtistLinksUpdated();
-  std::string GetGenresLastAdded();
-  std::string GetSongsLastAdded();
-  std::string GetAlbumsLastAdded();
-  std::string GetArtistsLastAdded();
-  std::string GetSongsLastModified();
-  std::string GetAlbumsLastModified();
-  std::string GetArtistsLastModified();
+  std::string GetGenresLastAdded() const;
+  std::string GetSongsLastAdded() const;
+  std::string GetAlbumsLastAdded() const;
+  std::string GetArtistsLastAdded() const;
+  std::string GetSongsLastModified() const;
+  std::string GetAlbumsLastModified() const;
+  std::string GetArtistsLastModified() const;
 
+  /*!
+   * \brief Check the passed in list of images if used in this database. Used to clean the image cache.
+   * \param imagesToCheck the image URLs to check
+   * \return a list of the passed in images used by this database.
+   */
+  std::vector<std::string> GetUsedImages(const std::vector<std::string>& imagesToCheck) const;
 
 protected:
-  std::map<std::string, int> m_genreCache;
-  std::map<std::string, int> m_pathCache;
-
   void CreateTables() override;
   void CreateAnalytics() override;
   int GetMinSchemaVersion() const override { return 32; }
@@ -896,26 +850,29 @@ private:
 
   void SplitPath(const std::string& strFileNameAndPath,
                  std::string& strPath,
-                 std::string& strFileName);
+                 std::string& strFileName) const;
 
   CSong GetSongFromDataset();
-  CSong GetSongFromDataset(const dbiplus::sql_record* const record, int offset = 0);
-  CArtist GetArtistFromDataset(dbiplus::Dataset* pDS, int offset = 0, bool needThumb = true);
+  CSong GetSongFromDataset(const dbiplus::sql_record* const record, int offset = 0) const;
+  CArtist GetArtistFromDataset(dbiplus::Dataset* pDS, int offset = 0, bool needThumb = true) const;
   CArtist GetArtistFromDataset(const dbiplus::sql_record* const record,
                                int offset = 0,
-                               bool needThumb = true);
-  CAlbum GetAlbumFromDataset(dbiplus::Dataset* pDS, int offset = 0, bool imageURL = false);
+                               bool needThumb = true) const;
+  CAlbum GetAlbumFromDataset(dbiplus::Dataset* pDS, int offset = 0, bool imageURL = false) const;
   CAlbum GetAlbumFromDataset(const dbiplus::sql_record* const record,
                              int offset = 0,
-                             bool imageURL = false);
-  CArtistCredit GetArtistCreditFromDataset(const dbiplus::sql_record* const record, int offset = 0);
-  CMusicRole GetArtistRoleFromDataset(const dbiplus::sql_record* const record, int offset = 0);
-  std::string GetMediaDateFromFile(const std::string& strFileNameAndPath);
+                             bool imageURL = false) const;
+  CArtistCredit GetArtistCreditFromDataset(const dbiplus::sql_record* const record,
+                                           int offset = 0) const;
+  CMusicRole GetArtistRoleFromDataset(const dbiplus::sql_record* const record,
+                                      int offset = 0) const;
+  std::string GetMediaDateFromFile(const std::string& strFileNameAndPath) const;
   void GetFileItemFromDataset(CFileItem* item, const CMusicDbUrl& baseUrl);
   void GetFileItemFromDataset(const dbiplus::sql_record* const record,
                               CFileItem* item,
-                              const CMusicDbUrl& baseUrl);
-  void GetFileItemFromArtistCredits(VECARTISTCREDITS& artistCredits, CFileItem* item);
+                              const CMusicDbUrl& baseUrl) const;
+  void GetFileItemFromArtistCredits(std::vector<CArtistCredit>& artistCredits,
+                                    CFileItem* item) const;
 
   bool DeleteRemovedLinks();
 
@@ -932,14 +889,14 @@ private:
   bool SearchAlbums(const std::string& search, CFileItemList& albums);
   bool SearchSongs(const std::string& strSearch, CFileItemList& songs);
   int GetSongIDFromPath(const std::string& filePath);
-  void NormaliseSongDates(std::string& strRelease, std::string& strOriginal);
-  bool TrimImageURLs(std::string& strImage, const size_t space);
+  void NormaliseSongDates(std::string& strRelease, std::string& strOriginal) const;
+  bool TrimImageURLs(std::string& strImage, const size_t space) const;
 
   /*! \brief Build SQL  for sort subquery from ignore article token list
   \param strField original name or title field that articles could be removed from
   \return SQL string e.g.  WHEN strField LIKE 'the_' ESCAPE '_' THEN SUBSTR(strArtist, 5)
   */
-  std::string GetIgnoreArticleSQL(const std::string& strField);
+  std::string GetIgnoreArticleSQL(const std::string& strField) const;
 
   /*! \brief Build SQL for sort name scalar subquery from sort attributes and ignore article list.
   \param strAlias alias name of scalar subquery field
@@ -955,7 +912,7 @@ private:
   std::string SortnameBuildSQL(const std::string& strAlias,
                                const SortAttribute& sortAttributes,
                                const std::string& strField,
-                               const std::string& strSortField);
+                               const std::string& strSortField) const;
 
   /*! \brief Build SQL for sorting field naturally and case-insensitively (in SQLite).
   \param strField field name
@@ -964,12 +921,12 @@ private:
   CASE WHEN CAST(strTitle AS INTEGER) = 0 THEN 100000000
   ELSE CAST(strTitle AS INTEGER) END DESC, strTitle COLLATE NOCASE DESC
   */
-  std::string AlphanumericSortSQL(const std::string& strField, const SortOrder& sortOrder);
+  std::string AlphanumericSortSQL(const std::string& strField, const SortOrder& sortOrder) const;
 
   /*! \brief Checks that source table matches sources.xml
   returns true when they do
   */
-  bool CheckSources(VECSOURCES& sources);
+  bool CheckSources(const std::vector<CMediaSource>& sources);
 
   /*! \brief Initially fills source table from sources.xml for use only at
   migration of db from an earlier version than 72
@@ -977,11 +934,14 @@ private:
   */
   bool MigrateSources();
 
-  bool m_translateBlankArtist;
+  std::map<std::string, int, std::less<>> m_genreCache;
+  std::map<std::string, int, std::less<>> m_pathCache;
+  bool m_translateBlankArtist{true};
 
   // Fields should be ordered as they
   // appear in the songview
-  static enum _SongFields {
+  enum SongFields
+  {
     song_idSong = 0,
     song_strArtists,
     song_strArtistSort,
@@ -1017,17 +977,19 @@ private:
     song_iBitRate,
     song_iSampleRate,
     song_iChannels,
+    song_songVideoURL,
     song_iAlbumDuration,
     song_iDiscTotal,
     song_dateAdded,
     song_dateNew,
     song_dateModified,
     song_enumCount // end of the enum, do not add past here
-  } SongFields;
+  };
 
   // Fields should be ordered as they
   // appear in the albumview
-  static enum _AlbumFields {
+  enum AlbumFields
+  {
     album_idAlbum = 0,
     album_strAlbum,
     album_strMusicBrainzAlbumID,
@@ -1061,11 +1023,12 @@ private:
     album_dtLastPlayed,
     album_iAlbumDuration,
     album_enumCount // end of the enum, do not add past here
-  } AlbumFields;
+  };
 
   // Fields should be ordered as they
   // appear in the songartistview/albumartistview
-  static enum _ArtistCreditFields {
+  enum ArtistCreditFields
+  {
     // used for GetAlbum to get the cascaded album/song artist credits
     artistCredit_idEntity = 0, // can be idSong or idAlbum depending on context
     artistCredit_idArtist,
@@ -1076,11 +1039,12 @@ private:
     artistCredit_strMusicBrainzArtistID,
     artistCredit_iOrder,
     artistCredit_enumCount
-  } ArtistCreditFields;
+  };
 
   // Fields should be ordered as they
   // appear in the artistview
-  static enum _ArtistFields {
+  enum ArtistFields
+  {
     artist_idArtist = 0,
     artist_strArtist,
     artist_strSortName,
@@ -1105,10 +1069,11 @@ private:
     artist_dateNew,
     artist_dateModified,
     artist_enumCount // end of the enum, do not add past here
-  } ArtistFields;
+  };
 
   // Fields fetched by GetArtistsByWhereJSON,  order same as in JSONtoDBArtist
-  static enum _JoinToArtistFields {
+  enum JoinToArtistFields
+  {
     joinToArtist_isSong = 0,
     joinToArtist_idSourceAlbum,
     joinToArtist_idSourceSong,
@@ -1126,18 +1091,20 @@ private:
     joinToArtist_thumbnail,
     joinToArtist_fanart,
     joinToArtist_enumCount // end of the enum, do not add past here
-  } JoinToArtistFields;
+  };
 
   // Fields fetched by GetAlbumsByWhereJSON,  order same as in JSONtoDBAlbum
-  static enum _JoinToAlbumFields {
+  enum JoinToAlbumFields
+  {
     joinToAlbum_idArtist = 0,
     joinToAlbum_strArtist,
     joinToAlbum_strArtistMBID,
     joinToAlbum_enumCount // end of the enum, do not add past here
-  } JoinToAlbumFields;
+  };
 
   // Fields fetched by GetSongsByWhereJSON,  order same as in JSONtoDBSong
-  static enum _JoinToSongFields {
+  enum JoinToSongFields
+  {
     // Used by GetSongsByWhereJSON
     joinToSongs_idAlbumArtist = 0,
     joinToSongs_strAlbumArtist,
@@ -1153,5 +1120,5 @@ private:
     joinToSongs_idGenre,
     joinToSongs_iOrderGenre,
     joinToSongs_enumCount // end of the enum, do not add past here
-  } JoinToSongFields;
+  };
 };

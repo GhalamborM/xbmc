@@ -9,16 +9,15 @@
 #pragma once
 
 #include "AudioDecoder.h"
-#include "FileItem.h"
 #include "cores/AudioEngine/Interfaces/AE.h"
-#include "cores/AudioEngine/Interfaces/IAudioCallback.h"
 #include "cores/IPlayer.h"
+#include "jobs/IJobCallback.h"
 #include "threads/CriticalSection.h"
 #include "threads/Thread.h"
-#include "utils/Job.h"
 
 #include <atomic>
 #include <list>
+#include <mutex>
 #include <vector>
 
 class IAEStream;
@@ -40,7 +39,7 @@ public:
   void Pause() override;
   bool HasVideo() const override { return false; }
   bool HasAudio() const override { return true; }
-  bool CanSeek() override;
+  bool CanSeek() const override;
   void Seek(bool bPlus = true, bool bLargeStep = false, bool bChapterOverride = false) override;
   void SeekPercentage(float fPercent = 0.0f) override;
   void SetVolume(float volume) override;
@@ -48,13 +47,14 @@ public:
   void SetSpeed(float speed = 0) override;
   int GetCacheLevel() const override;
   void SetTotalTime(int64_t time) override;
-  void GetAudioStreamInfo(int index, AudioStreamInfo &info) override;
   void SetTime(int64_t time) override;
   void SeekTime(int64_t iTime = 0) override;
-  void GetAudioCapabilities(std::vector<int> &audioCaps) override {}
+  void GetAudioCapabilities(std::vector<IPlayerAudioCaps>& caps) const override;
 
-  int GetAudioStreamCount() override { return 1; }
-  int GetAudioStream() override { return 0; }
+  void GetAudioStreamInfo(int index, AudioStreamInfo& info) const override;
+  int GetAudioStreamCount() const override;
+  int GetAudioStream() override;
+  void SetAudioStream(int iStream) override;
 
   // implementation of IJobCallback
   void OnJobComplete(unsigned int jobID, bool success, CJob *job) override;
@@ -82,12 +82,13 @@ protected:
 private:
   struct StreamInfo
   {
-    CFileItem m_fileItem;
+    std::unique_ptr<CFileItem> m_fileItem;
     std::unique_ptr<CFileItem> m_nextFileItem;
     CAudioDecoder m_decoder;             /* the stream decoder */
     int64_t m_startOffset;               /* the stream start offset */
     int64_t m_endOffset;                 /* the stream end offset */
     int64_t m_decoderTotal = 0;
+    int m_audioStream = 0; /* the audio stream being decoded */
     AEAudioFormat m_audioFormat;
     unsigned int m_bytesPerSample;       /* number of bytes per audio sample */
     unsigned int m_bytesPerFrame;        /* number of bytes per audio frame */
@@ -107,31 +108,36 @@ private:
     float m_volume;                      /* the initial volume level to set the stream to on creation */
 
     bool m_isSlaved;                     /* true if the stream has been slaved to another */
+    StreamInfo* m_slavedTo = nullptr; /* the stream that owns it while slaved, and resumes it */
     bool m_waitOnDrain;                  /* wait for stream being drained in AE */
   };
 
   typedef std::list<StreamInfo*> StreamList;
 
-  bool                m_signalSpeedChange;   /* true if OnPlaybackSpeedChange needs to be called */
+  bool m_signalSpeedChange = false; /* true if OnPlaybackSpeedChange needs to be called */
   bool m_signalStarted = true;
   std::atomic_int m_playbackSpeed;           /* the playback speed (1 = normal) */
-  bool                m_isPlaying;
-  bool                m_isPaused;
-  bool                m_isFinished;          /* if there are no more songs in the queue */
+  bool m_isPlaying = false;
+  bool m_isPaused = false;
+  bool m_isFinished = false; /* if there are no more songs in the queue */
   bool m_fullScreen;
-  unsigned int        m_defaultCrossfadeMS;  /* how long the default crossfade is in ms */
-  unsigned int        m_upcomingCrossfadeMS; /* how long the upcoming crossfade is in ms */
+  unsigned int m_defaultCrossfadeMS = 0; /* how long the default crossfade is in ms */
+  unsigned int m_upcomingCrossfadeMS = 0; /* how long the upcoming crossfade is in ms */
   CEvent              m_startEvent;          /* event for playback start */
   StreamInfo* m_currentStream = nullptr;
   IAudioCallback*     m_audioCallback;       /* the viz audio callback */
 
-  CCriticalSection    m_streamsLock;         /* lock for the stream list */
+  std::atomic_int m_requestedAudioStream{-1}; /* audio stream to switch to, -1 for none */
+  std::atomic_int m_preferredAudioStream{0}; /* audio stream to open the next track on */
+  bool m_audioStreamDeferred = false; /* if a pending request has been reported as deferred */
+
+  mutable CCriticalSection m_streamsLock; /* lock for the stream list */
   StreamList          m_streams;             /* playing streams */
   StreamList          m_finishing;           /* finishing streams */
-  int                 m_jobCounter;
+  int m_jobCounter = 0;
   CEvent              m_jobEvent;
-  int64_t             m_newForcedPlayerTime;
-  int64_t             m_newForcedTotalTime;
+  int64_t m_newForcedPlayerTime = -1;
+  int64_t m_newForcedTotalTime = -1;
   std::unique_ptr<CProcessInfo> m_processInfo;
 
   bool QueueNextFileEx(const CFileItem &file, bool fadeIn);
@@ -151,5 +157,53 @@ private:
   bool SetTotalTimeInternal(int64_t time);
   void CloseFileCB(StreamInfo &si);
   void AdvancePlaylistOnError(CFileItem &fileItem);
+
+  /*!
+   * \brief Replace a StreamInfo's IAEStream with one matching its current audio format.
+   *
+   * Must be called on the player thread with m_streamsLock held. The lock is released while the
+   * replacement is filled, so si may be gone by the time this returns.
+   */
+  enum class RecreateResult
+  {
+    OK,
+    FAILED,
+    ABANDONED, /* the stream was closed while the lock was released */
+  };
+
+  RecreateResult RecreateStream(StreamInfo* si, std::unique_lock<CCriticalSection>& lock);
+
+  /*!
+   * \brief The stream being played, or the one about to take over mid handover.
+   *
+   * Must be called with m_streamsLock held.
+   */
+  StreamInfo* PlayingStream() const;
+
+  /*!
+   * \brief Discard a StreamInfo that has been left without an IAEStream.
+   *
+   * Must be called on the player thread with m_streamsLock held, and not while walking m_streams.
+   */
+  void DropStream(StreamInfo* si);
+
+  /*!
+   * rief Discard the tracks queued behind si, leaving it to ask for them again.
+   *
+   * Must be called on the player thread with m_streamsLock held, and not while walking m_streams.
+   */
+  void DiscardQueuedStreams(StreamInfo* si);
+
+  /*!
+   * \brief Carry out a pending SetAudioStream() request, if any.
+   *
+   * Must be called on the player thread with m_streamsLock held.
+   */
+  void ProcessAudioStreamChange(std::unique_lock<CCriticalSection>& lock);
+
+  /*!
+   * \brief Ask for a stream, unless something has already been asked for.
+   */
+  void QueueAudioStreamRequest(int iStream);
 };
 

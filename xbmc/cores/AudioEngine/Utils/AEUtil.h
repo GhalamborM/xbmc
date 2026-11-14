@@ -9,10 +9,14 @@
 #pragma once
 
 #include "AEAudioFormat.h"
-#include "PlatformDefs.h"
+
+#include <atomic>
 #include <math.h>
 
+#include "PlatformDefs.h"
+
 extern "C" {
+#include <libavutil/channel_layout.h>
 #include <libavutil/samplefmt.h>
 }
 
@@ -54,12 +58,12 @@ class CAESpinSection
 {
 public:
   void enter() { m_enter++; }
-  void leave() { m_leave = m_enter; }
+  void leave() { m_leave.store(m_enter); }
 
 protected:
   friend class CAESpinLock;
-  volatile unsigned int m_enter = 0;
-  volatile unsigned int m_leave = 0;
+  std::atomic_uint32_t m_enter = 0;
+  std::atomic_uint32_t m_leave = 0;
 };
 
 class CAESpinLock
@@ -171,6 +175,11 @@ public:
   static uint64_t GetAVChannelLayout(const CAEChannelInfo &info);
   static CAEChannelInfo GetAEChannelLayout(uint64_t layout);
   static AVSampleFormat GetAVSampleFormat(AEDataFormat format);
-  static uint64_t GetAVChannel(enum AEChannel aechannel);
+  static uint64_t GetAVChannelMask(enum AEChannel aechannel);
+  static enum AVChannel GetAVChannel(enum AEChannel aechannel);
   static int GetAVChannelIndex(enum AEChannel aechannel, uint64_t layout);
+  static void GenerateSilence(AEDataFormat format,
+                              unsigned int frameSize,
+                              void* buffer,
+                              unsigned int frames);
 };

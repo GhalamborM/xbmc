@@ -8,14 +8,16 @@
 
 #include "IRServerSuite.h"
 
-#include "AppInboundProtocol.h"
 #include "IrssMessage.h"
 #include "ServiceBroker.h"
+#include "application/AppInboundProtocol.h"
 #include "profiles/ProfileManager.h"
 #include "settings/SettingsComponent.h"
 #include "utils/log.h"
 
 #include "platform/win32/CharsetConverter.h"
+
+#include <mutex>
 
 #include <WS2tcpip.h>
 
@@ -36,7 +38,7 @@ CIRServerSuite::~CIRServerSuite()
 {
   m_event.Set();
   {
-    CSingleLock lock(m_critSection);
+    std::unique_lock lock(m_critSection);
     Close();
   }
   StopThread();
@@ -62,7 +64,7 @@ void CIRServerSuite::Close()
 void CIRServerSuite::Initialize()
 {
   Create();
-  SetPriority(GetMinPriority());
+  SetPriority(ThreadPriority::LOWEST);
 }
 
 void CIRServerSuite::Process()
@@ -113,7 +115,7 @@ bool CIRServerSuite::Connect(bool logMessages)
   hints.ai_family   = AF_UNSPEC;
   hints.ai_socktype = SOCK_STREAM;
   hints.ai_protocol = IPPROTO_TCP;
-  sprintf(service, "%d", IRSS_PORT);
+  snprintf(service, sizeof(service), "%d", IRSS_PORT);
 
   res = getaddrinfo("localhost", service, &hints, &result);
   if(res)
@@ -334,7 +336,7 @@ bool CIRServerSuite::HandleRemoteEvent(CIrssMessage& message)
       //seems to be version 1.0.4.1, only keycode is sent, use Microsoft MCE mapping??
       devicenamelength = 13;
       deviceName = new char[devicenamelength + 1];
-      sprintf(deviceName, "Microsoft MCE");
+      snprintf(deviceName, devicenamelength + 1, "Microsoft MCE");
       keycodelength = datalen;
       keycode = new char[keycodelength + 1];
       memcpy(keycode, data, keycodelength);
@@ -381,7 +383,7 @@ bool CIRServerSuite::HandleRemoteEvent(CIrssMessage& message)
 
     //translate to a buttoncode xbmc understands
     CLog::LogF(LOGDEBUG, "remoteEvent: {} {}", deviceName, keycode);
-    unsigned button = m_irTranslator.TranslateButton(deviceName, keycode);
+    const uint32_t button = m_irTranslator.TranslateButton(deviceName, keycode);
 
     XBMC_Event newEvent = {};
     newEvent.type = XBMC_BUTTON;
@@ -411,7 +413,7 @@ int CIRServerSuite::ReadN(char *buffer, int n)
   {
     int nBytes = 0;
     {
-      CSingleLock lock(m_critSection);
+      std::unique_lock lock(m_critSection);
       nBytes = recv(m_socket, ptr, n, 0);
     }
 
@@ -450,7 +452,7 @@ bool CIRServerSuite::WriteN(const char *buffer, int n)
   {
     int nBytes;
     {
-      CSingleLock lock(m_critSection);
+      std::unique_lock lock(m_critSection);
       nBytes = send(m_socket, ptr, n, 0);
     }
 

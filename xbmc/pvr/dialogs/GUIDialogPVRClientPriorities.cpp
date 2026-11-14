@@ -21,8 +21,8 @@
 
 using namespace PVR;
 
-CGUIDialogPVRClientPriorities::CGUIDialogPVRClientPriorities() :
-  CGUIDialogSettingsManualBase(WINDOW_DIALOG_PVR_CLIENT_PRIORITIES, "DialogSettings.xml")
+CGUIDialogPVRClientPriorities::CGUIDialogPVRClientPriorities()
+  : CGUIDialogSettingsManualBase(WINDOW_DIALOG_PVR_CLIENT_PRIORITIES, "DialogSettings.xml")
 {
   m_loadType = LOAD_EVERY_TIME;
 }
@@ -43,7 +43,7 @@ std::string CGUIDialogPVRClientPriorities::GetSettingsLabel(
   int iClientId = std::atoi(pSetting->GetId().c_str());
   auto clientEntry = m_clients.find(iClientId);
   if (clientEntry != m_clients.end())
-    return clientEntry->second->GetFriendlyName();
+    return clientEntry->second->GetFullClientName();
 
   CLog::LogF(LOGERROR, "Unable to obtain pvr client with id '{}'", iClientId);
   return CGUIDialogSettingsManualBase::GetLocalizedString(13205); // Unknown
@@ -67,13 +67,11 @@ void CGUIDialogPVRClientPriorities::InitializeSettings()
     return;
   }
 
-  std::shared_ptr<CSetting> setting = nullptr;
-
-  CServiceBroker::GetPVRManager().Clients()->GetCreatedClients(m_clients);
-  for (const auto& client : m_clients)
+  m_clients = CServiceBroker::GetPVRManager().Clients()->GetCreatedClients();
+  for (const auto& [_, client] : m_clients)
   {
-    setting = AddEdit(group, std::to_string(client.second->GetID()), 13205 /* Unknown */,
-                      SettingLevel::Basic, client.second->GetPriority());
+    AddEdit(group, std::to_string(client->GetID()), 13205 /* Unknown */, SettingLevel::Basic,
+            client->GetPriority());
   }
 }
 
@@ -87,17 +85,18 @@ void CGUIDialogPVRClientPriorities::OnSettingChanged(const std::shared_ptr<const
 
   CGUIDialogSettingsManualBase::OnSettingChanged(setting);
 
-  m_changedValues[setting->GetId()] = std::static_pointer_cast<const CSettingInt>(setting)->GetValue();
+  m_changedValues[setting->GetId()] =
+      std::static_pointer_cast<const CSettingInt>(setting)->GetValue();
 }
 
 bool CGUIDialogPVRClientPriorities::Save()
 {
-  for (const auto& changedClient : m_changedValues)
+  for (const auto& [clientIdString, priority] : m_changedValues)
   {
-    int iClientId = std::atoi(changedClient.first.c_str());
-    auto clientEntry = m_clients.find(iClientId);
-    if (clientEntry != m_clients.end())
-      clientEntry->second->SetPriority(changedClient.second);
+    const int clientId{std::atoi(clientIdString.c_str())};
+    const auto it = m_clients.find(clientId);
+    if (it != m_clients.cend())
+      (*it).second->SetPriority(priority);
   }
 
   return true;

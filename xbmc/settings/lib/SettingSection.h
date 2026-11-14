@@ -18,6 +18,7 @@
 #include <vector>
 
 class CSettingsManager;
+class TiXmlNode;
 
 /*!
  \ingroup settings
@@ -34,7 +35,7 @@ public:
    \param id Identifier of the setting group
    \param settingsManager Reference to the settings manager
    */
-  CSettingGroup(const std::string &id, CSettingsManager *settingsManager = nullptr);
+  CSettingGroup(std::string_view id, CSettingsManager* settingsManager = nullptr);
   ~CSettingGroup() override = default;
 
   // implementation of ISetting
@@ -55,6 +56,14 @@ public:
    \return List of settings belonging to the setting group
    */
   SettingList GetSettings(SettingLevel level) const;
+
+  /*
+   * \brief Determine if there are visible settings assigned to the given setting level (or below)
+   *        and that they meet the requirements conditions belonging to the setting group.
+   * \param level Level the settings should be assigned to
+   * \return True if there are visible settings belonging to the setting group, otherwise false
+   */
+  bool ContainsVisibleSettings(const SettingLevel level) const;
 
   void AddSetting(const std::shared_ptr<CSetting>& setting);
   void AddSettings(const SettingList &settings);
@@ -122,6 +131,7 @@ public:
   bool CanAccess() const;
 
   void AddGroup(const SettingGroupPtr& group);
+  void AddGroupToFront(const SettingGroupPtr& group);
   void AddGroups(const SettingGroupList &groups);
 
 private:

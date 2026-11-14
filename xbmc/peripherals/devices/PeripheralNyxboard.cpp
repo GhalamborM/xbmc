@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2005-2018 Team Kodi
+ *  Copyright (C) 2005-2024 Team Kodi
  *  This file is part of Kodi - https://kodi.tv
  *
  *  SPDX-License-Identifier: GPL-2.0-or-later
@@ -8,8 +8,8 @@
 
 #include "PeripheralNyxboard.h"
 
-#include "Application.h"
 #include "PeripheralHID.h"
+#include "application/Application.h"
 #include "utils/log.h"
 
 using namespace PERIPHERALS;
@@ -22,7 +22,7 @@ CPeripheralNyxboard::CPeripheralNyxboard(CPeripherals& manager,
   m_features.push_back(FEATURE_NYXBOARD);
 }
 
-bool CPeripheralNyxboard::LookupSymAndUnicode(XBMC_keysym& keysym, uint8_t* key, char* unicode)
+bool CPeripheralNyxboard::LookupSymAndUnicode(XBMC_keysym& keysym, uint16_t* key, char* unicode)
 {
   std::string strCommand;
   if (keysym.sym == XBMCK_F7 && keysym.mod == XBMCKMOD_NONE &&

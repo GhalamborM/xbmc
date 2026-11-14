@@ -41,7 +41,7 @@ SamplerState DitherSampler : IMMUTABLE
   Filter   = MIN_MAG_MIP_POINT;
 };
 #endif
-#if (defined(KODI_TONE_MAPPING_ACES) || defined(KODI_TONE_MAPPING_HABLE) || defined(KODI_HLG_TO_PQ))
+#if (defined(KODI_TONE_MAPPING_ACES) || defined(KODI_TONE_MAPPING_HABLE) || defined(KODI_HLG_TO_PQ) || defined(KODI_HUESAT_PQ))
 static const float ST2084_m1 = 2610.0f / (4096.0f * 4.0f);
 static const float ST2084_m2 = (2523.0f / 4096.0f) * 128.0f;
 static const float ST2084_c1 = 3424.0f / 4096.0f;
@@ -86,7 +86,7 @@ float3 hable(float3 x)
   return ((x * (A * x + C * B) + D * E) / (x * (A * x + B) + D * F)) - E / F;
 }
 #endif
-#if (defined(KODI_TONE_MAPPING_ACES) || defined(KODI_TONE_MAPPING_HABLE))
+#if (defined(KODI_TONE_MAPPING_ACES) || defined(KODI_TONE_MAPPING_HABLE) || defined(KODI_HUESAT_PQ))
 float3 inversePQ(float3 x)
 {
   x = pow(max(x, 0.0f), 1.0f / ST2084_m2);
@@ -95,29 +95,95 @@ float3 inversePQ(float3 x)
   return x;
 }
 #endif
-#if defined(KODI_HLG_TO_PQ)
+#if (defined(KODI_HLG_TO_PQ) || defined(KODI_HUESAT_HLG))
+
+// HLG inverse OETF - BT.2100
+// input: non-linear signal [0,1] range
+// output: linear [0,1] range
 float3 inverseHLG(float3 x)
 {
-  const float B67_a = 0.17883277f;
-  const float B67_b = 0.28466892f;
-  const float B67_c = 0.55991073f;
-  const float B67_inv_r2 = 4.0f;
-  x = (x <= 0.5f) ? x * x * B67_inv_r2 : exp((x - B67_c) / B67_a) + B67_b;
+  static const float B67_a = 0.17883277f;
+  static const float B67_b = 0.28466892f; // b = 1 - 4*a
+  static const float B67_c = 0.55991073f; // c = 0.5 - a*log(4*a)
+  x = (x <= 0.5f) ? x * x / 3.0f : (exp((x - B67_c) / B67_a) + B67_b) / 12.0f;
   return x;
 }
-
+#endif
+#if defined(KODI_HUESAT_HLG)
+// HLG OETF - BT.2100, inverse of inverseHLG()
+float3 transferHLG(float3 x)
+{
+  static const float B67_a = 0.17883277f;
+  static const float B67_b = 0.28466892f;
+  static const float B67_c = 0.55991073f;
+  x = (x <= 1.0f / 12.0f) ? sqrt(3.0f * x) : B67_a * log(max(12.0f * x - B67_b, 1e-6f)) + B67_c;
+  return x;
+}
+#endif
+#if (defined(KODI_HLG_TO_PQ) || defined(KODI_HUESAT_PQ))
+// PQ inverse EOTF, BT.2100
+// input: linear cd/m2 [0,10000] range
+// output: non-linear [0,1] range
 float3 tranferPQ(float3 x)
 {
-  x = pow(x / 1000.0f, ST2084_m1);
+  x = pow(x / 10000.0f, ST2084_m1);
   x = (ST2084_c1 + ST2084_c2 * x) / (1.0f + ST2084_c3 * x);
   x = pow(x, ST2084_m2);
   return x;
 }
 #endif
+#if (defined(KODI_HUESAT_PQ) || defined(KODI_HUESAT_HLG))
+float4x4 g_hsMat;
+float3   g_hsCoefs;
+float    g_hsPeak; // linear, 1.0 = PQ 10000 cd/m2 or HLG nominal peak
+float2   g_hsRange;
 
+// Hue and saturation of HDR are adjusted in linear light at constant luminance.
+// Chroma is then pulled towards grey until no channel leaves [0, peak], so
+// clipping can't shift the hue.
+float3 hueSaturation(float3 color)
+{
+  color = (color - g_hsRange.y) / g_hsRange.x;
+#if defined(KODI_HUESAT_PQ)
+  float3 lin = inversePQ(saturate(color));
+#else
+  float3 lin = inverseHLG(saturate(color));
+#endif
+  float luma = dot(lin, g_hsCoefs);
+  float3 chroma = mul(float4(lin, 0.0f), g_hsMat).rgb - luma;
+  float top = max(g_hsPeak, max(lin.r, max(lin.g, lin.b)));
+
+  static const float eps = 1e-6f;
+  float3 below = step(chroma, -eps);
+  float3 above = step(eps, chroma);
+  float3 limit = 1.0f + below * (luma / max(-chroma, eps) - 1.0f)
+                      + above * ((top - luma) / max(chroma, eps) - 1.0f);
+  // rounding can leave the limiting channel just below zero
+  lin = max(luma + saturate(min(limit.r, min(limit.g, limit.b))) * chroma, 0.0f);
+
+#if defined(KODI_HUESAT_PQ)
+  return tranferPQ(lin * 10000.0f) * g_hsRange.x + g_hsRange.y;
+#else
+  return transferHLG(lin) * g_hsRange.x + g_hsRange.y;
+#endif
+}
+#endif
+
+
+#if defined(KODI_GAMMA)
+float  g_gammaInv;   // 1 / gamma exponent
+float2 g_gammaRange; // x - scale, y - offset of limited range
+#endif
 
 float4 output4(float4 color, float2 uv)
 {
+#if (defined(KODI_HUESAT_PQ) || defined(KODI_HUESAT_HLG)) && !defined(KODI_HUESAT_YUV)
+  color.rgb = hueSaturation(color.rgb);
+#endif
+#if defined(KODI_GAMMA)
+  color.rgb = pow(saturate((color.rgb - g_gammaRange.y) / g_gammaRange.x), g_gammaInv) *
+              g_gammaRange.x + g_gammaRange.y;
+#endif
 #if defined(KODI_TONE_MAPPING_REINHARD)
   float luma = dot(color.rgb, g_coefsDst);
   color.rgb *= reinhard(luma) / luma;
@@ -136,10 +202,21 @@ float4 output4(float4 color, float2 uv)
   color.rgb = pow(color.rgb, 1.0f / 2.2f);
 #endif
 #if defined(KODI_HLG_TO_PQ)
+
+  // Reference: BT.2100, Table 5, HLG Reference EOTF
+
+  // Display peak luminance in cd/m2
+  static const float HLG_Lw = 1000.0f;
+  static const float HLG_gamma = 1.2f + 0.42f * log10(HLG_Lw / 1000.0f);
+
+  // color.rgb: E', range [0,1]
   color.rgb = inverseHLG(color.rgb);
-  float3 ootf_2020 = float3(0.2627f, 0.6780f, 0.0593f);
-  float ootf_ys = 2000.0f * dot(ootf_2020, color.rgb);
-  color.rgb *= pow(ootf_ys, 0.2f);
+  // color.rgb: E, range [0,1]
+  static const float3 bt2020_lum_rgbweights = float3(0.2627f, 0.6780f, 0.0593f);
+  float HLG_Ys = dot(bt2020_lum_rgbweights, color.rgb);
+  color.rgb *= HLG_Lw * pow(HLG_Ys, HLG_gamma - 1.0f);
+
+  // color.rgb: FD, in cd/m2
   color.rgb = tranferPQ(color.rgb);
 #endif
 #if defined(KODI_3DLUT)
@@ -165,7 +242,7 @@ float4 output(float3 color, float2 uv)
 #if defined(KODI_OUTPUT_T)
 #include "convolution_d3d.fx"
 
-#if (defined(KODI_TONE_MAPPING_ACES) || defined(KODI_TONE_MAPPING_HABLE) || defined(KODI_HLG_TO_PQ))
+#if (defined(KODI_TONE_MAPPING_ACES) || defined(KODI_TONE_MAPPING_HABLE) || defined(KODI_HLG_TO_PQ) || defined(KODI_HUESAT_PQ) || defined(KODI_HUESAT_HLG))
 #define PS_PROFILE ps_4_0_level_9_3
 #else
 #define PS_PROFILE ps_4_0_level_9_1
@@ -177,7 +254,7 @@ float4 OUTPUT_PS(VS_OUTPUT In) : SV_TARGET
 {
   float4 color = g_Texture.Sample(KernelSampler, In.TextureUV);
   [flatten] if (m_params.x)
-    color = saturate(0.0625 + color * 219.0 / 255.0);
+    color = saturate((64.0 / 1023.0) + color * (940.0 - 64.0) / 1023.0);
 
   color *= m_params.y * 2.0;
   color += m_params.z - 0.5;

@@ -91,13 +91,13 @@
       <!-- F5			-->  <button id="193">OSD</button>
       <!-- F7			-->  <button id="195">ActivateWindow(Home)</button>
       <!-- F6			-->  <button id="194">ActivateWindow(Programs)</button>
-      <!-- F8			-->  <button id="196">ActivateWindow(favourites)</button>
+      <!-- F8			-->  <button id="196">ActivateWindow(FavouritesBrowser)</button>
       <!-- F9			-->  <button id="173">ShowVideoMenu</button>
       <!-- F10			-->  <button id="174">ShowSubtitles</button>
-      <!-- F11			-->  <button id="175">NextSubtitle</button>
+      <!-- F11			-->  <button id="175">DialogSelectSubtitle</button>
       <!-- F12			-->  <button id="176">ActivateWindow(Videos)</button>
       <!-- F13			-->  <button id="163">Playlist</button>
-      <!-- F14			-->  <button id="164">AudioNextLanguage</button>
+      <!-- F14			-->  <button id="164">DialogSelectAudio</button>
       <!-- Large Down	-->  <button id="182">PageDown</button>
       <!-- Large Up	-->      <button id="181">PageUp</button>
       <!-- pwrToggle   -->   <button id="166">ShutDown()</button>
@@ -148,8 +148,8 @@
   </Music>
   <FullscreenVideo>
     <customcontroller name="Harmony">
-      <!-- up       	-->      <button id="101">ChapterOrBigStepForward</button>
-      <!-- down      	-->      <button id="102">ChapterOrBigStepBack</button>
+      <!-- up       	-->      <button id="101">ChapterOrSceneOrBigStepForward</button>
+      <!-- down      	-->      <button id="102">ChapterOrSceneOrBigStepBack</button>
       <!-- left       	-->      <button id="103">StepBack</button>
       <!-- right      	-->      <button id="104">StepForward</button>
       <!-- menu       	-->      <button id="106">OSD</button>

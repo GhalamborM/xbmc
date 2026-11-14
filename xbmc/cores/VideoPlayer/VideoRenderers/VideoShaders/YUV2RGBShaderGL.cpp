@@ -12,6 +12,7 @@
 #include "../RenderFlags.h"
 #include "ConvolutionKernels.h"
 #include "ServiceBroker.h"
+#include "ToneMappers.h"
 #include "settings/AdvancedSettings.h"
 #include "settings/SettingsComponent.h"
 #include "utils/GLUtils.h"
@@ -27,10 +28,15 @@ using namespace Shaders::GL;
 // BaseYUV2RGBGLSLShader - base class for GLSL YUV2RGB shaders
 //////////////////////////////////////////////////////////////////////
 
-BaseYUV2RGBGLSLShader::BaseYUV2RGBGLSLShader(bool rect, EShaderFormat format, bool stretch,
-                                             AVColorPrimaries dstPrimaries, AVColorPrimaries srcPrimaries,
+BaseYUV2RGBGLSLShader::BaseYUV2RGBGLSLShader(bool rect,
+                                             EShaderFormat format,
+                                             bool stretch,
+                                             AVColorPrimaries dstPrimaries,
+                                             AVColorPrimaries srcPrimaries,
                                              bool toneMap,
-                                             int toneMapMethod,
+                                             ETONEMAPMETHOD toneMapMethod,
+                                             AVColorTransferCharacteristic hueSatTransfer,
+                                             bool gamma,
                                              std::shared_ptr<GLSLOutput> output)
 {
   m_width = 1;
@@ -39,6 +45,8 @@ BaseYUV2RGBGLSLShader::BaseYUV2RGBGLSLShader(bool rect, EShaderFormat format, bo
   m_format = format;
   m_black = 0.0f;
   m_contrast = 1.0f;
+  m_hue = 0.0f;
+  m_saturation = 1.0f;
   m_stretch = 0.0f;
 
   // get defines from the output stage if used
@@ -77,10 +85,9 @@ BaseYUV2RGBGLSLShader::BaseYUV2RGBGLSLShader(bool rect, EShaderFormat format, bo
     m_defines += "#define XBMC_YUY2\n";
   else if (m_format == SHADER_UYVY)
     m_defines += "#define XBMC_UYVY\n";
-  else if (m_format == SHADER_YV12)
-    m_defines += "#define XBMC_YV12\n";
   else
-    CLog::Log(LOGERROR, "GL: BaseYUV2RGBGLSLShader - unsupported format {}", m_format);
+    CLog::Log(LOGERROR, "GL: BaseYUV2RGBGLSLShader - unsupported format {}",
+              fmt::formatter<EShaderFormat>::ToString(m_format));
 
   if (dstPrimaries != srcPrimaries)
   {
@@ -101,9 +108,26 @@ BaseYUV2RGBGLSLShader::BaseYUV2RGBGLSLShader(bool rect, EShaderFormat format, bo
       m_defines += "#define KODI_TONE_MAPPING_HABLE\n";
   }
 
+  if (hueSatTransfer == AVCOL_TRC_SMPTE2084)
+  {
+    m_hueSatTransfer = hueSatTransfer;
+    m_defines += "#define KODI_HUESAT_PQ\n";
+  }
+  else if (hueSatTransfer == AVCOL_TRC_ARIB_STD_B67)
+  {
+    m_hueSatTransfer = hueSatTransfer;
+    m_defines += "#define KODI_HUESAT_HLG\n";
+  }
+
+  if (gamma)
+    m_defines += "#define KODI_GAMMA\n";
+
   VertexShader()->LoadSource("gl_yuv2rgb_vertex.glsl", m_defines);
 
-  CLog::Log(LOGDEBUG, "GL: BaseYUV2RGBGLSLShader: defines:\n{}", m_defines);
+  CLog::Log(LOGDEBUG, "GL: using shader format: {}",
+            fmt::formatter<EShaderFormat>::ToString(m_format));
+  CLog::Log(LOGDEBUG, "GL: using tonemap method: {}",
+            fmt::formatter<ETONEMAPMETHOD>::ToString(toneMapMethod));
 
   m_convMatrix.SetDestinationColorPrimaries(dstPrimaries).SetSourceColorPrimaries(srcPrimaries);
 }
@@ -135,6 +159,12 @@ void BaseYUV2RGBGLSLShader::OnCompiledAndLinked()
   m_hCoefsDst = glGetUniformLocation(ProgramHandle(), "m_coefsDst");
   m_hToneP1 = glGetUniformLocation(ProgramHandle(), "m_toneP1");
   m_hLuminance = glGetUniformLocation(ProgramHandle(), "m_luminance");
+  m_hHsMat = glGetUniformLocation(ProgramHandle(), "m_hsMat");
+  m_hHsCoefs = glGetUniformLocation(ProgramHandle(), "m_hsCoefs");
+  m_hHsPeak = glGetUniformLocation(ProgramHandle(), "m_hsPeak");
+  m_hHsRange = glGetUniformLocation(ProgramHandle(), "m_hsRange");
+  m_hGammaInv = glGetUniformLocation(ProgramHandle(), "m_gammaInv");
+  m_hGammaRange = glGetUniformLocation(ProgramHandle(), "m_gammaRange");
   VerifyGLState();
 
   if (m_glslOutput)
@@ -150,8 +180,13 @@ bool BaseYUV2RGBGLSLShader::OnEnabled()
   glUniform1f(m_hStretch, m_stretch);
   glUniform2f(m_hStep, 1.0 / m_width, 1.0 / m_height);
 
+  const bool hueSatLinear = m_hueSatTransfer != AVCOL_TRC_UNSPECIFIED;
+
+  // HDR hue and saturation are applied in linear light after the YUV conversion
   m_convMatrix.SetDestinationContrast(m_contrast)
       .SetDestinationBlack(m_black)
+      .SetDestinationHue(hueSatLinear ? 0.0f : m_hue)
+      .SetDestinationSaturation(hueSatLinear ? 1.0f : m_saturation)
       .SetDestinationLimitedRange(!m_convertFullRange);
 
   Matrix4 yuvMat = m_convMatrix.GetYuvMat();
@@ -166,6 +201,32 @@ bool BaseYUV2RGBGLSLShader::OnEnabled()
     glUniformMatrix3fv(m_hPrimMat, 1, GL_FALSE, reinterpret_cast<GLfloat*>(primMat.ToRaw()));
     glUniform1f(m_hGammaSrc, m_convMatrix.GetGammaSrc());
     glUniform1f(m_hGammaDstInv, 1 / m_convMatrix.GetGammaDst());
+  }
+
+  if (hueSatLinear)
+  {
+    // the signal is still BT.2020 here, primaries conversion comes after
+    Matrix3 hueSatMat =
+        CConvertMatrix::GetLinearHueSatMat(AVCOL_SPC_BT2020_NCL, m_hue, m_saturation);
+    Matrix3x1 coefs = CConvertMatrix::GetRGBYuvCoefs(AVCOL_SPC_BT2020_NCL);
+    float peak = 1.0f;
+    if (m_hueSatTransfer == AVCOL_TRC_SMPTE2084)
+      peak = CToneMappers::GetPeakLuminanceValue(m_hasDisplayMetadata, m_displayMetadata,
+                                                 m_hasLightMetadata, m_lightMetadata) /
+             10000.0f;
+
+    glUniformMatrix3fv(m_hHsMat, 1, GL_FALSE, reinterpret_cast<GLfloat*>(hueSatMat.ToRaw()));
+    glUniform3f(m_hHsCoefs, coefs[0], coefs[1], coefs[2]);
+    glUniform1f(m_hHsPeak, peak);
+    glUniform2f(m_hHsRange, m_convertFullRange ? 1.0f : 876.0f / 1023.0f,
+                m_convertFullRange ? 0.0f : 64.0f / 1023.0f);
+  }
+
+  if (m_hGammaInv >= 0)
+  {
+    glUniform1f(m_hGammaInv, 1.0f / m_gammaExponent);
+    glUniform2f(m_hGammaRange, m_convertFullRange ? 1.0f : 876.0f / 1023.0f,
+                m_convertFullRange ? 0.0f : 64.0f / 1023.0f);
   }
 
   if (m_toneMapping)
@@ -188,15 +249,18 @@ bool BaseYUV2RGBGLSLShader::OnEnabled()
       glUniform3f(m_hCoefsDst, coefs[0], coefs[1], coefs[2]);
       glUniform1f(m_hToneP1, param);
     }
-    else if (m_toneMapping && m_toneMappingMethod == VS_TONEMAPMETHOD_ACES)
+    else if (m_toneMappingMethod == VS_TONEMAPMETHOD_ACES)
     {
-      glUniform1f(m_hLuminance, GetLuminanceValue());
+      const float lumin = CToneMappers::GetLuminanceValue(m_hasDisplayMetadata, m_displayMetadata,
+                                                          m_hasLightMetadata, m_lightMetadata);
+      glUniform1f(m_hLuminance, lumin);
       glUniform1f(m_hToneP1, m_toneMappingParam);
     }
-    else if (m_toneMapping && m_toneMappingMethod == VS_TONEMAPMETHOD_HABLE)
+    else if (m_toneMappingMethod == VS_TONEMAPMETHOD_HABLE)
     {
-      float lumin = GetLuminanceValue();
-      float param = (10000.0f / lumin) * (2.0f / m_toneMappingParam);
+      const float lumin = CToneMappers::GetLuminanceValue(m_hasDisplayMetadata, m_displayMetadata,
+                                                          m_hasLightMetadata, m_lightMetadata);
+      const float param = (10000.0f / lumin) * (2.0f / m_toneMappingParam);
       glUniform1f(m_hLuminance, lumin);
       glUniform1f(m_hToneP1, param);
     }
@@ -236,8 +300,10 @@ void BaseYUV2RGBGLSLShader::SetColParams(AVColorSpace colSpace, int bits, bool l
       .SetSourceTextureBitDepth(textureBits);
 }
 
-void BaseYUV2RGBGLSLShader::SetDisplayMetadata(bool hasDisplayMetadata, AVMasteringDisplayMetadata displayMetadata,
-                                               bool hasLightMetadata, AVContentLightMetadata lightMetadata)
+void BaseYUV2RGBGLSLShader::SetDisplayMetadata(bool hasDisplayMetadata,
+                                               const AVMasteringDisplayMetadata& displayMetadata,
+                                               bool hasLightMetadata,
+                                               AVContentLightMetadata lightMetadata)
 {
   m_hasDisplayMetadata = hasDisplayMetadata;
   m_displayMetadata = displayMetadata;
@@ -246,42 +312,10 @@ void BaseYUV2RGBGLSLShader::SetDisplayMetadata(bool hasDisplayMetadata, AVMaster
 }
 
 
-void BaseYUV2RGBGLSLShader::SetToneMapParam(int method, float param)
+void BaseYUV2RGBGLSLShader::SetToneMapParam(ETONEMAPMETHOD method, float param)
 {
   m_toneMappingMethod = method;
   m_toneMappingParam = param;
-}
-
-float BaseYUV2RGBGLSLShader::GetLuminanceValue() const //Maybe move this to linuxrenderer?! same as in baserenderer
-{
-  float lum1 = 400.0f; // default for bad quality HDR-PQ sources (with no metadata)
-  float lum2 = lum1;
-  float lum3 = lum1;
-
-  if (m_hasLightMetadata)
-  {
-    uint16_t lum = m_displayMetadata.max_luminance.num / m_displayMetadata.max_luminance.den;
-    if (m_lightMetadata.MaxCLL >= lum)
-    {
-      lum1 = static_cast<float>(lum);
-      lum2 = static_cast<float>(m_lightMetadata.MaxCLL);
-    }
-    else
-    {
-      lum1 = static_cast<float>(m_lightMetadata.MaxCLL);
-      lum2 = static_cast<float>(lum);
-    }
-    lum3 = static_cast<float>(m_lightMetadata.MaxFALL);
-    lum1 = (lum1 * 0.5f) + (lum2 * 0.2f) + (lum3 * 0.3f);
-  }
-  else if (m_hasDisplayMetadata && m_displayMetadata.has_luminance &&
-           m_displayMetadata.max_luminance.num)
-  {
-    uint16_t lum = m_displayMetadata.max_luminance.num / m_displayMetadata.max_luminance.den;
-    lum1 = static_cast<float>(lum);
-  }
-
-  return lum1;
 }
 
 //////////////////////////////////////////////////////////////////////
@@ -295,15 +329,31 @@ YUV2RGBProgressiveShader::YUV2RGBProgressiveShader(bool rect,
                                                    AVColorPrimaries dstPrimaries,
                                                    AVColorPrimaries srcPrimaries,
                                                    bool toneMap,
-                                                   int toneMapMethod,
-                                                   std::shared_ptr<GLSLOutput> output)
-  : BaseYUV2RGBGLSLShader(
-        rect, format, stretch, dstPrimaries, srcPrimaries, toneMap, toneMapMethod, std::move(output))
+                                                   ETONEMAPMETHOD toneMapMethod,
+                                                   AVColorTransferCharacteristic hueSatTransfer,
+                                                   bool gamma,
+                                                   std::shared_ptr<GLSLOutput> output,
+                                                   bool gammaCorrection)
+  : BaseYUV2RGBGLSLShader(rect,
+                          format,
+                          stretch,
+                          dstPrimaries,
+                          srcPrimaries,
+                          toneMap,
+                          toneMapMethod,
+                          hueSatTransfer,
+                          gamma,
+                          std::move(output))
 {
+  if (gammaCorrection)
+    m_defines += "#define KODI_GAMMA_LINEARIZATION_FAST\n";
+
   PixelShader()->LoadSource("gl_yuv2rgb_basic.glsl", m_defines);
   PixelShader()->AppendSource("gl_output.glsl");
 
   PixelShader()->InsertSource("gl_tonemap.glsl", "vec4 process()");
+  PixelShader()->InsertSource("gl_huesat.glsl", "vec4 process()");
+  PixelShader()->InsertSource("gl_gamma.glsl", "vec4 process()");
 }
 
 //------------------------------------------------------------------------------
@@ -316,17 +366,29 @@ YUV2RGBFilterShader4::YUV2RGBFilterShader4(bool rect,
                                            AVColorPrimaries dstPrimaries,
                                            AVColorPrimaries srcPrimaries,
                                            bool toneMap,
-                                           int toneMapMethod,
+                                           ETONEMAPMETHOD toneMapMethod,
+                                           AVColorTransferCharacteristic hueSatTransfer,
+                                           bool gamma,
                                            ESCALINGMETHOD method,
                                            std::shared_ptr<GLSLOutput> output)
-  : BaseYUV2RGBGLSLShader(
-        rect, format, stretch, dstPrimaries, srcPrimaries, toneMap, toneMapMethod, std::move(output))
+  : BaseYUV2RGBGLSLShader(rect,
+                          format,
+                          stretch,
+                          dstPrimaries,
+                          srcPrimaries,
+                          toneMap,
+                          toneMapMethod,
+                          hueSatTransfer,
+                          gamma,
+                          std::move(output))
 {
   m_scaling = method;
   PixelShader()->LoadSource("gl_yuv2rgb_filter4.glsl", m_defines);
   PixelShader()->AppendSource("gl_output.glsl");
 
   PixelShader()->InsertSource("gl_tonemap.glsl", "vec4 process()");
+  PixelShader()->InsertSource("gl_huesat.glsl", "vec4 process()");
+  PixelShader()->InsertSource("gl_gamma.glsl", "vec4 process()");
 }
 
 YUV2RGBFilterShader4::~YUV2RGBFilterShader4()

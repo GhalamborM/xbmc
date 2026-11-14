@@ -18,6 +18,8 @@
 
 #include <memory>
 
+class CVideoReferenceClock;
+
 namespace KODI
 {
 namespace GAME
@@ -27,6 +29,7 @@ class CGameServices;
 
 namespace RETRO
 {
+class CGUIGameMessenger;
 class CRetroPlayerInput;
 class CRPProcessInfo;
 class CRPRenderManager;
@@ -47,29 +50,36 @@ public:
   bool OpenFile(const CFileItem& file, const CPlayerOptions& options) override;
   bool CloseFile(bool reopen = false) override;
   bool IsPlaying() const override;
-  bool CanPause() override;
+  bool CanPause() const override;
   void Pause() override;
   bool HasVideo() const override { return true; }
   bool HasAudio() const override { return true; }
   bool HasGame() const override { return true; }
-  bool CanSeek() override;
+  bool CanSeek() const override;
   void Seek(bool bPlus = true, bool bLargeStep = false, bool bChapterOverride = false) override;
   void SeekPercentage(float fPercent = 0) override;
-  float GetCachePercentage() override;
+  float GetCachePercentage() const override;
   void SetMute(bool bOnOff) override;
   void SeekTime(int64_t iTime = 0) override;
   bool SeekTimeRelative(int64_t iTime) override;
   void SetSpeed(float speed) override;
   bool OnAction(const CAction& action) override;
-  std::string GetPlayerState() override;
-  bool SetPlayerState(const std::string& state) override;
   void FrameMove() override;
   void Render(bool clear, uint32_t alpha = 255, bool gui = true) override;
-  bool IsRenderingVideo() override;
-  bool HasGameAgent() override;
+  bool IsRenderingVideo() const override;
+  bool HasGameAgent() const override;
+  bool SupportsDiscControl() const override;
+  bool IsDiscEjected() const override;
+  std::string DiscLabel() const override;
+  bool IsTrayEmpty() const override;
 
   // Implementation of IGameCallback
   std::string GameClientID() const override;
+  std::string GetPlayingGame() const override;
+  std::string CreateSavestate(bool autosave) override;
+  bool UpdateSavestate(const std::string& savestatePath) override;
+  bool LoadSavestate(const std::string& savestatePath) override;
+  void CloseOSDCallback() override;
 
   // Implementation of IPlaybackCallback
   void SetPlaybackSpeed(double speed) override;
@@ -77,10 +87,32 @@ public:
 
   // Implementation of IAutoSaveCallback
   bool IsAutoSaveEnabled() const override;
-  std::string CreateSavestate() override;
+  void RequestAutosave() override;
 
 private:
+  bool Open(const CFileItem& file, const CPlayerOptions& options);
+
   void SetSpeedInternal(double speed);
+
+  /*!
+   * \brief Refuse a speed that hardcore mode withholds
+   *
+   * Rewind and slow motion are withheld, fast forward and pausing are not.
+   * Answered before anything is told the speed changed, so the game, its
+   * sound and what is shown on screen stay in step.
+   *
+   * \return True if the speed was refused
+   */
+  bool RefuseSpeedInHardcore(double speed) const;
+
+  /*!
+   * \brief Return to normal speed if hardcore started during rewind or slow
+   *        motion
+   *
+   * Hardcore can be switched on by a route that doesn't pause the game first,
+   * such as JSON-RPC once the setting is shown.
+   */
+  void LeaveSpeedRefusedInHardcore();
 
   /*!
    * \brief Called when the speed changes
@@ -89,7 +121,7 @@ private:
   void OnSpeedChange(double newSpeed);
 
   // Playback functions
-  void CreatePlayback(bool bRestoreState);
+  void CreatePlayback(const std::string& savestatePath);
   void ResetPlayback();
 
   /*!
@@ -117,7 +149,9 @@ private:
   GAME::CGameServices& m_gameServices;
 
   // Subsystems
+  std::unique_ptr<CVideoReferenceClock> m_displayClock;
   std::unique_ptr<CRPProcessInfo> m_processInfo;
+  std::unique_ptr<CGUIGameMessenger> m_guiMessenger;
   std::unique_ptr<CRPRenderManager> m_renderManager;
   std::unique_ptr<CRPStreamManager> m_streamManager;
   std::unique_ptr<CRetroPlayerInput> m_input;
@@ -130,6 +164,7 @@ private:
 
   // Synchronization parameters
   CCriticalSection m_mutex;
+  bool m_opening{false};
 };
 } // namespace RETRO
 } // namespace KODI

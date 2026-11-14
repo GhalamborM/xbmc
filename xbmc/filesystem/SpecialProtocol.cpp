@@ -7,18 +7,20 @@
  */
 
 #include "SpecialProtocol.h"
+
 #include "ServiceBroker.h"
 #include "URL.h"
 #include "Util.h"
-#include "windowing/GraphicContext.h"
 #include "profiles/ProfileManager.h"
 #include "settings/AdvancedSettings.h"
 #include "settings/Settings.h"
 #include "settings/SettingsComponent.h"
-#include "utils/log.h"
 #include "utils/URIUtils.h"
+#include "utils/log.h"
+#include "windowing/GraphicContext.h"
+#include "windowing/WinSystem.h"
 
-#include <cassert>
+#include "PlatformDefs.h"
 #ifdef TARGET_POSIX
 #include <dirent.h>
 #include "utils/StringUtils.h"
@@ -201,7 +203,7 @@ std::string CSpecialProtocol::TranslatePath(const CURL &url)
   }
 
   // Validate the final path, just in case
-  return CUtil::ValidatePath(translatedPath);
+  return CUtil::ValidatePath(std::move(translatedPath));
 }
 
 std::string CSpecialProtocol::TranslatePathConvertCase(const std::string& path)
@@ -296,6 +298,6 @@ std::string CSpecialProtocol::GetPath(const std::string &key)
   std::map<std::string, std::string>::iterator it = m_pathMap.find(key);
   if (it != m_pathMap.end())
     return it->second;
-  assert(false);
+
   return "";
 }

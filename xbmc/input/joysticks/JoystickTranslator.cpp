@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2015-2018 Team Kodi
+ *  Copyright (C) 2015-2024 Team Kodi
  *  This file is part of Kodi - https://kodi.tv
  *
  *  SPDX-License-Identifier: GPL-2.0-or-later
@@ -8,8 +8,10 @@
 
 #include "JoystickTranslator.h"
 
-#include "guilib/LocalizeStrings.h"
+#include "ServiceBroker.h"
 #include "input/joysticks/DriverPrimitive.h"
+#include "resources/LocalizeStrings.h"
+#include "resources/ResourcesComponent.h"
 #include "utils/StringUtils.h"
 
 using namespace KODI;
@@ -162,10 +164,12 @@ std::string CJoystickTranslator::GetPrimitiveName(const CDriverPrimitive& primit
   switch (primitive.Type())
   {
     case PRIMITIVE_TYPE::BUTTON:
-      primitiveTemplate = g_localizeStrings.Get(35015); // "Button %d"
+      primitiveTemplate =
+          CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(35015); // "Button %d"
       break;
     case PRIMITIVE_TYPE::SEMIAXIS:
-      primitiveTemplate = g_localizeStrings.Get(35016); // "Axis %d"
+      primitiveTemplate =
+          CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(35016); // "Axis %d"
       break;
     default:
       break;

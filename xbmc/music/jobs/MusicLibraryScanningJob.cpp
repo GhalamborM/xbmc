@@ -21,14 +21,12 @@ CMusicLibraryScanningJob::~CMusicLibraryScanningJob() = default;
 
 bool CMusicLibraryScanningJob::Cancel()
 {
-  if (!m_scanner.IsScanning())
-    return true;
-
+  m_cancelled = true;
   m_scanner.Stop();
   return true;
 }
 
-bool CMusicLibraryScanningJob::operator==(const CJob* job) const
+bool CMusicLibraryScanningJob::Equals(const CJob* job) const
 {
   if (strcmp(job->GetType(), GetType()) != 0)
     return false;
@@ -43,6 +41,9 @@ bool CMusicLibraryScanningJob::operator==(const CJob* job) const
 
 bool CMusicLibraryScanningJob::Work(CMusicDatabase &db)
 {
+  if (m_cancelled)
+    return true;
+
   m_scanner.ShowDialog(m_showProgress);
   if (m_flags & MUSIC_INFO::CMusicInfoScanner::SCAN_ALBUMS)
     // Scrape additional album information

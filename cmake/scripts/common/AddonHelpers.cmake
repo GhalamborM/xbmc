@@ -14,6 +14,13 @@ else()
                     COMMAND ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR} --target package)
 endif()
 
+if(MINGW)
+  message(WARNING
+          "MSYS/MINGW generated add-ons are not supported for use in Kodi!\n"
+          "For compiler test purposes only!"
+         )
+endif()
+
 macro(add_cpack_workaround target version ext)
   if(NOT PACKAGE_DIR)
     set(PACKAGE_DIR "${CMAKE_INSTALL_PREFIX}/zips")
@@ -36,6 +43,60 @@ macro (addon_version dir prefix)
   string(REGEX REPLACE ".*version=.([0-9\\.]+).*" "\\1" ${prefix}_VERSION ${VERSION_STRING})
   message(STATUS ${prefix}_VERSION=${${prefix}_VERSION})
 endmacro()
+
+
+# IDEs: Group source files in target in folders (file system hierarchy)
+# Source: http://blog.audio-tk.com/2015/09/01/sorting-source-files-and-projects-in-folders-with-cmake-and-visual-studioxcode/
+# Arguments:
+#   target The target that shall be grouped by folders.
+# Optional Arguments:
+#   RELATIVE allows to specify a different reference folder.
+function(source_group_by_folder target)
+  if(NOT TARGET ${target})
+    message(FATAL_ERROR "There is no target named '${target}'")
+  endif()
+
+  set(SOURCE_GROUP_DELIMITER "/")
+
+  cmake_parse_arguments(arg "" "RELATIVE" "" ${ARGN})
+  if(arg_RELATIVE)
+    set(relative_dir ${arg_RELATIVE})
+  else()
+    set(relative_dir ${CMAKE_CURRENT_SOURCE_DIR})
+  endif()
+
+  get_property(files TARGET ${target} PROPERTY SOURCES)
+  if(files)
+    list(SORT files)
+
+    if(CMAKE_GENERATOR STREQUAL Xcode)
+      set_target_properties(${target} PROPERTIES SOURCES "${files}")
+    endif()
+  endif()
+  foreach(file ${files})
+    if(file MATCHES "^\\$<")
+      list(POP_FRONT files)
+      continue()
+    endif()
+
+    if(NOT IS_ABSOLUTE ${file})
+      set(file ${CMAKE_CURRENT_SOURCE_DIR}/${file})
+    endif()
+    file(RELATIVE_PATH relative_file ${relative_dir} ${file})
+    get_filename_component(dir "${relative_file}" DIRECTORY)
+    if(NOT dir STREQUAL "${last_dir}")
+      if(files)
+        source_group(TREE "${relative_dir}" FILES ${files})
+      endif()
+      set(files "")
+    endif()
+    set(files ${files} ${file})
+    set(last_dir "${dir}")
+  endforeach(file)
+  if(files)
+    source_group(TREE "${relative_dir}" FILES ${files})
+  endif()
+endfunction()
 
 # Build, link and optionally package an add-on
 macro (build_addon target prefix libs)
@@ -154,6 +215,9 @@ macro (build_addon target prefix libs)
     endforeach()
 
     add_library(${target} ${${prefix}_SOURCES} ${${prefix}_HEADERS})
+
+    source_group_by_folder(${target})
+
     target_link_libraries(${target} ${${libs}})
     set_target_properties(${target} PROPERTIES VERSION ${${prefix}_VERSION}
                                                SOVERSION ${APP_VERSION_MAJOR}.${APP_VERSION_MINOR}
@@ -244,13 +308,18 @@ macro (build_addon target prefix libs)
       if(NOT CPACK_PACKAGE_DIRECTORY)
         # determine the temporary path
         file(TO_CMAKE_PATH "$ENV{TEMP}" WIN32_TEMP_PATH)
+        # a folder of its own, as other add-ons, platforms and Kodi versions can be packaged at the same time
+        set(WIN32_PACKAGE_PATH "${WIN32_TEMP_PATH}/${target}-${PLATFORM_TAG}-${APP_VERSION_MAJOR}")
         string(LENGTH "${WIN32_TEMP_PATH}" WIN32_TEMP_PATH_LENGTH)
+        string(LENGTH "${WIN32_PACKAGE_PATH}" WIN32_PACKAGE_PATH_LENGTH)
         string(LENGTH "${PROJECT_BINARY_DIR}" PROJECT_BINARY_DIR_LENGTH)
 
         # check if the temporary path is shorter than the default packaging directory path
-        if(WIN32_TEMP_PATH_LENGTH GREATER 0 AND WIN32_TEMP_PATH_LENGTH LESS PROJECT_BINARY_DIR_LENGTH)
+        if(WIN32_TEMP_PATH_LENGTH GREATER 0 AND WIN32_PACKAGE_PATH_LENGTH LESS PROJECT_BINARY_DIR_LENGTH)
           # set the directory used by CPack for packaging to the temp directory
-          set(CPACK_PACKAGE_DIRECTORY ${WIN32_TEMP_PATH})
+          set(CPACK_PACKAGE_DIRECTORY ${WIN32_PACKAGE_PATH})
+        else()
+          set(CPACK_PACKAGE_DIRECTORY ${CMAKE_BINARY_DIR})
         endif()
       endif()
 
@@ -260,9 +329,11 @@ macro (build_addon target prefix libs)
                 COMPONENT ${target}-${${prefix}_VERSION}-${PLATFORM_TAG})
 
         # for debug builds also install the PDB file
-        install(FILES $<TARGET_PDB_FILE:${target}> DESTINATION ${target}
-                CONFIGURATIONS Debug RelWithDebInfo
-                COMPONENT ${target}-${${prefix}_VERSION}-${PLATFORM_TAG})
+        if(NOT MINGW)
+          install(FILES $<TARGET_PDB_FILE:${target}> DESTINATION ${target}
+                  CONFIGURATIONS Debug RelWithDebInfo
+                  COMPONENT ${target}-${${prefix}_VERSION}-${PLATFORM_TAG})
+        endif()
       endif()
       if(${prefix}_CUSTOM_BINARY)
         install(FILES ${LIBRARY_LOCATION} DESTINATION ${target} RENAME ${LIBRARY_FILENAME}

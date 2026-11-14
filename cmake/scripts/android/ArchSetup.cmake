@@ -3,8 +3,7 @@ if(NOT CMAKE_TOOLCHAIN_FILE)
 endif()
 
 set(ARCH_DEFINES -DTARGET_POSIX -DTARGET_LINUX -DTARGET_ANDROID)
-set(SYSTEM_DEFINES -D__STDC_CONSTANT_MACROS -D_LARGEFILE64_SOURCE
-                   -D_FILE_OFFSET_BITS=64 -D__USE_FILE_OFFSET64=1)
+set(SYSTEM_DEFINES -D__STDC_CONSTANT_MACROS -D__BIONIC_NO_PAGE_SIZE_MACRO)
 
 # Main cpp
 set(CORE_MAIN_SOURCE ${CMAKE_SOURCE_DIR}/xbmc/platform/android/activity/XBMCApp.cpp)
@@ -17,10 +16,6 @@ else()
   if(CPU STREQUAL armeabi-v7a)
     set(ARCH arm)
     set(NEON True)
-    set(NEON_FLAGS "-mfpu=neon")
-    if(CMAKE_COMPILER_IS_GNUCC AND CMAKE_COMPILER_IS_GNUCXX)
-      set(NEON_FLAGS "${NEON_FLAGS} -mvectorize-with-neon-quad")
-    endif()
   elseif(CPU STREQUAL arm64-v8a)
     set(ARCH aarch64)
     set(NEON True)
@@ -42,4 +37,4 @@ set(ENABLE_X11 OFF CACHE BOOL "" FORCE)
 set(ENABLE_OPTICAL OFF CACHE BOOL "" FORCE)
 set(ENABLE_MDNS OFF CACHE BOOL "" FORCE)
 
-list(APPEND DEPLIBS android log jnigraphics mediandk androidjni)
+list(APPEND DEPLIBS android log jnigraphics mediandk)

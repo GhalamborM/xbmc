@@ -14,15 +14,23 @@
 class CGUIWindowManager;
 class CGUITextureManager;
 class CGUILargeTextureManager;
+class CGUITextureCallbackManager;
 class CStereoscopicsManager;
 class CGUIInfoManager;
 class CGUIColorManager;
 class CGUIAudioManager;
+class CGUIAnnouncementHandlerContainer;
+
+namespace ADDON
+{
+class CSkinInfo;
+}
 
 class CGUIComponent
 {
 public:
   CGUIComponent();
+  explicit CGUIComponent(bool);
   virtual ~CGUIComponent();
   void Init();
   void Deinit();
@@ -30,10 +38,16 @@ public:
   CGUIWindowManager& GetWindowManager();
   CGUITextureManager& GetTextureManager();
   CGUILargeTextureManager& GetLargeTextureManager();
+  CGUITextureCallbackManager& GetTextureCallbackManager();
   CStereoscopicsManager &GetStereoscopicsManager();
   CGUIInfoManager &GetInfoManager();
+  const CGUIInfoManager& GetInfoManager() const;
   CGUIColorManager &GetColorManager();
   CGUIAudioManager &GetAudioManager();
+
+  void SetSkinInfo(std::shared_ptr<ADDON::CSkinInfo> skin);
+  std::shared_ptr<ADDON::CSkinInfo> GetSkinInfo();
+  void UnloadSkin();
 
   bool ConfirmDelete(const std::string& path);
 
@@ -42,8 +56,11 @@ protected:
   std::unique_ptr<CGUIWindowManager> m_pWindowManager;
   std::unique_ptr<CGUITextureManager> m_pTextureManager;
   std::unique_ptr<CGUILargeTextureManager> m_pLargeTextureManager;
+  std::unique_ptr<CGUITextureCallbackManager> m_pTextureCallbackManager;
   std::unique_ptr<CStereoscopicsManager> m_stereoscopicsManager;
   std::unique_ptr<CGUIInfoManager> m_guiInfoManager;
   std::unique_ptr<CGUIColorManager> m_guiColorManager;
   std::unique_ptr<CGUIAudioManager> m_guiAudioManager;
+  std::unique_ptr<CGUIAnnouncementHandlerContainer> m_announcementHandlerContainer;
+  std::shared_ptr<ADDON::CSkinInfo> m_skinInfo;
 };

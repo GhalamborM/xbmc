@@ -10,28 +10,30 @@
 
 #include "guilib/GUIDialog.h"
 
+#include <memory>
+
 class CFileItem;
 class CGUIMessage;
 
 namespace PVR
 {
-  class CGUIDialogPVRRecordingInfo : public CGUIDialog
-  {
-  public:
-    CGUIDialogPVRRecordingInfo();
-    ~CGUIDialogPVRRecordingInfo() override = default;
-    bool OnMessage(CGUIMessage& message) override;
-    bool OnInfo(int actionID) override;
-    bool HasListItems() const override { return true; }
-    CFileItemPtr GetCurrentListItem(int offset = 0) override;
+class CGUIDialogPVRRecordingInfo : public CGUIDialog
+{
+public:
+  CGUIDialogPVRRecordingInfo();
+  ~CGUIDialogPVRRecordingInfo() override = default;
+  bool OnMessage(CGUIMessage& message) override;
+  bool OnInfo(int actionID) override;
+  bool HasListItems() const override { return true; }
+  CFileItemPtr GetCurrentListItem(int offset = 0) override;
 
-    void SetRecording(const CFileItem* item);
+  void SetRecording(const CFileItem& item);
 
-  private:
-    bool OnClickButtonFind(CGUIMessage& message);
-    bool OnClickButtonOK(CGUIMessage& message);
-    bool OnClickButtonPlay(CGUIMessage& message);
+private:
+  bool OnClickButtonFind(const CGUIMessage& message);
+  bool OnClickButtonOK(const CGUIMessage& message);
+  bool OnClickButtonPlay(const CGUIMessage& message);
 
-    CFileItemPtr m_recordItem;
-  };
-}
+  std::shared_ptr<CFileItem> m_recordItem;
+};
+} // namespace PVR

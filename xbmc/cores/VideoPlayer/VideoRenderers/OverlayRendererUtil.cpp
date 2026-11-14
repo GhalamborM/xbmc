@@ -14,9 +14,15 @@
 #include "cores/VideoPlayer/DVDCodecs/Overlay/DVDOverlaySpu.h"
 #include "settings/Settings.h"
 #include "settings/SettingsComponent.h"
+#include "utils/DisplayInfo.h"
 #include "windowing/GraphicContext.h"
+#include "windowing/WinSystem.h"
 
-namespace OVERLAY {
+#include <algorithm>
+#include <cmath>
+
+namespace OVERLAY
+{
 
 static uint32_t build_rgba(int a, int r, int g, int b, bool mergealpha)
 {
@@ -33,7 +39,7 @@ static uint32_t build_rgba(int a, int r, int g, int b, bool mergealpha)
 }
 
 #define clamp(x) (x) > 255.0 ? 255 : ((x) < 0.0 ? 0 : (int)(x + 0.5))
-static uint32_t build_rgba(int yuv[3], int alpha, bool mergealpha)
+static uint32_t build_rgba(const int yuv[3], int alpha, bool mergealpha)
 {
   int    a = alpha + ( (alpha << 4) & 0xff );
   double r = 1.164 * (yuv[0] - 16)                          + 1.596 * (yuv[2] - 128);
@@ -43,35 +49,37 @@ static uint32_t build_rgba(int yuv[3], int alpha, bool mergealpha)
 }
 #undef clamp
 
-std::vector<uint32_t> convert_rgba(CDVDOverlayImage* o, bool mergealpha)
+void convert_rgba(const CDVDOverlayImage& o,
+                  bool mergealpha,
+                  std::vector<uint32_t>& rgba,
+                  const std::vector<uint32_t>* paletteOverride)
 {
-  std::vector<uint32_t> rgba(o->width * o->height);
+  const std::vector<uint32_t>& srcPalette = paletteOverride ? *paletteOverride : o.palette;
 
   uint32_t palette[256] = {};
-  for(int i = 0; i < o->palette_colors; i++)
-    palette[i] = build_rgba((o->palette[i] >> PIXEL_ASHIFT) & 0xff
-                          , (o->palette[i] >> PIXEL_RSHIFT) & 0xff
-                          , (o->palette[i] >> PIXEL_GSHIFT) & 0xff
-                          , (o->palette[i] >> PIXEL_BSHIFT) & 0xff
-                          , mergealpha);
+  for (size_t i = 0; i < srcPalette.size(); i++)
+    palette[i] = build_rgba(
+        (srcPalette[i] >> PIXEL_ASHIFT) & 0xff, (srcPalette[i] >> PIXEL_RSHIFT) & 0xff,
+        (srcPalette[i] >> PIXEL_GSHIFT) & 0xff, (srcPalette[i] >> PIXEL_BSHIFT) & 0xff, mergealpha);
 
-  for(int row = 0; row < o->height; row++)
-    for(int col = 0; col < o->width; col++)
-      rgba[row * o->width + col] = palette[ o->data[row * o->linesize + col] ];
-
-  return rgba;
+  for (int row = 0; row < o.height; row++)
+    for (int col = 0; col < o.width; col++)
+      rgba[row * o.width + col] = palette[o.pixels[row * o.linesize + col]];
 }
 
-std::vector<uint32_t> convert_rgba(
-    CDVDOverlaySpu* o, bool mergealpha, int& min_x, int& max_x, int& min_y, int& max_y)
+void convert_rgba(const CDVDOverlaySpu& o,
+                  bool mergealpha,
+                  int& min_x,
+                  int& max_x,
+                  int& min_y,
+                  int& max_y,
+                  std::vector<uint32_t>& rgba)
 {
-  std::vector<uint32_t> rgba(o->width * o->height);
-
   uint32_t palette[8];
-  for(int i = 0; i < 4; i++)
+  for (int i = 0; i < 4; i++)
   {
-    palette[i]   = build_rgba(o->color[i]          , o->alpha[i]          , mergealpha);
-    palette[i+4] = build_rgba(o->highlight_color[i], o->highlight_alpha[i], mergealpha);
+    palette[i] = build_rgba(o.color[i], o.alpha[i], mergealpha);
+    palette[i + 4] = build_rgba(o.highlight_color[i], o.highlight_alpha[i], mergealpha);
   }
 
   uint32_t  color;
@@ -85,25 +93,25 @@ std::vector<uint32_t> convert_rgba(
     , btn_y_start = 0
     , btn_y_end   = 0;
 
-  if(o->bForced)
+  if (o.bForced)
   {
-    btn_x_start = o->crop_i_x_start - o->x;
-    btn_x_end   = o->crop_i_x_end   - o->x;
-    btn_y_start = o->crop_i_y_start - o->y;
-    btn_y_end   = o->crop_i_y_end   - o->y;
+    btn_x_start = o.crop_i_x_start - o.x;
+    btn_x_end = o.crop_i_x_end - o.x;
+    btn_y_start = o.crop_i_y_start - o.y;
+    btn_y_end = o.crop_i_y_end - o.y;
   }
 
-  min_x = o->width;
+  min_x = o.width;
   max_x = 0;
-  min_y = o->height;
+  min_y = o.height;
   max_y = 0;
 
   trg = rgba.data();
-  src = (uint16_t*)o->result;
+  src = (uint16_t*)o.result;
 
-  for (int y = 0; y < o->height; y++)
+  for (int y = 0; y < o.height; y++)
   {
-    for (int x = 0; x < o->width ; x += len)
+    for (int x = 0; x < o.width; x += len)
     {
       /* Get the RLE part, then draw the line */
       idx = *src & 0x3;
@@ -149,7 +157,7 @@ std::vector<uint32_t> convert_rgba(
         x   += draw;
       }
     }
-    trg += o->width;
+    trg += o.width;
   }
 
   /* if nothing visible, just output a dummy pixel */
@@ -159,20 +167,17 @@ std::vector<uint32_t> convert_rgba(
     max_y = max_x = 1;
     min_y = min_x = 0;
   }
-
-  return rgba;
 }
 
 bool convert_quad(ASS_Image* images, SQuads& quads, int max_x)
 {
   ASS_Image* img;
+  int count = 0;
 
   if (!images)
     return false;
 
   // first calculate how many glyph we have and the total x length
-
-  int count{0};
 
   for(img = images; img; img = img->next)
   {
@@ -217,21 +222,20 @@ bool convert_quad(ASS_Image* images, SQuads& quads, int max_x)
   quads.size_y += curr_y + 1;
 
   // allocate space for the glyph positions and texturedata
-
-  quads.quad = std::vector<SQuad>(count);
-  quads.data = std::vector<uint8_t>(quads.size_x * quads.size_y);
+  quads.quad.resize(count);
+  quads.texture.resize(static_cast<size_t>(quads.size_x) * quads.size_y);
 
   SQuad* v = quads.quad.data();
-  uint8_t* data = quads.data.data();
+  uint8_t* data = quads.texture.data();
 
   int y = 0;
 
   curr_x = 0;
   curr_y = 0;
 
-  for(img = images; img; img = img->next)
+  for (img = images; img; img = img->next)
   {
-    if((img->color & 0xff) == 0xff || img->w == 0 || img->h == 0)
+    if ((img->color & 0xff) == 0xff || img->w == 0 || img->h == 0)
       continue;
 
     unsigned int color = img->color;
@@ -240,9 +244,9 @@ bool convert_quad(ASS_Image* images, SQuads& quads, int max_x)
     if (curr_x + img->w >= quads.size_x)
     {
       curr_y += y + 1;
-      curr_x  = 0;
-      y       = 0;
-      data = quads.data.data() + curr_y * quads.size_x;
+      curr_x = 0;
+      y = 0;
+      data = quads.texture.data() + curr_y * quads.size_x;
     }
 
     unsigned int r = ((color >> 24) & 0xff);
@@ -265,10 +269,8 @@ bool convert_quad(ASS_Image* images, SQuads& quads, int max_x)
 
     v++;
 
-    for(int i=0; i<img->h; i++)
-      memcpy(data        + quads.size_x * i
-           , img->bitmap + img->stride  * i
-           , img->w);
+    for (int i = 0; i < img->h; i++)
+      memcpy(data + quads.size_x * i, img->bitmap + img->stride * i, img->w);
 
     if (img->h > y)
       y = img->h;
@@ -279,15 +281,99 @@ bool convert_quad(ASS_Image* images, SQuads& quads, int max_x)
   return true;
 }
 
+bool ShouldConvertPQPaletteToSRGB(bool isHDROverlay)
+{
+  if (!isHDROverlay)
+    return false;
+
+  // Convert to sRGB unless the overlay is going to a PQ destination: the HDR
+  // composite, or a GUI layer that is output as an HDR signal.
+  const CWinSystemBase* winSystem = CServiceBroker::GetWinSystem();
+  const bool destinationIsPQ =
+      winSystem->IsHdrComposite() || winSystem->GetEotf() != KODI::UTILS::Eotf::TRADITIONAL_SDR;
+  return !destinationIsPQ;
+}
+
+namespace
+{
+constexpr float ST2084_m1 = 2610.0f / (4096.0f * 4.0f);
+constexpr float ST2084_m2 = (2523.0f / 4096.0f) * 128.0f;
+constexpr float ST2084_c1 = 3424.0f / 4096.0f;
+constexpr float ST2084_c2 = (2413.0f / 4096.0f) * 32.0f;
+constexpr float ST2084_c3 = (2392.0f / 4096.0f) * 32.0f;
+
+// PQ code value (0-1) -> linear (1.0 == 10000 nits).
+float DecodePQ(float x)
+{
+  x = std::clamp(x, 0.0f, 1.0f);
+  const float p = std::pow(x, 1.0f / ST2084_m2);
+  const float num = std::max(p - ST2084_c1, 0.0f);
+  const float den = std::max(ST2084_c2 - ST2084_c3 * p, 1e-6f);
+  return std::pow(num / den, 1.0f / ST2084_m1);
+}
+
+float LinearToSrgbComponent(float c)
+{
+  c = std::clamp(c, 0.0f, 1.0f);
+  return (c <= 0.0031308f) ? (12.92f * c) : (1.055f * std::pow(c, 1.0f / 2.4f) - 0.055f);
+}
+} // namespace
+
+void ConvertPQPaletteToSRGB(std::vector<uint32_t>& palette)
+{
+  // Linear BT.2020 -> linear BT.709/sRGB primaries, D65 both ends;
+  // numerically confirmed to map (1,1,1) to (1,1,1).
+  static constexpr float BT2020_TO_709[3][3] = {
+      {1.660491002f, -0.587641139f, -0.072849863f},
+      {-0.124550474f, 1.132899897f, -0.008349423f},
+      {-0.018150763f, -0.100578897f, 1.118729660f},
+  };
+
+  constexpr float whiteScale = 10000.0f / 203.0f; // ITU-R BT.2408 reference white
+
+  for (uint32_t& entry : palette)
+  {
+    const int a = (entry >> PIXEL_ASHIFT) & 0xff;
+    const float linearPQ[3] = {
+        DecodePQ(((entry >> PIXEL_RSHIFT) & 0xff) / 255.0f) * whiteScale,
+        DecodePQ(((entry >> PIXEL_GSHIFT) & 0xff) / 255.0f) * whiteScale,
+        DecodePQ(((entry >> PIXEL_BSHIFT) & 0xff) / 255.0f) * whiteScale,
+    };
+
+    float linear709[3];
+    for (int i = 0; i < 3; i++)
+      linear709[i] =
+          std::max(BT2020_TO_709[i][0] * linearPQ[0] + BT2020_TO_709[i][1] * linearPQ[1] +
+                       BT2020_TO_709[i][2] * linearPQ[2],
+                   0.0f);
+
+    // A colour brighter than reference white is scaled down until its
+    // brightest channel is white, so its hue is kept.
+    const float maxChannel = std::max({linear709[0], linear709[1], linear709[2]});
+    if (maxChannel > 1.0f)
+      for (float& c : linear709)
+        c /= maxChannel;
+
+    const int r = static_cast<int>(LinearToSrgbComponent(linear709[0]) * 255.0f + 0.5f);
+    const int g = static_cast<int>(LinearToSrgbComponent(linear709[1]) * 255.0f + 0.5f);
+    const int b = static_cast<int>(LinearToSrgbComponent(linear709[2]) * 255.0f + 0.5f);
+
+    entry = (a << PIXEL_ASHIFT) | (r << PIXEL_RSHIFT) | (g << PIXEL_GSHIFT) | (b << PIXEL_BSHIFT);
+  }
+}
+
 int GetStereoscopicDepth()
 {
   int depth = 0;
 
-  if(CServiceBroker::GetWinSystem()->GetGfxContext().GetStereoMode() != RENDER_STEREO_MODE_MONO
-  && CServiceBroker::GetWinSystem()->GetGfxContext().GetStereoMode() != RENDER_STEREO_MODE_OFF)
+  if (CServiceBroker::GetWinSystem()->GetGfxContext().GetStereoMode() != RenderStereoMode::MONO &&
+      CServiceBroker::GetWinSystem()->GetGfxContext().GetStereoMode() != RenderStereoMode::OFF)
   {
     depth  = CServiceBroker::GetSettingsComponent()->GetSettings()->GetInt(CSettings::SETTING_SUBTITLES_STEREOSCOPICDEPTH);
-    depth *= (CServiceBroker::GetWinSystem()->GetGfxContext().GetStereoView() == RENDER_STEREO_VIEW_LEFT ? 1 : -1);
+    depth *=
+        (CServiceBroker::GetWinSystem()->GetGfxContext().GetStereoView() == RenderStereoView::LEFT
+             ? 1
+             : -1);
   }
 
   return depth;

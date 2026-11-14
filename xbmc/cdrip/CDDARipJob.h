@@ -8,8 +8,8 @@
 
 #pragma once
 
+#include "jobs/Job.h"
 #include "music/tags/MusicInfoTag.h"
-#include "utils/Job.h"
 
 namespace XFILE
 {
@@ -50,9 +50,9 @@ public:
   ~CCDDARipJob() override;
 
   const char* GetType() const override { return "cdrip"; }
-  bool operator==(const CJob* job) const override;
+  bool Equals(const CJob* job) const override;
   bool DoWork() override;
-  std::string GetOutput() const { return m_output; }
+  const std::string& GetOutput() const { return m_output; }
 
 protected:
   /*!

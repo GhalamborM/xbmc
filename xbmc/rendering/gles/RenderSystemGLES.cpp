@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2005-2018 Team Kodi
+ *  Copyright (C) 2005-2026 Team Kodi
  *  This file is part of Kodi - https://kodi.tv
  *
  *  SPDX-License-Identifier: GPL-2.0-or-later
@@ -8,11 +8,16 @@
 
 #include "RenderSystemGLES.h"
 
+#include "ServiceBroker.h"
+#include "URL.h"
 #include "guilib/DirtyRegion.h"
 #include "guilib/GUITextureGLES.h"
+#include "platform/MessagePrinter.h"
+#include "rendering/GLExtensions.h"
 #include "rendering/MatrixGL.h"
 #include "settings/AdvancedSettings.h"
 #include "settings/SettingsComponent.h"
+#include "utils/FileUtils.h"
 #include "utils/GLUtils.h"
 #include "utils/MathUtils.h"
 #include "utils/SystemInfo.h"
@@ -20,10 +25,49 @@
 #include "utils/XTimeUtils.h"
 #include "utils/log.h"
 #include "windowing/GraphicContext.h"
+#include "windowing/WinSystem.h"
 
 #if defined(TARGET_LINUX)
 #include "utils/EGLUtils.h"
 #endif
+
+#include <array>
+
+using namespace std::chrono_literals;
+
+namespace
+{
+void ClearBuffersWithStencil(GLbitfield flags)
+{
+  GLint stencilMask, stencilBackMask, stencilClear;
+  glGetIntegerv(GL_STENCIL_WRITEMASK, &stencilMask);
+  glGetIntegerv(GL_STENCIL_BACK_WRITEMASK, &stencilBackMask);
+  glGetIntegerv(GL_STENCIL_CLEAR_VALUE, &stencilClear);
+  glStencilMask(0xFF);
+  glClearStencil(0);
+
+  GLboolean depthMask{GL_FALSE};
+  GLfloat depthClear{0.0f};
+  if (flags & GL_DEPTH_BUFFER_BIT)
+  {
+    glGetBooleanv(GL_DEPTH_WRITEMASK, &depthMask);
+    glGetFloatv(GL_DEPTH_CLEAR_VALUE, &depthClear);
+    glDepthMask(GL_TRUE);
+    glClearDepthf(0.0f);
+  }
+
+  glClear(flags | GL_STENCIL_BUFFER_BIT);
+
+  if (flags & GL_DEPTH_BUFFER_BIT)
+  {
+    glDepthMask(depthMask);
+    glClearDepthf(depthClear);
+  }
+  glStencilMaskSeparate(GL_FRONT, stencilMask);
+  glStencilMaskSeparate(GL_BACK, stencilBackMask);
+  glClearStencil(stencilClear);
+}
+} // namespace
 
 CRenderSystemGLES::CRenderSystemGLES()
  : CRenderSystemBase()
@@ -39,11 +83,12 @@ bool CRenderSystemGLES::InitRenderSystem()
   m_maxTextureSize = maxTextureSize;
 
   // Get the GLES version number
+  m_RenderVersion = "<none>";
   m_RenderVersionMajor = 0;
   m_RenderVersionMinor = 0;
 
   const char* ver = (const char*)glGetString(GL_VERSION);
-  if (ver != 0)
+  if (ver != NULL)
   {
     sscanf(ver, "%d.%d", &m_RenderVersionMajor, &m_RenderVersionMinor);
     if (!m_RenderVersionMajor)
@@ -62,20 +107,19 @@ bool CRenderSystemGLES::InitRenderSystem()
   if (tmpRenderer != NULL)
     m_RenderRenderer = tmpRenderer;
 
-  m_RenderExtensions  = " ";
+  m_RenderExtensions = "";
 
   const char *tmpExtensions = (const char*) glGetString(GL_EXTENSIONS);
   if (tmpExtensions != NULL)
   {
     m_RenderExtensions += tmpExtensions;
+    m_RenderExtensions += " ";
   }
-
-  m_RenderExtensions += " ";
 
 #if defined(GL_KHR_debug) && defined(TARGET_LINUX)
   if (CServiceBroker::GetSettingsComponent()->GetAdvancedSettings()->m_openGlDebugging)
   {
-    if (IsExtSupported("GL_KHR_debug"))
+    if (CGLExtensions::IsExtensionSupported(CGLExtensions::KHR_debug))
     {
       auto glDebugMessageCallback = CEGLUtils::GetRequiredProcAddress<PFNGLDEBUGMESSAGECALLBACKKHRPROC>("glDebugMessageCallbackKHR");
       auto glDebugMessageControl = CEGLUtils::GetRequiredProcAddress<PFNGLDEBUGMESSAGECONTROLKHRPROC>("glDebugMessageControlKHR");
@@ -95,13 +139,21 @@ bool CRenderSystemGLES::InitRenderSystem()
   }
 #endif
 
+  // Shut down gracefully if OpenGL context could not be allocated
+  if (m_RenderVersionMajor == 0)
+  {
+    CLog::Log(LOGFATAL, "Can not initialize OpenGL context. Exiting");
+    CMessagePrinter::DisplayError("ERROR: Can not initialize OpenGL context. Exiting");
+    return false;
+  }
+
   LogGraphicsInfo();
 
   m_bRenderCreated = true;
 
   InitialiseShaders();
 
-  CGUITextureGLES::Register();
+  CGUITextureGLES::Register(m_quadDrawer);
 
   return true;
 }
@@ -133,8 +185,7 @@ bool CRenderSystemGLES::ResetRenderSystem(int width, int height)
   glMatrixTexture.Load();
 
   glBlendFunc(GL_SRC_ALPHA, GL_ONE);
-  glEnable(GL_BLEND);          // Turn Blending On
-  glDisable(GL_DEPTH_TEST);
+  glEnable(GL_BLEND); // Turn Blending On
 
   return true;
 }
@@ -151,9 +202,78 @@ bool CRenderSystemGLES::DestroyRenderSystem()
   PresentRenderImpl(true);
 
   ReleaseShaders();
+  // The DrawQuad callback holds a reference to m_quadDrawer; nothing may draw through it from now on.
+  CGUITexture::UnregisterDrawQuad();
+  m_guiQuadIndexBuffer.Destroy();
+  m_guiUnitQuad.Destroy();
   m_bRenderCreated = false;
 
   return true;
+}
+
+void CRenderSystemGLES::BindGUIQuadIndices(std::size_t quadCount)
+{
+  const std::size_t needed = quadCount * 6;
+  if (m_guiQuadIndexBuffer && m_guiQuadIndices.size() >= needed)
+  {
+    m_guiQuadIndexBuffer.Bind();
+    return;
+  }
+
+  static constexpr std::array<GLushort, 6> pattern{0, 1, 2, 2, 3, 0};
+  m_guiQuadIndices.reserve(needed);
+  for (std::size_t quad = m_guiQuadIndices.size() / 6; quad < quadCount; ++quad)
+  {
+    for (GLushort offset : pattern)
+      m_guiQuadIndices.push_back(static_cast<GLushort>(quad * 4 + offset));
+  }
+  m_guiQuadIndexBuffer.SetData(m_guiQuadIndices.data(), m_guiQuadIndices.size(), GL_STATIC_DRAW);
+}
+
+void CRenderSystemGLES::BindGUIUnitQuad()
+{
+  // Triangle strip order: top left, top right, bottom left, bottom right.
+  static constexpr GLfloat unitQuad[4][2] = {
+      {0.0f, 0.0f}, {1.0f, 0.0f}, {0.0f, 1.0f}, {1.0f, 1.0f}};
+  m_guiUnitQuad.SetDataOnce(unitQuad);
+}
+
+void CRenderSystemGLES::DrawGUIQuad(const CPoint& origin,
+                                    const CPoint& right,
+                                    const CPoint& down,
+                                    const CRect* texCoords)
+{
+  glUniformMatrix4fv(GUIShaderGetGUIMatrix(), 1, GL_FALSE,
+                     KODI::UTILS::GL::QuadTransform(origin, right, down).data());
+
+  BindGUIUnitQuad();
+  const GLint posLoc = GUIShaderGetPos();
+  glVertexAttribPointer(posLoc, 2, GL_FLOAT, GL_FALSE, 0, 0);
+  glEnableVertexAttribArray(posLoc);
+
+  const GLint texLoc = texCoords ? GUIShaderGetCoord0() : -1;
+  if (texLoc >= 0)
+  {
+    const CRect& tex = *texCoords;
+    glUniformMatrix4fv(
+        GUIShaderGetCoord0Matrix(), 1, GL_FALSE,
+        KODI::UTILS::GL::QuadTransform({tex.x1, tex.y1}, {tex.x2, tex.y1}, {tex.x1, tex.y2})
+            .data());
+    glVertexAttribPointer(texLoc, 2, GL_FLOAT, GL_FALSE, 0, 0);
+    glEnableVertexAttribArray(texLoc);
+  }
+
+  glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+
+  glDisableVertexAttribArray(posLoc);
+  if (texLoc >= 0)
+    glDisableVertexAttribArray(texLoc);
+  glBindBuffer(GL_ARRAY_BUFFER, 0);
+}
+
+void CRenderSystemGLES::DrawGUIQuad(const CRect& rect, const CRect* texCoords)
+{
+  DrawGUIQuad({rect.x1, rect.y1}, {rect.x2, rect.y1}, {rect.x1, rect.y2}, texCoords);
 }
 
 bool CRenderSystemGLES::BeginRender()
@@ -161,15 +281,21 @@ bool CRenderSystemGLES::BeginRender()
   if (!m_bRenderCreated)
     return false;
 
-  bool useLimited = CServiceBroker::GetWinSystem()->UseLimitedColor();
+  m_GUIElementCount = 0;
 
-  if (m_limitedColorRange != useLimited)
+  const bool useLimited = CServiceBroker::GetWinSystem()->UseLimitedColor() &&
+                          !CServiceBroker::GetWinSystem()->IsHdrComposite();
+  const bool usePQ = CServiceBroker::GetWinSystem()->GetGfxContext().IsTransferPQ();
+
+  if (m_limitedColorRange != useLimited || m_transferPQ != usePQ)
   {
     ReleaseShaders();
+
+    m_limitedColorRange = useLimited;
+    m_transferPQ = usePQ;
+
     InitialiseShaders();
   }
-
-  m_limitedColorRange = useLimited;
 
   return true;
 }
@@ -182,7 +308,22 @@ bool CRenderSystemGLES::EndRender()
   return true;
 }
 
-bool CRenderSystemGLES::ClearBuffers(UTILS::COLOR::Color color)
+void CRenderSystemGLES::InvalidateColorBuffer()
+{
+  if (!m_bRenderCreated)
+    return;
+
+  // some platforms prefer a clear, instead of rendering over
+  if (GetClearFunction() == ClearFunction::FIXED_FUNCTION)
+  {
+    ClearBuffers(0);
+    return;
+  }
+
+  ClearBuffersWithStencil(GetEnabledFrontToBackRendering() ? GL_DEPTH_BUFFER_BIT : 0);
+}
+
+bool CRenderSystemGLES::ClearBuffers(KODI::UTILS::COLOR::Color color)
 {
   if (!m_bRenderCreated)
     return false;
@@ -195,7 +336,11 @@ bool CRenderSystemGLES::ClearBuffers(UTILS::COLOR::Color color)
   glClearColor(r, g, b, a);
 
   GLbitfield flags = GL_COLOR_BUFFER_BIT;
-  glClear(flags);
+
+  if (GetEnabledFrontToBackRendering())
+    flags |= GL_DEPTH_BUFFER_BIT;
+
+  ClearBuffersWithStencil(flags);
 
   return true;
 }
@@ -229,7 +374,7 @@ void CRenderSystemGLES::PresentRender(bool rendered, bool videoLayer)
 
   // if video is rendered to a separate layer, we should not block this thread
   if (!rendered && !videoLayer)
-    KODI::TIME::Sleep(40);
+    KODI::TIME::Sleep(40ms);
 }
 
 void CRenderSystemGLES::SetVSync(bool enable)
@@ -378,13 +523,40 @@ void CRenderSystemGLES::ResetScissors()
   SetScissors(CRect(0, 0, (float)m_width, (float)m_height));
 }
 
+void CRenderSystemGLES::SetDepthCulling(DepthCulling culling)
+{
+  if (culling == DepthCulling::OFF)
+  {
+    glDisable(GL_DEPTH_TEST);
+    glDepthMask(GL_FALSE);
+  }
+  else if (culling == DepthCulling::BACK_TO_FRONT)
+  {
+    glEnable(GL_DEPTH_TEST);
+    glDepthMask(GL_FALSE);
+    glDepthFunc(GL_GEQUAL);
+  }
+  else if (culling == DepthCulling::FRONT_TO_BACK)
+  {
+    glEnable(GL_DEPTH_TEST);
+    glDepthMask(GL_TRUE);
+    glDepthFunc(GL_GREATER);
+  }
+}
+
 void CRenderSystemGLES::InitialiseShaders()
 {
   std::string defines;
-  m_limitedColorRange = CServiceBroker::GetWinSystem()->UseLimitedColor();
+  m_limitedColorRange = CServiceBroker::GetWinSystem()->UseLimitedColor() &&
+                        !CServiceBroker::GetWinSystem()->IsHdrComposite();
   if (m_limitedColorRange)
   {
     defines += "#define KODI_LIMITED_RANGE 1\n";
+  }
+
+  if (m_transferPQ)
+  {
+    defines += "#define KODI_TRANSFER_PQ 1\n";
   }
 
   m_pShader[ShaderMethodGLES::SM_DEFAULT] =
@@ -405,6 +577,15 @@ void CRenderSystemGLES::InitialiseShaders()
     CLog::Log(LOGERROR, "GUI Shader gles_shader_texture.frag - compile and link failed");
   }
 
+  m_pShader[ShaderMethodGLES::SM_TEXTURE_111R] =
+      std::make_unique<CGLESShader>("gles_shader_texture_111r.frag", defines);
+  if (!m_pShader[ShaderMethodGLES::SM_TEXTURE_111R]->CompileAndLink())
+  {
+    m_pShader[ShaderMethodGLES::SM_TEXTURE_111R]->Free();
+    m_pShader[ShaderMethodGLES::SM_TEXTURE_111R].reset();
+    CLog::Log(LOGERROR, "GUI Shader gles_shader_texture_111r.frag - compile and link failed");
+  }
+
   m_pShader[ShaderMethodGLES::SM_MULTI] =
       std::make_unique<CGLESShader>("gles_shader_multi.frag", defines);
   if (!m_pShader[ShaderMethodGLES::SM_MULTI]->CompileAndLink())
@@ -414,13 +595,32 @@ void CRenderSystemGLES::InitialiseShaders()
     CLog::Log(LOGERROR, "GUI Shader gles_shader_multi.frag - compile and link failed");
   }
 
+  m_pShader[ShaderMethodGLES::SM_MULTI_RGBA_111R] =
+      std::make_unique<CGLESShader>("gles_shader_multi_rgba_111r.frag", defines);
+  if (!m_pShader[ShaderMethodGLES::SM_MULTI_RGBA_111R]->CompileAndLink())
+  {
+    m_pShader[ShaderMethodGLES::SM_MULTI_RGBA_111R]->Free();
+    m_pShader[ShaderMethodGLES::SM_MULTI_RGBA_111R].reset();
+    CLog::Log(LOGERROR, "GUI Shader gles_shader_multi_rgba_111r.frag - compile and link failed");
+  }
+
   m_pShader[ShaderMethodGLES::SM_FONTS] =
-      std::make_unique<CGLESShader>("gles_shader_fonts.frag", defines);
+      std::make_unique<CGLESShader>("gles_shader_simple.vert", "gles_shader_fonts.frag", defines);
   if (!m_pShader[ShaderMethodGLES::SM_FONTS]->CompileAndLink())
   {
     m_pShader[ShaderMethodGLES::SM_FONTS]->Free();
     m_pShader[ShaderMethodGLES::SM_FONTS].reset();
     CLog::Log(LOGERROR, "GUI Shader gles_shader_fonts.frag - compile and link failed");
+  }
+
+  m_pShader[ShaderMethodGLES::SM_FONTS_SHADER_CLIP] =
+      std::make_unique<CGLESShader>("gles_shader_clip.vert", "gles_shader_fonts.frag", defines);
+  if (!m_pShader[ShaderMethodGLES::SM_FONTS_SHADER_CLIP]->CompileAndLink())
+  {
+    m_pShader[ShaderMethodGLES::SM_FONTS_SHADER_CLIP]->Free();
+    m_pShader[ShaderMethodGLES::SM_FONTS_SHADER_CLIP].reset();
+    CLog::Log(LOGERROR, "GUI Shader gles_shader_clip.vert + gles_shader_fonts.frag - compile "
+                        "and link failed");
   }
 
   m_pShader[ShaderMethodGLES::SM_TEXTURE_NOBLEND] =
@@ -439,6 +639,26 @@ void CRenderSystemGLES::InitialiseShaders()
     m_pShader[ShaderMethodGLES::SM_MULTI_BLENDCOLOR]->Free();
     m_pShader[ShaderMethodGLES::SM_MULTI_BLENDCOLOR].reset();
     CLog::Log(LOGERROR, "GUI Shader gles_shader_multi_blendcolor.frag - compile and link failed");
+  }
+
+  m_pShader[ShaderMethodGLES::SM_MULTI_RGBA_111R_BLENDCOLOR] =
+      std::make_unique<CGLESShader>("gles_shader_multi_rgba_111r_blendcolor.frag", defines);
+  if (!m_pShader[ShaderMethodGLES::SM_MULTI_RGBA_111R_BLENDCOLOR]->CompileAndLink())
+  {
+    m_pShader[ShaderMethodGLES::SM_MULTI_RGBA_111R_BLENDCOLOR]->Free();
+    m_pShader[ShaderMethodGLES::SM_MULTI_RGBA_111R_BLENDCOLOR].reset();
+    CLog::Log(LOGERROR,
+              "GUI Shader gles_shader_multi_rgba_111r_blendcolor.frag - compile and link failed");
+  }
+
+  m_pShader[ShaderMethodGLES::SM_MULTI_111R_111R_BLENDCOLOR] =
+      std::make_unique<CGLESShader>("gles_shader_multi_111r_111r_blendcolor.frag", defines);
+  if (!m_pShader[ShaderMethodGLES::SM_MULTI_111R_111R_BLENDCOLOR]->CompileAndLink())
+  {
+    m_pShader[ShaderMethodGLES::SM_MULTI_111R_111R_BLENDCOLOR]->Free();
+    m_pShader[ShaderMethodGLES::SM_MULTI_111R_111R_BLENDCOLOR].reset();
+    CLog::Log(LOGERROR,
+              "GUI Shader gles_shader_multi_111r_111r_blendcolor.frag - compile and link failed");
   }
 
   m_pShader[ShaderMethodGLES::SM_TEXTURE_RGBA] =
@@ -468,7 +688,7 @@ void CRenderSystemGLES::InitialiseShaders()
     CLog::Log(LOGERROR, "GUI Shader gles_shader_rgba_bob.frag - compile and link failed");
   }
 
-  if (IsExtSupported("GL_OES_EGL_image_external"))
+  if (CGLExtensions::IsExtensionSupported(CGLExtensions::OES_EGL_image_external))
   {
     m_pShader[ShaderMethodGLES::SM_TEXTURE_RGBA_OES] =
         std::make_unique<CGLESShader>("gles_shader_rgba_oes.frag", defines);
@@ -498,6 +718,28 @@ void CRenderSystemGLES::InitialiseShaders()
     m_pShader[ShaderMethodGLES::SM_TEXTURE_NOALPHA].reset();
     CLog::Log(LOGERROR, "GUI Shader gles_shader_texture_noalpha.frag - compile and link failed");
   }
+
+  const std::string definesFontsRGBA = defines + "#define KODI_FONTS_RGBA 1\n";
+
+  m_pShader[ShaderMethodGLES::SM_FONTS_RGBA] = std::make_unique<CGLESShader>(
+      "gles_shader_simple.vert", "gles_shader_fonts.frag", definesFontsRGBA);
+  if (!m_pShader[ShaderMethodGLES::SM_FONTS_RGBA]->CompileAndLink())
+  {
+    m_pShader[ShaderMethodGLES::SM_FONTS_RGBA]->Free();
+    m_pShader[ShaderMethodGLES::SM_FONTS_RGBA].reset();
+    CLog::Log(LOGERROR, "GUI Shader gles_shader_simple.vert + gles_shader_fonts.frag (RGBA) - "
+                        "compile and link failed");
+  }
+
+  m_pShader[ShaderMethodGLES::SM_FONTS_RGBA_SHADER_CLIP] = std::make_unique<CGLESShader>(
+      "gles_shader_clip.vert", "gles_shader_fonts.frag", definesFontsRGBA);
+  if (!m_pShader[ShaderMethodGLES::SM_FONTS_RGBA_SHADER_CLIP]->CompileAndLink())
+  {
+    m_pShader[ShaderMethodGLES::SM_FONTS_RGBA_SHADER_CLIP]->Free();
+    m_pShader[ShaderMethodGLES::SM_FONTS_RGBA_SHADER_CLIP].reset();
+    CLog::Log(LOGERROR, "GUI Shader gles_shader_clip.vert + gles_shader_fonts.frag (RGBA) - "
+                        "compile and link failed");
+  }
 }
 
 void CRenderSystemGLES::ReleaseShaders()
@@ -510,13 +752,25 @@ void CRenderSystemGLES::ReleaseShaders()
     m_pShader[ShaderMethodGLES::SM_TEXTURE]->Free();
   m_pShader[ShaderMethodGLES::SM_TEXTURE].reset();
 
+  if (m_pShader[ShaderMethodGLES::SM_TEXTURE_111R])
+    m_pShader[ShaderMethodGLES::SM_TEXTURE_111R]->Free();
+  m_pShader[ShaderMethodGLES::SM_TEXTURE_111R].reset();
+
   if (m_pShader[ShaderMethodGLES::SM_MULTI])
     m_pShader[ShaderMethodGLES::SM_MULTI]->Free();
   m_pShader[ShaderMethodGLES::SM_MULTI].reset();
 
+  if (m_pShader[ShaderMethodGLES::SM_MULTI_RGBA_111R])
+    m_pShader[ShaderMethodGLES::SM_MULTI_RGBA_111R]->Free();
+  m_pShader[ShaderMethodGLES::SM_MULTI_RGBA_111R].reset();
+
   if (m_pShader[ShaderMethodGLES::SM_FONTS])
     m_pShader[ShaderMethodGLES::SM_FONTS]->Free();
   m_pShader[ShaderMethodGLES::SM_FONTS].reset();
+
+  if (m_pShader[ShaderMethodGLES::SM_FONTS_SHADER_CLIP])
+    m_pShader[ShaderMethodGLES::SM_FONTS_SHADER_CLIP]->Free();
+  m_pShader[ShaderMethodGLES::SM_FONTS_SHADER_CLIP].reset();
 
   if (m_pShader[ShaderMethodGLES::SM_TEXTURE_NOBLEND])
     m_pShader[ShaderMethodGLES::SM_TEXTURE_NOBLEND]->Free();
@@ -525,6 +779,14 @@ void CRenderSystemGLES::ReleaseShaders()
   if (m_pShader[ShaderMethodGLES::SM_MULTI_BLENDCOLOR])
     m_pShader[ShaderMethodGLES::SM_MULTI_BLENDCOLOR]->Free();
   m_pShader[ShaderMethodGLES::SM_MULTI_BLENDCOLOR].reset();
+
+  if (m_pShader[ShaderMethodGLES::SM_MULTI_RGBA_111R_BLENDCOLOR])
+    m_pShader[ShaderMethodGLES::SM_MULTI_RGBA_111R_BLENDCOLOR]->Free();
+  m_pShader[ShaderMethodGLES::SM_MULTI_RGBA_111R_BLENDCOLOR].reset();
+
+  if (m_pShader[ShaderMethodGLES::SM_MULTI_111R_111R_BLENDCOLOR])
+    m_pShader[ShaderMethodGLES::SM_MULTI_111R_111R_BLENDCOLOR]->Free();
+  m_pShader[ShaderMethodGLES::SM_MULTI_111R_111R_BLENDCOLOR].reset();
 
   if (m_pShader[ShaderMethodGLES::SM_TEXTURE_RGBA])
     m_pShader[ShaderMethodGLES::SM_TEXTURE_RGBA]->Free();
@@ -549,6 +811,14 @@ void CRenderSystemGLES::ReleaseShaders()
   if (m_pShader[ShaderMethodGLES::SM_TEXTURE_NOALPHA])
     m_pShader[ShaderMethodGLES::SM_TEXTURE_NOALPHA]->Free();
   m_pShader[ShaderMethodGLES::SM_TEXTURE_NOALPHA].reset();
+
+  if (m_pShader[ShaderMethodGLES::SM_FONTS_RGBA])
+    m_pShader[ShaderMethodGLES::SM_FONTS_RGBA]->Free();
+  m_pShader[ShaderMethodGLES::SM_FONTS_RGBA].reset();
+
+  if (m_pShader[ShaderMethodGLES::SM_FONTS_RGBA_SHADER_CLIP])
+    m_pShader[ShaderMethodGLES::SM_FONTS_RGBA_SHADER_CLIP]->Free();
+  m_pShader[ShaderMethodGLES::SM_FONTS_RGBA_SHADER_CLIP].reset();
 }
 
 void CRenderSystemGLES::EnableGUIShader(ShaderMethodGLES method)
@@ -605,6 +875,70 @@ GLint CRenderSystemGLES::GUIShaderGetCoord1()
   return -1;
 }
 
+GLint CRenderSystemGLES::GUIShaderGetDepth()
+{
+  if (m_pShader[m_method])
+    return m_pShader[m_method]->GetDepthLoc();
+
+  return -1;
+}
+
+GLint CRenderSystemGLES::GUIShaderGetPma()
+{
+  if (m_pShader[m_method])
+    return m_pShader[m_method]->GetPmaLoc();
+
+  return -1;
+}
+
+GLint CRenderSystemGLES::GUIShaderGetGUIMatrix()
+{
+  if (m_pShader[m_method])
+    return m_pShader[m_method]->GetGUIMatrixLoc();
+
+  return -1;
+}
+
+GLint CRenderSystemGLES::GUIShaderGetSnap()
+{
+  if (m_pShader[m_method])
+    return m_pShader[m_method]->GetSnapLoc();
+
+  return -1;
+}
+
+GLint CRenderSystemGLES::GUIShaderGetAttrSnap()
+{
+  if (m_pShader[m_method])
+    return m_pShader[m_method]->GetAttrSnapLoc();
+
+  return -1;
+}
+
+GLint CRenderSystemGLES::GUIShaderGetQuadClip()
+{
+  if (m_pShader[m_method])
+    return m_pShader[m_method]->GetQuadClipLoc();
+
+  return -1;
+}
+
+GLint CRenderSystemGLES::GUIShaderGetQuadRect()
+{
+  if (m_pShader[m_method])
+    return m_pShader[m_method]->GetQuadRectLoc();
+
+  return -1;
+}
+
+GLint CRenderSystemGLES::GUIShaderGetTexSwap()
+{
+  if (m_pShader[m_method])
+    return m_pShader[m_method]->GetTexSwapLoc();
+
+  return -1;
+}
+
 GLint CRenderSystemGLES::GUIShaderGetUniCol()
 {
   if (m_pShader[m_method])
@@ -653,15 +987,46 @@ GLint CRenderSystemGLES::GUIShaderGetBrightness()
   return -1;
 }
 
-bool CRenderSystemGLES::SupportsStereo(RENDER_STEREO_MODE mode) const
+bool CRenderSystemGLES::SupportsStereo(RenderStereoMode mode) const
 {
   return CRenderSystemBase::SupportsStereo(mode);
 }
 
-GLint CRenderSystemGLES::GUIShaderGetModel()
+GLint CRenderSystemGLES::GUIShaderGetMatrix()
 {
   if (m_pShader[m_method])
-    return m_pShader[m_method]->GetModelLoc();
+    return m_pShader[m_method]->GetMatrixLoc();
 
   return -1;
+}
+
+GLint CRenderSystemGLES::GUIShaderGetClip()
+{
+  if (m_pShader[m_method])
+    return m_pShader[m_method]->GetShaderClipLoc();
+
+  return -1;
+}
+
+GLint CRenderSystemGLES::GUIShaderGetCoordStep()
+{
+  if (m_pShader[m_method])
+    return m_pShader[m_method]->GetShaderCoordStepLoc();
+
+  return -1;
+}
+
+std::string CRenderSystemGLES::GetShaderPath(const std::string& filename)
+{
+  std::string path = "GLES/2.0/";
+
+  if (m_RenderVersionMajor >= 3 && m_RenderVersionMinor >= 1)
+  {
+    std::string file = "special://xbmc/system/shaders/GLES/3.1/" + filename;
+    const CURL pathToUrl(file);
+    if (CFileUtils::Exists(pathToUrl.Get()))
+      return "GLES/3.1/";
+  }
+
+  return path;
 }

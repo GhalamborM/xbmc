@@ -18,10 +18,18 @@ namespace XFILE
     {
     public:
       CDirectoryNodeSeasons(const std::string& strName, CDirectoryNode* pParent);
+
     protected:
-      NODE_TYPE GetChildType() const override;
+      NodeType GetChildType() const override;
       bool GetContent(CFileItemList& items) const override;
       std::string GetLocalizedName() const override;
+
+    private:
+      /*!
+       * \brief Get the title of chosen season.
+       * \return The season title.
+       */
+      std::string GetSeasonTitle() const;
     };
   }
 }

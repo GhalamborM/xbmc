@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2012-2018 Team Kodi
+ *  Copyright (C) 2012-2026 Team Kodi
  *  This file is part of Kodi - https://kodi.tv
  *
  *  SPDX-License-Identifier: GPL-2.0-or-later
@@ -9,8 +9,8 @@
 #pragma once
 
 #include "guilib/ISliderCallback.h"
-#include "input/Key.h"
-#include "interfaces/IActionListener.h"
+#include "input/actions/interfaces/IActionListener.h"
+#include "utils/MovingSpeed.h"
 
 /*! \brief Player controller class to handle user actions.
 
@@ -18,7 +18,7 @@
  altering subtitles and audio tracks, changing aspect ratio, subtitle placement,
  and placement of the video on screen.
  */
-class CPlayerController : public ISliderCallback, public IActionListener
+class CPlayerController : public ISliderCallback, public KODI::ACTION::IActionListener
 {
 public:
   static CPlayerController& GetInstance();
@@ -35,7 +35,7 @@ public:
   void OnSliderChange(void *data, CGUISliderControl *slider) override;
 
 protected:
-  CPlayerController() = default;
+  CPlayerController();
   CPlayerController(const CPlayerController&) = delete;
   CPlayerController& operator=(CPlayerController const&) = delete;
   ~CPlayerController() override;
@@ -52,5 +52,11 @@ private:
    */
   void ShowSlider(int action, int label, float value, float min, float delta, float max, bool modal = false);
 
+  /*! \brief switch to the next audio stream of the playing file and notify the user
+   \return true if the action is considered handled
+   */
+  bool NextAudioStream();
+
   int m_sliderAction = 0; ///< \brief set to the action id for a slider being displayed \sa ShowSlider
+  KODI::UTILS::MOVING_SPEED::CMovingSpeed m_movingSpeed;
 };

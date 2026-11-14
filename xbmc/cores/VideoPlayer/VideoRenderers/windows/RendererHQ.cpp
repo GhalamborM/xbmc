@@ -1,5 +1,5 @@
 ﻿/*
- *  Copyright (C) 2017-2019 Team Kodi
+ *  Copyright (C) 2017-2026 Team Kodi
  *  This file is part of Kodi - https://kodi.tv
  *
  *  SPDX-License-Identifier: GPL-2.0-or-later
@@ -10,15 +10,18 @@
 
 #include "ServiceBroker.h"
 #include "dialogs/GUIDialogKaiToast.h"
-#include "guilib/LocalizeStrings.h"
 #include "rendering/dx/DeviceResources.h"
 #include "rendering/dx/RenderContext.h"
+#include "resources/LocalizeStrings.h"
+#include "resources/ResourcesComponent.h"
 #include "settings/AdvancedSettings.h"
 #include "settings/Settings.h"
 #include "settings/SettingsComponent.h"
 #include "utils/log.h"
 
-bool CRendererHQ::Supports(ESCALINGMETHOD method)
+#include <cmath>
+
+bool CRendererHQ::Supports(ESCALINGMETHOD method) const
 {
   if (method == VS_SCALINGMETHOD_AUTO)
     return true;
@@ -114,6 +117,7 @@ void CRendererHQ::UpdateVideoFilters()
 
   if (m_bUseHQScaler && !m_scalerShader)
   {
+    m_intermediateState = {};
     // firstly try the more efficient two pass convolution shader
     m_scalerShader = std::make_unique<CConvolutionShaderSeparable>();
 
@@ -133,18 +137,84 @@ void CRendererHQ::UpdateVideoFilters()
         // we are in a big trouble
         m_scalerShader.reset();
         m_bUseHQScaler = false;
-        CGUIDialogKaiToast::QueueNotification(CGUIDialogKaiToast::Error, g_localizeStrings.Get(34400), g_localizeStrings.Get(34401));
+        CGUIDialogKaiToast::QueueNotification(
+            CGUIDialogKaiToast::Error,
+            CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(34400),
+            CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(34401));
       }
     }
   }
+  if (m_scalerShader)
+    m_scalerShader->SetFinalShader(true);
 }
 
 void CRendererHQ::FinalOutput(CD3DTexture& source, CD3DTexture& target, const CRect& sourceRect, const CPoint(&destPoints)[4])
 {
   if (HasHQScaler())
   {
-    const CRect destRect = CServiceBroker::GetWinSystem()->GetGfxContext().StereoCorrection(CRect(destPoints[0], destPoints[2]));
-    m_scalerShader->Render(source, target, sourceRect, destRect, false);
+    auto& context = CServiceBroker::GetWinSystem()->GetGfxContext();
+    const CRect destRect = context.StereoCorrection(CRect(destPoints[0], destPoints[2]));
+
+    // the cache is only valid for the back buffer, the scaler binds its depth stencil view
+    if (&target != &DX::Windowing()->GetBackBuffer())
+    {
+      m_scalerShader->Render(source, target, sourceRect, destRect, false);
+      return;
+    }
+
+    // the copy bypasses the output merger, so it ignores the colour write masks of the anaglyph
+    // modes and always writes the first array slice (left eye) of a hardware stereo back buffer
+    switch (context.GetStereoMode())
+    {
+      case RenderStereoMode::ANAGLYPH_RED_CYAN:
+      case RenderStereoMode::ANAGLYPH_GREEN_MAGENTA:
+      case RenderStereoMode::ANAGLYPH_YELLOW_BLUE:
+      case RenderStereoMode::HARDWAREBASED:
+        m_scaledCache.Release();
+        m_scalerShader->Render(source, target, sourceRect, destRect, false);
+        return;
+      default:
+        break;
+    }
+
+    // Release() keeps the size and format, check the texture itself too
+    const bool cacheFits = m_scaledCache.Get() != nullptr &&
+                           m_scaledCache.GetWidth() == target.GetWidth() &&
+                           m_scaledCache.GetHeight() == target.GetHeight() &&
+                           m_scaledCache.GetFormat() == target.GetFormat();
+    if (!cacheFits)
+    {
+      m_scaledCache.Release();
+      if (!m_scaledCache.Create(target.GetWidth(), target.GetHeight(), 1, D3D11_USAGE_DEFAULT,
+                                target.GetFormat()))
+      {
+        m_scalerShader->Render(source, target, sourceRect, destRect, false);
+        return;
+      }
+    }
+
+    // destRect is per eye in the split stereo modes, the same picture lands somewhere else
+    if (!m_reuseIntermediate || !cacheFits || destRect != m_scaledCacheRect)
+    {
+      // the copy below is rounded to whole pixels, keep pixels outside the picture black
+      float black[4] = {};
+      DX::DeviceResources::Get()->ClearRenderTarget(m_scaledCache.GetRenderTarget(), black);
+      m_scalerShader->Render(source, m_scaledCache, sourceRect, destRect, false);
+      m_scaledCacheRect = destRect;
+    }
+
+    CRect area = destRect;
+    area.Intersect(context.StereoCorrection(context.GetScissors()));
+    area.Intersect(CRect(0.0f, 0.0f, static_cast<float>(target.GetWidth()),
+                         static_cast<float>(target.GetHeight())));
+    if (area.IsEmpty())
+      return;
+
+    const D3D11_BOX box{
+        static_cast<UINT>(std::floor(area.x1)), static_cast<UINT>(std::floor(area.y1)), 0,
+        static_cast<UINT>(std::ceil(area.x2)),  static_cast<UINT>(std::ceil(area.y2)),  1};
+    DX::DeviceResources::Get()->GetD3DContext()->CopySubresourceRegion(
+        target.Get(), 0, box.left, box.top, 0, m_scaledCache.Get(), 0, &box);
   }
   else
   {

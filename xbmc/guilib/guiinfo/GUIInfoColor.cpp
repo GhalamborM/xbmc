@@ -29,11 +29,10 @@ bool CGUIInfoColor::Update(const CGUIListItem* item /* = nullptr */)
     infoLabel = CServiceBroker::GetGUI()->GetInfoManager().GetItemLabel(
         static_cast<const CFileItem*>(item), 0, m_info);
   else
-    infoLabel = CServiceBroker::GetGUI()->GetInfoManager().GetLabel(m_info);
+    infoLabel = CServiceBroker::GetGUI()->GetInfoManager().GetLabel(m_info, INFO::DEFAULT_CONTEXT);
 
-  UTILS::COLOR::Color color =
-      !infoLabel.empty() ? CServiceBroker::GetGUI()->GetColorManager().GetColor(infoLabel.c_str())
-                         : 0;
+  KODI::UTILS::COLOR::Color color =
+      !infoLabel.empty() ? CServiceBroker::GetGUI()->GetColorManager().GetColor(infoLabel) : 0;
   if (m_color != color)
   {
     m_color = color;
@@ -43,7 +42,7 @@ bool CGUIInfoColor::Update(const CGUIListItem* item /* = nullptr */)
     return false;
 }
 
-void CGUIInfoColor::Parse(const std::string &label, int context)
+void CGUIInfoColor::Parse(const std::string& label, int context)
 {
   if (label.empty())
     return;
@@ -57,12 +56,16 @@ void CGUIInfoColor::Parse(const std::string &label, int context)
     label2 = label.substr(5, label.length() - 6);
     m_info = infoMgr.TranslateSkinVariableString(label2, context);
     if (!m_info)
-      m_info = infoMgr.RegisterSkinVariableString(g_SkinInfo->CreateSkinVariable(label2, context));
+    {
+      auto skin = CServiceBroker::GetGUI()->GetSkinInfo();
+      if (skin)
+        m_info = infoMgr.RegisterSkinVariableString(skin->CreateSkinVariable(label2, context));
+    }
     return;
   }
 
   if (StringUtils::StartsWithNoCase(label, "$info["))
-    label2 = label.substr(6, label.length()-7);
+    label2 = label.substr(6, label.length() - 7);
 
   m_info = infoMgr.TranslateString(label2);
   if (!m_info)

@@ -16,32 +16,40 @@
 #include "Util.h"
 #include "dialogs/GUIDialogBusy.h"
 #include "dialogs/GUIDialogFileBrowser.h"
-#include "filesystem/File.h"
+#include "dialogs/ImageChoices.h"
 #include "guilib/GUIComponent.h"
 #include "guilib/GUIWindowManager.h"
-#include "guilib/LocalizeStrings.h"
-#include "input/Key.h"
+#include "input/actions/Action.h"
+#include "input/actions/ActionIDs.h"
+#include "jobs/JobManager.h"
 #include "music/MusicDatabase.h"
+#include "music/MusicFileItemClassify.h"
 #include "music/MusicUtils.h"
 #include "music/tags/MusicInfoTag.h"
 #include "music/windows/GUIWindowMusicBase.h"
 #include "profiles/ProfileManager.h"
+#include "resources/LocalizeStrings.h"
+#include "resources/ResourcesComponent.h"
 #include "settings/MediaSourceSettings.h"
 #include "settings/SettingsComponent.h"
 #include "storage/MediaManager.h"
+#include "utils/ArtTypes.h"
+#include "utils/Artwork.h"
+#include "utils/DefaultArt.h"
+#include "utils/FileUtils.h"
 
-using namespace XFILE;
+using namespace KODI;
+using KODI::MEDIA::MediaSection;
 
 #define CONTROL_BTN_REFRESH       6
 #define CONTROL_USERRATING        7
+#define CONTROL_BTN_PLAY 8
 #define CONTROL_BTN_GET_THUMB     10
 #define CONTROL_ALBUMINFO         12
 
 #define CONTROL_LIST              50
 
 #define TIME_TO_BUSY_DIALOG 500
-
-
 
 class CGetSongInfoJob : public CJob
 {
@@ -185,6 +193,12 @@ bool CGUIDialogSongInfo::OnMessage(CGUIMessage& message)
           return true;
         }
       }
+      else if (iControl == CONTROL_BTN_PLAY)
+      {
+        OnPlaySong(m_song);
+        return true;
+      }
+      return false;
     }
     break;
   }
@@ -247,6 +261,7 @@ void CGUIDialogSongInfo::OnInitWindow()
   SET_CONTROL_LABEL(CONTROL_USERRATING, 38023);
   SET_CONTROL_LABEL(CONTROL_BTN_GET_THUMB, 13511);
   SET_CONTROL_LABEL(CONTROL_ALBUMINFO, 10523);
+  SET_CONTROL_LABEL(CONTROL_BTN_PLAY, 208);
 
   CGUIDialog::OnInitWindow();
 }
@@ -258,7 +273,7 @@ void CGUIDialogSongInfo::Update()
   {
     auto item = std::make_shared<CFileItem>(contributor.GetRoleDesc());
     item->SetLabel2(contributor.GetArtist());
-    item->GetMusicInfoTag()->SetDatabaseId(contributor.GetArtistId(), MediaTypeArtist);
+    item->GetMusicInfoTag()->SetDatabaseId(contributor.GetArtistId(), MEDIA::TYPE::ARTIST);
     items.Add(std::move(item));
   }
   CGUIMessage message(GUI_MSG_LABEL_BIND, GetID(), CONTROL_LIST, 0, 0, &items);
@@ -281,13 +296,14 @@ bool CGUIDialogSongInfo::SetSong(CFileItem* item)
   m_event.Reset();
   m_cancelled = false;  // SetSong happens before win_init
   // In a separate job fetch song info and fill list of art types.
-  int jobid = CJobManager::GetInstance().AddJob(new CGetSongInfoJob(), nullptr, CJob::PRIORITY_LOW);
+  int jobid =
+      CServiceBroker::GetJobManager()->AddJob(new CGetSongInfoJob(), nullptr, CJob::PRIORITY_LOW);
 
   // Wait to get all data before show, allowing user to cancel if fetch is slow
   if (!CGUIDialogBusy::WaitOnEvent(m_event, TIME_TO_BUSY_DIALOG))
   {
     // Cancel job still waiting in queue (unlikely)
-    CJobManager::GetInstance().CancelJob(jobid);
+    CServiceBroker::GetJobManager()->CancelJob(jobid);
     // Flag to stop job already in progress
     m_cancelled = true;
     return false;
@@ -330,13 +346,13 @@ void CGUIDialogSongInfo::OnGetArt()
     return; // Cancelled
 
   CFileItemList items;
-  CGUIListItem::ArtMap primeArt = m_song->GetArt(); // Song art without fallbacks
+  KODI::ART::Artwork primeArt = m_song->GetArt(); // Song art without fallbacks
   bool bHasArt = m_song->HasArt(type);
   bool bFallback(false);
   if (bHasArt)
   {
     // Check if that type of art is actually a fallback, e.g. album thumb or artist fanart
-    CGUIListItem::ArtMap::const_iterator i = primeArt.find(type);
+    auto i = primeArt.find(type);
     bFallback = (i == primeArt.end());
   }
 
@@ -344,39 +360,40 @@ void CGUIDialogSongInfo::OnGetArt()
   if (bHasArt)
   {
     // Add item for current artwork, could a fallback from album/artist
-    CFileItemPtr item(new CFileItem("thumb://Current", false));
-    item->SetArt("thumb", m_song->GetArt(type));
-    item->SetArt("icon", "DefaultPicture.png");
-    item->SetLabel(g_localizeStrings.Get(13512));  //! @todo: label fallback art so user knows?
+    CFileItemPtr item(new CFileItem(ART::CHOICE::CURRENT, false));
+    item->SetArt(ART::TYPE::THUMB, m_song->GetArt(type));
+    item->SetArt(ART::TYPE::ICON, ART::DEFAULT::PICTURE);
+    item->SetLabel(CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(
+        13512)); //! @todo: label fallback art so user knows?
     items.Add(item);
   }
-  else if (m_song->HasArt("thumb"))
+  else if (m_song->HasArt(ART::TYPE::THUMB))
   { // For missing art of that type add the thumb (when it exists and not a fallback)
-    CGUIListItem::ArtMap::const_iterator i = primeArt.find("thumb");
+    auto i = primeArt.find(ART::TYPE::THUMB);
     if (i != primeArt.end())
     {
-      CFileItemPtr item(new CFileItem("thumb://Thumb", false));
-      item->SetArt("thumb", m_song->GetArt("thumb"));
-      item->SetArt("icon", "DefaultAlbumCover.png");
-      item->SetLabel(g_localizeStrings.Get(21371));
+      CFileItemPtr item(new CFileItem(ART::CHOICE::THUMB, false));
+      item->SetArt(ART::TYPE::THUMB, m_song->GetArt(ART::TYPE::THUMB));
+      item->SetArt(ART::TYPE::ICON, ART::DEFAULT::ALBUM_COVER);
+      item->SetLabel(CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(21371));
       items.Add(item);
     }
   }
 
   std::string localThumb;
-  if (type == "thumb")
+  if (type == ART::TYPE::THUMB)
   { // Local thumb type art held in <filename>.tbn (for non-library items)
     localThumb = m_song->GetUserMusicThumb(true);
-    if (m_song->IsMusicDb())
+    if (MUSIC::IsMusicDb(*m_song))
     {
       CFileItem item(m_song->GetMusicInfoTag()->GetURL(), false);
       localThumb = item.GetUserMusicThumb(true);
     }
-    if (CFile::Exists(localThumb))
+    if (CFileUtils::Exists(localThumb))
     {
-      CFileItemPtr item(new CFileItem("thumb://Local", false));
-      item->SetArt("thumb", localThumb);
-      item->SetLabel(g_localizeStrings.Get(20017));
+      CFileItemPtr item(new CFileItem(ART::CHOICE::LOCAL, false));
+      item->SetArt(ART::TYPE::THUMB, localThumb);
+      item->SetLabel(CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(20017));
       items.Add(item);
     }
   }
@@ -385,21 +402,18 @@ void CGUIDialogSongInfo::OnGetArt()
   // local file changes immediately
   for (auto& item : items)
   {
-    std::string thumb(item->GetArt("thumb"));
+    std::string thumb(item->GetArt(ART::TYPE::THUMB));
     if (thumb.empty())
       continue;
-    CTextureCache::GetInstance().ClearCachedImage(thumb);
-    // Remove any thumbnail of local image too (created when browsing files)
-    std::string thumbthumb(CTextureUtils::GetWrappedThumbURL(thumb));
-    CTextureCache::GetInstance().ClearCachedImage(thumbthumb);
+    CServiceBroker::GetTextureCache()->ClearCachedImage(thumb);
   }
 
   if (bHasArt && !bFallback)
   { // Actually has this type of art (not a fallback) so
     // allow the user to delete it by selecting "no art".
-    CFileItemPtr item(new CFileItem("thumb://None", false));
-    item->SetArt("thumb", "DefaultAlbumCover.png");
-    item->SetLabel(g_localizeStrings.Get(13515));
+    CFileItemPtr item(new CFileItem(ART::CHOICE::NONE, false));
+    item->SetArt(ART::TYPE::THUMB, ART::DEFAULT::ALBUM_COVER);
+    item->SetLabel(CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(13515));
     items.Add(item);
   }
 
@@ -407,7 +421,8 @@ void CGUIDialogSongInfo::OnGetArt()
 
   // Show list of possible art for user selection
   std::string result;
-  VECSOURCES sources(*CMediaSourceSettings::GetInstance().GetSources("music"));
+  std::vector<CMediaSource> sources(
+      CMediaSourceSettings::GetInstance().GetSources(MediaSection::MUSIC));
   // Add album folder as source (could be disc set)
   std::string albumpath = m_song->GetProperty("album_path").asString();
   if (!albumpath.empty())
@@ -418,19 +433,21 @@ void CGUIDialogSongInfo::OnGetArt()
   else  // Add parent folder of song
     CGUIDialogMusicInfo::AddItemPathToFileBrowserSources(sources, *m_song);
   CServiceBroker::GetMediaManager().GetLocalDrives(sources);
-  if (CGUIDialogFileBrowser::ShowAndGetImage(items, sources, g_localizeStrings.Get(13511), result) &&
-    result != "thumb://Current")
+  if (CGUIDialogFileBrowser::ShowAndGetImage(
+          items, sources, CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(13511),
+          result) &&
+      result != ART::CHOICE::CURRENT)
   {
     // User didn't choose the one they have, or the fallback image.
     // Overwrite with the new art or clear it
     std::string newArt;
-    if (result == "thumb://Thumb")
-      newArt = m_song->GetArt("thumb");
-    else if (result == "thumb://Local")
+    if (result == ART::CHOICE::THUMB)
+      newArt = m_song->GetArt(ART::TYPE::THUMB);
+    else if (result == ART::CHOICE::LOCAL)
       newArt = localThumb;
 //    else if (result == "thumb://Embedded")
 //      newArt = embeddedArt;
-    else if (CFile::Exists(result))
+    else if (CFileUtils::Exists(result))
       newArt = result;
     else // none
       newArt.clear();
@@ -457,7 +474,7 @@ void CGUIDialogSongInfo::OnGetArt()
     {
       if (artitem->GetProperty("artType") == type)
       {
-        artitem->SetArt("thumb", newArt);
+        artitem->SetArt(ART::TYPE::THUMB, newArt);
         break;
       }
     }
@@ -485,9 +502,9 @@ void CGUIDialogSongInfo::OnSetUserrating()
 
 void CGUIDialogSongInfo::ShowFor(CFileItem* pItem)
 {
-  if (pItem->m_bIsFolder)
+  if (pItem->IsFolder())
     return;
-  if (!pItem->IsMusicDb())
+  if (!MUSIC::IsMusicDb(*pItem))
     pItem->LoadMusicTag();
   if (!pItem->HasMusicInfoTag())
     return;
@@ -507,5 +524,10 @@ void CGUIDialogSongInfo::ShowFor(CFileItem* pItem)
       }
     }
   }
+}
 
+void CGUIDialogSongInfo::OnPlaySong(const std::shared_ptr<CFileItem>& item)
+{
+  Close(true);
+  MUSIC_UTILS::PlayItem(item, "");
 }

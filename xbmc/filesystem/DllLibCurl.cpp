@@ -8,11 +8,11 @@
 
 #include "DllLibCurl.h"
 
-#include "threads/SingleLock.h"
 #include "threads/SystemClock.h"
 #include "utils/log.h"
 
 #include <assert.h>
+#include <mutex>
 
 namespace XCURL
 {
@@ -123,13 +123,22 @@ DllLibCurlGlobal::DllLibCurlGlobal()
 
 DllLibCurlGlobal::~DllLibCurlGlobal()
 {
+  for (auto& session : m_sessions)
+  {
+    if (session.m_multi && session.m_easy)
+      multi_remove_handle(session.m_multi, session.m_easy);
+    if (session.m_easy)
+      easy_cleanup(session.m_easy);
+    if (session.m_multi)
+      multi_cleanup(session.m_multi);
+  }
   // close libcurl
   curl_global_cleanup();
 }
 
 void DllLibCurlGlobal::CheckIdle()
 {
-  CSingleLock lock(m_critSection);
+  std::unique_lock lock(m_critSection);
   /* 20 seconds idle time before closing handle */
   const unsigned int idletime = 30000;
 
@@ -166,7 +175,7 @@ void DllLibCurlGlobal::easy_acquire(const char* protocol,
 {
   assert(easy_handle != NULL);
 
-  CSingleLock lock(m_critSection);
+  std::unique_lock lock(m_critSection);
 
   for (auto& it : m_sessions)
   {
@@ -222,7 +231,7 @@ void DllLibCurlGlobal::easy_acquire(const char* protocol,
 
 void DllLibCurlGlobal::easy_release(CURL_HANDLE** easy_handle, CURLM** multi_handle)
 {
-  CSingleLock lock(m_critSection);
+  std::unique_lock lock(m_critSection);
 
   CURL_HANDLE* easy = NULL;
   CURLM* multi = NULL;
@@ -255,7 +264,7 @@ void DllLibCurlGlobal::easy_release(CURL_HANDLE** easy_handle, CURLM** multi_han
 
 CURL_HANDLE* DllLibCurlGlobal::easy_duphandle(CURL_HANDLE* easy_handle)
 {
-  CSingleLock lock(m_critSection);
+  std::unique_lock lock(m_critSection);
 
   for (const auto& it : m_sessions)
   {
@@ -271,11 +280,11 @@ CURL_HANDLE* DllLibCurlGlobal::easy_duphandle(CURL_HANDLE* easy_handle)
 }
 
 void DllLibCurlGlobal::easy_duplicate(CURL_HANDLE* easy,
-                                      CURLM* multi,
+                                      const CURLM* multi,
                                       CURL_HANDLE** easy_out,
                                       CURLM** multi_out)
 {
-  CSingleLock lock(m_critSection);
+  std::unique_lock lock(m_critSection);
 
   if (easy_out && easy)
     *easy_out = DllLibCurl::easy_duphandle(easy);

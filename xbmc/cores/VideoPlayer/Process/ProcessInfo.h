@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2005-2018 Team Kodi
+ *  Copyright (C) 2005-2026 Team Kodi
  *  This file is part of Kodi - https://kodi.tv
  *
  *  SPDX-License-Identifier: GPL-2.0-or-later
@@ -48,14 +48,20 @@ public:
   float GetVideoFps();
   void SetVideoDAR(float dar);
   float GetVideoDAR();
+  void SetVideoLiveBitRate(int bitRate);
+  int GetVideoLiveBitRate();
+  void SetVideoQueueLevel(int level);
+  int GetVideoQueueLevel();
+  void SetVideoQueueDataLevel(int level);
+  int GetVideoQueueDataLevel();
   void SetVideoInterlaced(bool interlaced);
   bool GetVideoInterlaced();
   virtual EINTERLACEMETHOD GetFallbackDeintMethod();
   virtual void SetSwDeinterlacingMethods();
   void UpdateDeinterlacingMethods(std::list<EINTERLACEMETHOD> &methods);
-  bool Supports(EINTERLACEMETHOD method);
+  bool Supports(EINTERLACEMETHOD method) const;
   void SetDeinterlacingMethodDefault(EINTERLACEMETHOD method);
-  EINTERLACEMETHOD GetDeinterlacingMethodDefault();
+  EINTERLACEMETHOD GetDeinterlacingMethodDefault() const;
   CVideoBufferManager& GetVideoBufferManager();
   std::vector<AVPixelFormat> GetPixFormats();
   void SetPixFormats(std::vector<AVPixelFormat> &formats);
@@ -70,8 +76,19 @@ public:
   int GetAudioSampleRate();
   void SetAudioBitsPerSample(int bitsPerSample);
   int GetAudioBitsPerSample();
+  void SetAudioLiveBitRate(int bitRate);
+  int GetAudioLiveBitRate();
+  void SetAudioQueueLevel(int level);
+  int GetAudioQueueLevel();
+  void SetAudioQueueDataLevel(int level);
+  int GetAudioQueueDataLevel();
   virtual bool AllowDTSHDDecode();
   virtual bool WantsRawPassthrough() { return false; }
+
+  // subtitle info
+  void ResetSubtitleCodecInfo();
+  void SetSubtitleDecoderName(const std::string& name);
+  std::string GetSubtitleDecoderName();
 
   // render info
   void SetRenderClockSync(bool enabled);
@@ -80,12 +97,21 @@ public:
   void UpdateRenderBuffers(int queued, int discard, int free);
   void GetRenderBuffers(int &queued, int &discard, int &free);
   virtual std::vector<AVPixelFormat> GetRenderFormats();
+  virtual bool WantsDolbyVisionRpu() { return false; }
 
   // player states
+  /*!
+   * @brief Notifies that a seek operation has finished
+   * @param offset - the seek offset
+  */
+  void SeekFinished(int64_t offset);
+
   void SetStateSeeking(bool active);
   bool IsSeeking();
   void SetStateRealtime(bool state);
   bool IsRealtimeStream();
+  void SetStateStreaming(bool isStreaming);
+  bool IsStreaming();
   void SetSpeed(float speed);
   void SetNewSpeed(float speed);
   float GetNewSpeed();
@@ -95,14 +121,13 @@ public:
   void SetNewTempo(float tempo);
   float GetNewTempo();
   bool IsTempoAllowed(float tempo);
-  virtual float MinTempoPlatform();
-  virtual float MaxTempoPlatform();
   void SetLevelVQ(int level);
   int GetLevelVQ();
   void SetGuiRender(bool gui);
   bool GetGuiRender();
   void SetVideoRender(bool video);
   bool GetVideoRender();
+  unsigned int GetMaxPassthroughOffSyncDuration() const;
 
   void SetPlayTimes(time_t start, int64_t current, int64_t min, int64_t max);
   int64_t GetMaxTime();
@@ -110,10 +135,14 @@ public:
   // settings
   CVideoSettings GetVideoSettings();
   void SetVideoSettings(CVideoSettings &settings);
-  CVideoSettingsLocked& UpdateVideoSettings();
+  CVideoSettingsLocked& GetVideoSettingsLocked();
 
 protected:
   CProcessInfo();
+
+  virtual float MinTempoPlatform();
+  virtual float MaxTempoPlatform();
+
   static std::map<std::string, CreateProcessControl> m_processControls;
   CDataCacheCore *m_dataCache = nullptr;
 
@@ -127,10 +156,13 @@ protected:
   int m_videoHeight;
   float m_videoFPS;
   float m_videoDAR;
+  int m_videoLiveBitRate = 0;
+  int m_videoQueueLevel = 0;
+  int m_videoQueueDataLevel = 0;
   bool m_videoIsInterlaced;
   std::list<EINTERLACEMETHOD> m_deintMethods;
   EINTERLACEMETHOD m_deintMethodDefault;
-  CCriticalSection m_videoCodecSection;
+  mutable CCriticalSection m_videoCodecSection;
   CVideoBufferManager m_videoBufferManager;
   std::vector<AVPixelFormat> m_pixFormats;
 
@@ -139,7 +171,14 @@ protected:
   std::string m_audioChannels;
   int m_audioSampleRate;
   int m_audioBitsPerSample;
+  int m_audioLiveBitRate = 0;
+  int m_audioQueueLevel = 0;
+  int m_audioQueueDataLevel = 0;
   CCriticalSection m_audioCodecSection;
+
+  // player subtitle info
+  std::string m_subtitleDecoderName;
+  CCriticalSection m_subtitleCodecSection;
 
   // render info
   CCriticalSection m_renderSection;
@@ -165,6 +204,7 @@ protected:
   int64_t m_timeMax;
   int64_t m_timeMin;
   bool m_realTimeStream;
+  bool m_isStreaming{false};
 
   // settings
   CCriticalSection m_settingsSection;

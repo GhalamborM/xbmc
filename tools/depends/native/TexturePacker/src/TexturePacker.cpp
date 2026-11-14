@@ -44,6 +44,8 @@
 #define strncasecmp _strnicmp
 #endif
 
+#include <vector>
+
 #include <lzo/lzo1x.h>
 #include <sys/stat.h>
 
@@ -51,30 +53,88 @@
 
 #define DIR_SEPARATOR '/'
 
-const char *GetFormatString(unsigned int format)
+namespace
+{
+
+const char* GetFormatString(KD_TEX_FMT format)
 {
   switch (format)
   {
-  case XB_FMT_DXT1:
-    return "DXT1 ";
-  case XB_FMT_DXT3:
-    return "DXT3 ";
-  case XB_FMT_DXT5:
-    return "DXT5 ";
-  case XB_FMT_DXT5_YCoCg:
-    return "YCoCg";
-  case XB_FMT_A8R8G8B8:
-    return "ARGB ";
-  case XB_FMT_A8:
-    return "A8   ";
-  default:
-    return "?????";
+    case KD_TEX_FMT_SDR_R8:
+      return "R8   ";
+    case KD_TEX_FMT_SDR_RG8:
+      return "RG8  ";
+    case KD_TEX_FMT_SDR_RGBA8:
+      return "RGBA8";
+    case KD_TEX_FMT_SDR_BGRA8:
+      return "BGRA8";
+    default:
+      return "?????";
   }
 }
 
-void CreateSkeletonHeaderImpl(CXBTFWriter& xbtfWriter,
-                              const std::string& fullPath,
-                              const std::string& relativePath)
+void Usage()
+{
+  puts("Texture Packer Version 3");
+  puts("");
+  puts("Tool to pack XBT 3 texture files, used in Kodi Piers (v22).");
+  puts("Accepts the following file formats as input: PNG (preferred), JPG and GIF.");
+  puts("");
+  puts("Usage:");
+  puts("  -help            Show this screen.");
+  puts("  -input <dir>     Input directory. Default: current dir");
+  puts("  -output <dir>    Output directory/filename. Default: Textures.xbt");
+  puts("  -dupecheck       Enable duplicate file detection. Reduces output file size. Default: off");
+}
+
+} // namespace
+
+class TexturePacker
+{
+public:
+  TexturePacker() = default;
+  ~TexturePacker() = default;
+
+  void EnableDupeCheck() { m_dupecheck = true; }
+
+  void EnableVerboseOutput();
+
+  int createBundle(const std::string& InputDir, const std::string& OutputFile);
+
+  void SetFlags(unsigned int flags) { m_flags = flags; }
+
+private:
+  void CreateSkeletonHeader(CXBTFWriter& xbtfWriter,
+                            const std::string& fullPath,
+                            const std::string& relativePath = "");
+
+  CXBTFFrame CreateXBTFFrame(DecodedFrame& decodedFrame, CXBTFWriter& writer) const;
+
+  bool CheckDupe(MD5Context* ctx, unsigned int pos);
+
+  void ConvertToSingleChannel(RGBAImage& image, uint32_t channel);
+  void ConvertToDualChannel(RGBAImage& image);
+  void ReduceChannels(RGBAImage& image);
+
+  DecoderManager decoderManager;
+
+  std::map<std::string, unsigned int> m_hashes;
+  std::vector<unsigned int> m_dupes;
+
+  bool m_dupecheck{false};
+  bool m_verbose{false};
+  unsigned int m_flags{0};
+};
+
+void TexturePacker::EnableVerboseOutput()
+{
+  decoderManager.EnableVerboseOutput();
+  m_verbose = true;
+}
+
+void TexturePacker::CreateSkeletonHeader(CXBTFWriter& xbtfWriter,
+                                         const std::string& fullPath,
+                                         const std::string& relativePath)
 {
   struct dirent* dp;
   struct stat stat_p;
@@ -96,17 +156,18 @@ void CreateSkeletonHeaderImpl(CXBTFWriter& xbtfWriter,
         if (dp->d_type == DT_DIR || stat_p.st_mode & S_IFDIR)
         {
           std::string tmpPath = relativePath;
-          if (tmpPath.size() > 0)
+          if (!tmpPath.empty())
           {
             tmpPath += "/";
           }
 
-          CreateSkeletonHeaderImpl(xbtfWriter, fullPath + DIR_SEPARATOR + dp->d_name, tmpPath + dp->d_name);
+          CreateSkeletonHeader(xbtfWriter, fullPath + DIR_SEPARATOR + dp->d_name,
+                               tmpPath + dp->d_name);
         }
-        else if (DecoderManager::IsSupportedGraphicsFile(dp->d_name))
+        else if (decoderManager.IsSupportedGraphicsFile(dp->d_name))
         {
           std::string fileName = "";
-          if (relativePath.size() > 0)
+          if (!relativePath.empty())
           {
             fileName += relativePath;
             fileName += "/";
@@ -131,46 +192,52 @@ void CreateSkeletonHeaderImpl(CXBTFWriter& xbtfWriter,
   }
 }
 
-void CreateSkeletonHeader(CXBTFWriter& xbtfWriter, const std::string& fullPath)
+CXBTFFrame TexturePacker::CreateXBTFFrame(DecodedFrame& decodedFrame, CXBTFWriter& writer) const
 {
-  std::string temp;
-  CreateSkeletonHeaderImpl(xbtfWriter, fullPath, temp);
-}
+  const unsigned int delay = decodedFrame.delay;
+  const unsigned int width = decodedFrame.rgbaImage.width;
+  const unsigned int height = decodedFrame.rgbaImage.height;
+  const uint32_t bpp = decodedFrame.rgbaImage.bbp;
+  const unsigned int size = width * height * (bpp / 8);
+  const uint32_t format = static_cast<uint32_t>(decodedFrame.rgbaImage.textureFormat) |
+                          static_cast<uint32_t>(decodedFrame.rgbaImage.textureAlpha) |
+                          static_cast<uint32_t>(decodedFrame.rgbaImage.textureSwizzle);
+  unsigned char* data = (unsigned char*)decodedFrame.rgbaImage.pixels.data();
 
-CXBTFFrame appendContent(CXBTFWriter &writer, int width, int height, unsigned char *data, unsigned int size, unsigned int format, bool hasAlpha, unsigned int flags)
-{
   CXBTFFrame frame;
   lzo_uint packedSize = size;
 
-  if ((flags & FLAGS_USE_LZO) == FLAGS_USE_LZO)
+  if ((m_flags & FLAGS_USE_LZO) == FLAGS_USE_LZO)
   {
     // grab a temporary buffer for unpacking into
     packedSize = size + size / 16 + 64 + 3; // see simple.c in lzo
-    unsigned char *packed  = new unsigned char[packedSize];
-    unsigned char *working = new unsigned char[LZO1X_999_MEM_COMPRESS];
-    if (packed && working)
+
+    std::vector<uint8_t> packed;
+    packed.resize(packedSize);
+
+    std::vector<uint8_t> working;
+    working.resize(LZO1X_999_MEM_COMPRESS);
+
+    if (lzo1x_999_compress(data, size, packed.data(), &packedSize, working.data()) != LZO_E_OK ||
+        packedSize > size)
     {
-      if (lzo1x_999_compress(data, size, packed, &packedSize, working) != LZO_E_OK || packedSize > size)
-      {
-        // compression failed, or compressed size is bigger than uncompressed, so store as uncompressed
+      // compression failed, or compressed size is bigger than uncompressed, so store as uncompressed
+      packedSize = size;
+      writer.AppendContent(data, size);
+    }
+    else
+    { // success
+      lzo_uint optimSize = size;
+      if (lzo1x_optimize(packed.data(), packedSize, data, &optimSize, NULL) != LZO_E_OK ||
+          optimSize != size)
+      { //optimisation failed
         packedSize = size;
         writer.AppendContent(data, size);
       }
       else
       { // success
-        lzo_uint optimSize = size;
-        if (lzo1x_optimize(packed, packedSize, data, &optimSize, NULL) != LZO_E_OK || optimSize != size)
-        { //optimisation failed
-          packedSize = size;
-          writer.AppendContent(data, size);
-        }
-        else
-        { // success
-          writer.AppendContent(packed, packedSize);
-        }
+        writer.AppendContent(packed.data(), packedSize);
       }
-      delete[] working;
-      delete[] packed;
     }
   }
   else
@@ -181,77 +248,144 @@ CXBTFFrame appendContent(CXBTFWriter &writer, int width, int height, unsigned ch
   frame.SetUnpackedSize(size);
   frame.SetWidth(width);
   frame.SetHeight(height);
-  frame.SetFormat(hasAlpha ? format : format | XB_FMT_OPAQUE);
-  frame.SetDuration(0);
+  frame.SetFormat(format);
+  frame.SetDuration(delay);
   return frame;
 }
 
-bool HasAlpha(unsigned char *argb, unsigned int width, unsigned int height)
-{
-  unsigned char *p = argb + 3; // offset of alpha
-  for (unsigned int i = 0; i < 4*width*height; i += 4)
-  {
-    if (p[i] != 0xff)
-      return true;
-  }
-  return false;
-}
-
-CXBTFFrame createXBTFFrame(RGBAImage &image, CXBTFWriter& writer, double maxMSE, unsigned int flags)
-{
-
-  int width, height;
-  unsigned int format = 0;
-  unsigned char* argb = (unsigned char*)image.pixels;
-
-  width  = image.width;
-  height = image.height;
-  bool hasAlpha = HasAlpha(argb, width, height);
-
-  CXBTFFrame frame;
-  format = XB_FMT_A8R8G8B8;
-  frame = appendContent(writer, width, height, argb, (width * height * 4), format, hasAlpha, flags);
-
-  return frame;
-}
-
-void Usage()
-{
-  puts("Usage:");
-  puts("  -help            Show this screen.");
-  puts("  -input <dir>     Input directory. Default: current dir");
-  puts("  -output <dir>    Output directory/filename. Default: Textures.xbt");
-  puts("  -dupecheck       Enable duplicate file detection. Reduces output file size. Default: off");
-}
-
-static bool checkDupe(struct MD5Context* ctx,
-                      std::map<std::string, unsigned int>& hashes,
-                      std::vector<unsigned int>& dupes, unsigned int pos)
+bool TexturePacker::CheckDupe(MD5Context* ctx,
+                              unsigned int pos)
 {
   unsigned char digest[17];
   MD5Final(digest,ctx);
   digest[16] = 0;
   char hex[33];
-  sprintf(hex, "%02X%02X%02X%02X%02X%02X%02X%02X"\
-      "%02X%02X%02X%02X%02X%02X%02X%02X", digest[0], digest[1], digest[2],
-      digest[3], digest[4], digest[5], digest[6], digest[7], digest[8],
-      digest[9], digest[10], digest[11], digest[12], digest[13], digest[14],
-      digest[15]);
+  snprintf(hex, sizeof(hex),
+           "%02X%02X%02X%02X%02X%02X%02X%02X"
+           "%02X%02X%02X%02X%02X%02X%02X%02X",
+           digest[0], digest[1], digest[2], digest[3], digest[4], digest[5], digest[6], digest[7],
+           digest[8], digest[9], digest[10], digest[11], digest[12], digest[13], digest[14],
+           digest[15]);
   hex[32] = 0;
-  std::map<std::string, unsigned int>::iterator it = hashes.find(hex);
-  if (it != hashes.end())
+  std::map<std::string, unsigned int>::iterator it = m_hashes.find(hex);
+  if (it != m_hashes.end())
   {
-    dupes[pos] = it->second;
+    m_dupes[pos] = it->second;
     return true;
   }
 
-  hashes.insert(std::make_pair(hex,pos));
-  dupes[pos] = pos;
+  m_hashes[hex] = pos;
+  m_dupes[pos] = pos;
 
   return false;
 }
 
-int createBundle(const std::string& InputDir, const std::string& OutputFile, double maxMSE, unsigned int flags, bool dupecheck)
+void TexturePacker::ConvertToSingleChannel(RGBAImage& image, uint32_t channel)
+{
+  uint32_t size = (image.width * image.height);
+  for (uint32_t i = 0; i < size; i++)
+  {
+    image.pixels[i] = image.pixels[i * 4 + channel];
+  }
+
+  image.textureFormat = KD_TEX_FMT_SDR_R8;
+
+  image.bbp = 8;
+  image.pitch = 1 * image.width;
+}
+
+void TexturePacker::ConvertToDualChannel(RGBAImage& image)
+{
+  uint32_t size = (image.width * image.height);
+  for (uint32_t i = 0; i < size; i++)
+  {
+    image.pixels[i * 2] = image.pixels[i * 4];
+    image.pixels[i * 2 + 1] = image.pixels[i * 4 + 3];
+  }
+  image.textureFormat = KD_TEX_FMT_SDR_RG8;
+  image.bbp = 16;
+  image.pitch = 2 * image.width;
+}
+
+void TexturePacker::ReduceChannels(RGBAImage& image)
+{
+  if (image.textureFormat != KD_TEX_FMT_SDR_BGRA8)
+    return;
+
+  uint32_t size = (image.width * image.height);
+  uint8_t red = image.pixels[0];
+  uint8_t green = image.pixels[1];
+  uint8_t blue = image.pixels[2];
+  uint8_t alpha = image.pixels[3];
+  bool uniformRed = true;
+  bool uniformGreen = true;
+  bool uniformBlue = true;
+  bool uniformAlpha = true;
+  bool isGrey = true;
+  bool isIntensity = true;
+
+  // Checks each pixel for various properties.
+  for (uint32_t i = 0; i < size; i++)
+  {
+    if (image.pixels[i * 4] != red)
+      uniformRed = false;
+    if (image.pixels[i * 4 + 1] != green)
+      uniformGreen = false;
+    if (image.pixels[i * 4 + 2] != blue)
+      uniformBlue = false;
+    if (image.pixels[i * 4 + 3] != alpha)
+      uniformAlpha = false;
+    if (image.pixels[i * 4] != image.pixels[i * 4 + 1] ||
+        image.pixels[i * 4] != image.pixels[i * 4 + 2])
+      isGrey = false;
+    if (image.pixels[i * 4] != image.pixels[i * 4 + 1] ||
+        image.pixels[i * 4] != image.pixels[i * 4 + 2] ||
+        image.pixels[i * 4] != image.pixels[i * 4 + 3])
+      isIntensity = false;
+  }
+
+  if (uniformAlpha && alpha != 0xff)
+    printf("WARNING: uniform alpha detected! Consider using diffusecolor!\n");
+
+  bool isWhite = red == 0xff && green == 0xff && blue == 0xff;
+  if (uniformRed && uniformGreen && uniformBlue && !isWhite)
+    printf("WARNING: uniform color detected! Consider using diffusecolor!\n");
+
+  if (uniformAlpha && alpha == 0xff)
+  {
+    // we have a opaque texture, L or RGBX
+    if (isGrey)
+    {
+      ConvertToSingleChannel(image, 1);
+      image.textureSwizzle = KD_TEX_SWIZ_RRR1;
+    }
+    image.textureAlpha = KD_TEX_ALPHA_OPAQUE;
+  }
+  else if (uniformRed && uniformGreen && uniformBlue && isWhite)
+  {
+    // an alpha only texture
+    ConvertToSingleChannel(image, 3);
+    image.textureSwizzle = KD_TEX_SWIZ_111R;
+  }
+  else if (isIntensity)
+  {
+    // this is an intensity (GL_INTENSITY) texture
+    ConvertToSingleChannel(image, 0);
+    image.textureSwizzle = KD_TEX_SWIZ_RRRR;
+  }
+  else if (isGrey)
+  {
+    // a LA texture
+    ConvertToDualChannel(image);
+    image.textureSwizzle = KD_TEX_SWIZ_RRRG;
+  }
+  else
+  {
+    // BGRA
+  }
+}
+
+int TexturePacker::createBundle(const std::string& InputDir, const std::string& OutputFile)
 {
   CXBTFWriter writer(OutputFile);
   if (!writer.Create())
@@ -260,17 +394,10 @@ int createBundle(const std::string& InputDir, const std::string& OutputFile, dou
     return 1;
   }
 
-  std::map<std::string, unsigned int> hashes;
-  std::vector<unsigned int> dupes;
   CreateSkeletonHeader(writer, InputDir);
 
   std::vector<CXBTFFile> files = writer.GetFiles();
-  dupes.resize(files.size());
-  if (!dupecheck)
-  {
-    for (unsigned int i=0;i<dupes.size();++i)
-      dupes[i] = i;
-  }
+  m_dupes.resize(files.size());
 
   for (size_t i = 0; i < files.size(); i++)
   {
@@ -282,12 +409,9 @@ int createBundle(const std::string& InputDir, const std::string& OutputFile, dou
     fullPath += file.GetPath();
 
     std::string output = file.GetPath();
-    output = output.substr(0, 40);
-    while (output.size() < 46)
-      output += ' ';
 
     DecodedFrames frames;
-    bool loaded = DecoderManager::LoadFile(fullPath, frames);
+    bool loaded = decoderManager.LoadFile(fullPath, frames);
 
     if (!loaded)
     {
@@ -295,44 +419,57 @@ int createBundle(const std::string& InputDir, const std::string& OutputFile, dou
       continue;
     }
 
-    printf("%s\n", output.c_str());
+    for (unsigned int j = 0; j < frames.frameList.size(); j++)
+      ReduceChannels(frames.frameList[j].rgbaImage);
+
+    if(m_verbose)
+      printf("%s\n", output.c_str());
+
     bool skip=false;
-    if (dupecheck)
+    if (m_dupecheck)
     {
       for (unsigned int j = 0; j < frames.frameList.size(); j++)
-        MD5Update(&ctx,
-          (const uint8_t*)frames.frameList[j].rgbaImage.pixels,
-          frames.frameList[j].rgbaImage.height * frames.frameList[j].rgbaImage.pitch);
+        MD5Update(&ctx, (const uint8_t*)frames.frameList[j].rgbaImage.pixels.data(),
+                  frames.frameList[j].rgbaImage.height * frames.frameList[j].rgbaImage.pitch);
 
-      if (checkDupe(&ctx,hashes,dupes,i))
+      if (CheckDupe(&ctx, i))
       {
-        printf("****  duplicate of %s\n", files[dupes[i]].GetPath().c_str());
+        if(m_verbose)
+          printf("****  duplicate of %s\n", files[m_dupes[i]].GetPath().c_str());
+
         file.GetFrames().insert(file.GetFrames().end(),
-                                files[dupes[i]].GetFrames().begin(),
-                                files[dupes[i]].GetFrames().end());
+                                files[m_dupes[i]].GetFrames().begin(),
+                                files[m_dupes[i]].GetFrames().end());
         skip = true;
       }
+    }
+    else
+    {
+      m_dupes[i] = i;
     }
 
     if (!skip)
     {
       for (unsigned int j = 0; j < frames.frameList.size(); j++)
       {
-        printf("    frame %4i (delay:%4i)                         ", j, frames.frameList[j].delay);
-        CXBTFFrame frame = createXBTFFrame(frames.frameList[j].rgbaImage, writer, maxMSE, flags);
-        frame.SetDuration(frames.frameList[j].delay);
+        CXBTFFrame frame = CreateXBTFFrame(frames.frameList[j], writer);
         file.GetFrames().push_back(frame);
-        printf("%s%c (%d,%d @ %" PRIu64 " bytes)\n", GetFormatString(frame.GetFormat()), frame.HasAlpha() ? ' ' : '*',
-          frame.GetWidth(), frame.GetHeight(), frame.GetUnpackedSize());
+        if(m_verbose)
+        {
+          printf("    frame %4i (delay:%4i)                         %s%c (%d,%d @ %" PRIu64
+                 " bytes)\n",
+                 j, frame.GetDuration(), GetFormatString(frame.GetKDFormat()),
+                 frame.HasAlpha() ? ' ' : '*', frame.GetWidth(), frame.GetHeight(),
+                 frame.GetUnpackedSize());
+        }
       }
     }
-    DecoderManager::FreeDecodedFrames(frames);
     file.SetLoop(0);
 
     writer.UpdateFile(file);
   }
 
-  if (!writer.UpdateHeader(dupes))
+  if (!writer.UpdateHeader(m_dupes))
   {
     fprintf(stderr, "Error writing header to file\n");
     return 1;
@@ -352,12 +489,8 @@ int main(int argc, char* argv[])
   if (lzo_init() != LZO_E_OK)
     return 1;
   bool valid = false;
-  unsigned int flags = 0;
-  bool dupecheck = false;
-  CmdLineArgs args(argc, (const char**)argv);
 
-  // setup some defaults, lzo packing,
-  flags = FLAGS_USE_LZO;
+  CmdLineArgs args(argc, (const char**)argv);
 
   if (args.size() == 1)
   {
@@ -367,6 +500,10 @@ int main(int argc, char* argv[])
 
   std::string InputDir;
   std::string OutputFilename = "Textures.xbt";
+
+  TexturePacker texturePacker;
+
+  texturePacker.SetFlags(FLAGS_USE_LZO);
 
   for (unsigned int i = 1; i < args.size(); ++i)
   {
@@ -382,7 +519,11 @@ int main(int argc, char* argv[])
     }
     else if (!strcmp(args[i], "-dupecheck"))
     {
-      dupecheck = true;
+      texturePacker.EnableDupeCheck();
+    }
+    else if (!strcmp(args[i], "-verbose"))
+    {
+      texturePacker.EnableVerboseOutput();
     }
     else if (!platform_stricmp(args[i], "-output") || !platform_stricmp(args[i], "-o"))
     {
@@ -409,8 +550,5 @@ int main(int argc, char* argv[])
   if (pos != InputDir.length() - 1)
     InputDir += DIR_SEPARATOR;
 
-  double maxMSE = 1.5;    // HQ only please
-  DecoderManager::InstantiateDecoders();
-  createBundle(InputDir, OutputFilename, maxMSE, flags, dupecheck);
-  DecoderManager::FreeDecoders();
+  texturePacker.createBundle(InputDir, OutputFilename);
 }

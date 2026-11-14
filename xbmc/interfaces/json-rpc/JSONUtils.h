@@ -9,7 +9,6 @@
 #pragma once
 
 #include "JSONRPCUtils.h"
-#include "XBDateTime.h"
 #include "playlists/SmartPlayList.h"
 #include "utils/JSONVariantParser.h"
 #include "utils/JSONVariantWriter.h"
@@ -20,6 +19,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <vector>
+
+class CDateTime;
 
 namespace JSONRPC
 {
@@ -94,7 +95,7 @@ namespace JSONRPC
 
       // parse the sort order
       sortOrder = SortUtils::SortOrderFromString(order);
-      if (sortOrder == SortOrderNone)
+      if (sortOrder == SortOrder::NONE)
         return false;
 
       // parse the sort method
@@ -358,29 +359,6 @@ namespace JSONRPC
     }
 
     /*!
-     \brief Checks if the parameter with the given name or at
-     the given position is of a certain type
-     \param parameterObject Object containing all provided parameters
-     \param key Possible name of the parameter
-     \param position Possible position of the parameter
-     \param valueType Expected type of the parameter
-     \return True if the specific parameter is of the given type otherwise false
-     */
-    static inline bool IsParameterType(const CVariant &parameterObject, const char *key, unsigned int position, JSONSchemaType valueType)
-    {
-      if ((valueType & AnyValue) == AnyValue)
-        return true;
-
-      CVariant parameter;
-      if (IsValueMember(parameterObject, key))
-        parameter = parameterObject[key];
-      else if(parameterObject.isArray() && parameterObject.size() > position)
-        parameter = parameterObject[position];
-
-      return IsType(parameter, valueType);
-    }
-
-    /*!
      \brief Checks if the given json value is of the given type
      \param value Json value to check
      \param valueType Expected type of the json value
@@ -462,27 +440,9 @@ namespace JSONRPC
         stringArray.push_back(it->asString());
     }
 
-    static void SetFromDBDate(const CVariant &jsonDate, CDateTime &date)
-    {
-      if (!jsonDate.isString())
-        return;
+    static void SetFromDBDate(const CVariant& jsonDate, CDateTime& date);
 
-      if (jsonDate.empty())
-        date.Reset();
-      else
-        date.SetFromDBDate(jsonDate.asString());
-    }
-
-    static void SetFromDBDateTime(const CVariant &jsonDate, CDateTime &date)
-    {
-      if (!jsonDate.isString())
-        return;
-
-      if (jsonDate.empty())
-        date.Reset();
-      else
-        date.SetFromDBDateTime(jsonDate.asString());
-    }
+    static void SetFromDBDateTime(const CVariant& jsonDate, CDateTime& date);
 
     static bool GetXspFiltering(const std::string &type, const CVariant &filter, std::string &xsp)
     {
@@ -500,7 +460,7 @@ namespace JSONRPC
       else
         xspObj["rules"] = filter;
 
-      CSmartPlaylist playlist;
+      KODI::PLAYLIST::CSmartPlaylist playlist;
       return playlist.Load(xspObj) && playlist.SaveAsJson(xsp, false);
     }
   };

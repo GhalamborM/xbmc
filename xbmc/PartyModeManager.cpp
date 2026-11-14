@@ -8,17 +8,20 @@
 
 #include "PartyModeManager.h"
 
-#include "Application.h"
 #include "FileItem.h"
+#include "FileItemList.h"
 #include "GUIUserMessages.h"
 #include "PlayListPlayer.h"
 #include "ServiceBroker.h"
+#include "application/ApplicationComponents.h"
+#include "application/ApplicationPlayer.h"
 #include "dialogs/GUIDialogProgress.h"
 #include "guilib/GUIComponent.h"
 #include "guilib/GUIWindowManager.h"
 #include "interfaces/AnnouncementManager.h"
 #include "messaging/helpers/DialogOKHelper.h"
 #include "music/MusicDatabase.h"
+#include "music/MusicDbPaths.h"
 #include "music/tags/MusicInfoTag.h"
 #include "playlists/PlayList.h"
 #include "playlists/SmartPlayList.h"
@@ -33,8 +36,8 @@
 
 #include <algorithm>
 
+using namespace KODI;
 using namespace KODI::MESSAGING;
-using namespace PLAYLIST;
 
 #define QUEUE_DEPTH       10
 
@@ -48,11 +51,11 @@ CPartyModeManager::CPartyModeManager(void)
 bool CPartyModeManager::Enable(PartyModeContext context /*= PARTYMODECONTEXT_MUSIC*/, const std::string& strXspPath /*= ""*/)
 {
   // Filter using our PartyMode xml file
-  CSmartPlaylist playlist;
+  PLAYLIST::CSmartPlaylist playlist;
   std::string partyModePath;
   bool playlistLoaded;
 
-  m_bIsVideo = context == PARTYMODECONTEXT_VIDEO;
+  m_bIsVideo = context == PartyModeContext::VIDEO;
 
   const std::shared_ptr<CProfileManager> profileManager = CServiceBroker::GetSettingsComponent()->GetProfileManager();
 
@@ -68,7 +71,7 @@ bool CPartyModeManager::Enable(PartyModeContext context /*= PARTYMODECONTEXT_MUS
   if (playlistLoaded)
   {
     m_type = playlist.GetType();
-    if (context == PARTYMODECONTEXT_UNKNOWN)
+    if (context == PartyModeContext::UNKNOWN)
     {
       //get it from the xsp file
       m_bIsVideo = (StringUtils::EqualsNoCase(m_type, "video") ||
@@ -103,7 +106,7 @@ bool CPartyModeManager::Enable(PartyModeContext context /*= PARTYMODECONTEXT_MUS
     CMusicDatabase db;
     if (db.Open())
     {
-      std::set<std::string> playlists;
+      std::set<std::string, std::less<>> playlists;
       if (playlistLoaded)
       {
         playlist.SetType("songs");
@@ -137,7 +140,7 @@ bool CPartyModeManager::Enable(PartyModeContext context /*= PARTYMODECONTEXT_MUS
     CVideoDatabase db;
     if (db.Open())
     {
-      std::set<std::string> playlists;
+      std::set<std::string, std::less<>> playlists;
       if (playlistLoaded)
       {
         playlist.SetType("musicvideos");
@@ -172,11 +175,11 @@ bool CPartyModeManager::Enable(PartyModeContext context /*= PARTYMODECONTEXT_MUS
   CLog::Log(LOGINFO,"PARTY MODE MANAGER: Matching songs = {0}", m_iMatchingSongs);
   CLog::Log(LOGINFO,"PARTY MODE MANAGER: Party mode enabled!");
 
-  int iPlaylist = m_bIsVideo ? PLAYLIST_VIDEO : PLAYLIST_MUSIC;
+  PLAYLIST::Id playlistId = GetPlaylistId();
 
-  CServiceBroker::GetPlaylistPlayer().ClearPlaylist(iPlaylist);
-  CServiceBroker::GetPlaylistPlayer().SetShuffle(iPlaylist, false);
-  CServiceBroker::GetPlaylistPlayer().SetRepeat(iPlaylist, PLAYLIST::REPEAT_NONE);
+  CServiceBroker::GetPlaylistPlayer().ClearPlaylist(playlistId);
+  CServiceBroker::GetPlaylistPlayer().SetShuffle(playlistId, false);
+  CServiceBroker::GetPlaylistPlayer().SetRepeat(playlistId, PLAYLIST::RepeatState::NONE);
 
   pDialog->SetLine(0, CVariant{m_bIsVideo ? 20252 : 20124});
   pDialog->Progress();
@@ -192,7 +195,7 @@ bool CPartyModeManager::Enable(PartyModeContext context /*= PARTYMODECONTEXT_MUS
   CLog::Log(LOGDEBUG, "{} time for song fetch: {} ms", __FUNCTION__, duration.count());
 
   // start playing
-  CServiceBroker::GetPlaylistPlayer().SetCurrentPlaylist(iPlaylist);
+  CServiceBroker::GetPlaylistPlayer().SetCurrentPlaylist(playlistId);
   Play(0);
 
   pDialog->Close();
@@ -227,7 +230,7 @@ void CPartyModeManager::OnSongChange(bool bUpdatePlayed /* = false */)
     m_iSongsPlayed++;
 }
 
-void CPartyModeManager::AddUserSongs(CPlayList& tempList, bool bPlay /* = false */)
+void CPartyModeManager::AddUserSongs(PLAYLIST::CPlayList& tempList, bool bPlay /* = false */)
 {
   if (!IsEnabled())
     return;
@@ -243,10 +246,7 @@ void CPartyModeManager::AddUserSongs(CPlayList& tempList, bool bPlay /* = false 
   CLog::Log(LOGINFO, "PARTY MODE MANAGER: Adding {} user selected songs at {}", iNewUserSongs,
             iAddAt);
 
-  int iPlaylist = PLAYLIST_MUSIC;
-  if (m_bIsVideo)
-    iPlaylist = PLAYLIST_VIDEO;
-  CServiceBroker::GetPlaylistPlayer().GetPlaylist(iPlaylist).Insert(tempList, iAddAt);
+  CServiceBroker::GetPlaylistPlayer().GetPlaylist(GetPlaylistId()).Insert(tempList, iAddAt);
 
   // update last user added song location
   if (m_iLastUserSong < 0)
@@ -273,11 +273,7 @@ void CPartyModeManager::AddUserSongs(CFileItemList& tempList, bool bPlay /* = fa
   CLog::Log(LOGINFO, "PARTY MODE MANAGER: Adding {} user selected songs at {}", iNewUserSongs,
             iAddAt);
 
-  int iPlaylist = PLAYLIST_MUSIC;
-  if (m_bIsVideo)
-    iPlaylist = PLAYLIST_VIDEO;
-
-  CServiceBroker::GetPlaylistPlayer().GetPlaylist(iPlaylist).Insert(tempList, iAddAt);
+  CServiceBroker::GetPlaylistPlayer().GetPlaylist(GetPlaylistId()).Insert(tempList, iAddAt);
 
   // update last user added song location
   if (m_iLastUserSong < 0)
@@ -303,11 +299,7 @@ bool CPartyModeManager::AddRandomSongs()
   if (static_cast<int>(m_songIDCache.size()) == m_iMatchingSongsPicked)
     return false;
 
-  int iPlaylist = PLAYLIST_MUSIC;
-  if (m_bIsVideo)
-    iPlaylist = PLAYLIST_VIDEO;
-
-  CPlayList& playlist = CServiceBroker::GetPlaylistPlayer().GetPlaylist(iPlaylist);
+  PLAYLIST::CPlayList& playlist = CServiceBroker::GetPlaylistPlayer().GetPlaylist(GetPlaylistId());
   int iMissingSongs = QUEUE_DEPTH - playlist.size();
 
   if (iMissingSongs > 0)
@@ -342,13 +334,13 @@ bool CPartyModeManager::AddRandomSongs()
       sqlWhereMusic.back() = ')'; // replace the last comma with closing bracket
       // Apply random sort (and limit) at db query for efficiency
       SortDescription SortDescription;
-      SortDescription.sortBy = SortByRandom;
+      SortDescription.sortBy = SortBy::RANDOM;
       SortDescription.limitEnd = QUEUE_DEPTH;
       CMusicDatabase database;
       if (database.Open())
       {
-        database.GetSongsFullByWhere("musicdb://songs/", CDatabase::Filter(sqlWhereMusic),
-          items, SortDescription, true);
+        database.GetSongsFullByWhere(MUSIC::DB_PATH::SONGS, items, SortDescription,
+                                     CDatabase::Filter(sqlWhereMusic), true);
 
         // Get artist and album properties for songs
         for (auto& item : items)
@@ -404,9 +396,7 @@ bool CPartyModeManager::AddRandomSongs()
 
 void CPartyModeManager::Add(CFileItemPtr &pItem)
 {
-  int iPlaylist = m_bIsVideo ? PLAYLIST_VIDEO : PLAYLIST_MUSIC;
-
-  CPlayList& playlist = CServiceBroker::GetPlaylistPlayer().GetPlaylist(iPlaylist);
+  PLAYLIST::CPlayList& playlist = CServiceBroker::GetPlaylistPlayer().GetPlaylist(GetPlaylistId());
   playlist.Add(pItem);
   CLog::Log(LOGINFO, "PARTY MODE MANAGER: Adding randomly selected song at {}:[{}]",
             playlist.size() - 1, pItem->GetPath());
@@ -415,16 +405,16 @@ void CPartyModeManager::Add(CFileItemPtr &pItem)
 
 bool CPartyModeManager::ReapSongs()
 {
-  int iPlaylist = m_bIsVideo ? PLAYLIST_VIDEO : PLAYLIST_MUSIC;
+  const PLAYLIST::Id playlistId = GetPlaylistId();
 
   // reap any played songs
-  int iCurrentSong = CServiceBroker::GetPlaylistPlayer().GetCurrentSong();
+  int iCurrentSong = CServiceBroker::GetPlaylistPlayer().GetCurrentItemIdx();
   int i=0;
-  while (i < CServiceBroker::GetPlaylistPlayer().GetPlaylist(iPlaylist).size())
+  while (i < CServiceBroker::GetPlaylistPlayer().GetPlaylist(playlistId).size())
   {
     if (i < iCurrentSong)
     {
-      CServiceBroker::GetPlaylistPlayer().GetPlaylist(iPlaylist).Remove(i);
+      CServiceBroker::GetPlaylistPlayer().GetPlaylist(playlistId).Remove(i);
       iCurrentSong--;
       if (i <= m_iLastUserSong)
         m_iLastUserSong--;
@@ -433,22 +423,22 @@ bool CPartyModeManager::ReapSongs()
       i++;
   }
 
-  CServiceBroker::GetPlaylistPlayer().SetCurrentSong(iCurrentSong);
+  CServiceBroker::GetPlaylistPlayer().SetCurrentItemIdx(iCurrentSong);
   return true;
 }
 
 bool CPartyModeManager::MovePlaying()
 {
   // move current song to the top if its not there
-  int iCurrentSong = CServiceBroker::GetPlaylistPlayer().GetCurrentSong();
-  int iPlaylist = m_bIsVideo ? PLAYLIST_MUSIC : PLAYLIST_VIDEO;
+  int iCurrentSong = CServiceBroker::GetPlaylistPlayer().GetCurrentItemIdx();
 
   if (iCurrentSong > 0)
   {
     CLog::Log(LOGINFO, "PARTY MODE MANAGER: Moving currently playing song from {} to 0",
               iCurrentSong);
-    CPlayList &playlist = CServiceBroker::GetPlaylistPlayer().GetPlaylist(iPlaylist);
-    CPlayList playlistTemp;
+    PLAYLIST::CPlayList& playlist =
+        CServiceBroker::GetPlaylistPlayer().GetPlaylist(GetPlaylistId());
+    PLAYLIST::CPlayList playlistTemp;
     playlistTemp.Add(playlist[iCurrentSong]);
     playlist.Remove(iCurrentSong);
     for (int i=0; i<playlist.size(); i++)
@@ -457,7 +447,7 @@ bool CPartyModeManager::MovePlaying()
     for (int i=0; i<playlistTemp.size(); i++)
       playlist.Add(playlistTemp[i]);
   }
-  CServiceBroker::GetPlaylistPlayer().SetCurrentSong(0);
+  CServiceBroker::GetPlaylistPlayer().SetCurrentItemIdx(0);
   return true;
 }
 
@@ -529,12 +519,12 @@ int CPartyModeManager::GetRandomSongs()
 PartyModeContext CPartyModeManager::GetType() const
 {
   if (!IsEnabled())
-    return PARTYMODECONTEXT_UNKNOWN;
+    return PartyModeContext::UNKNOWN;
 
   if (m_bIsVideo)
-    return PARTYMODECONTEXT_VIDEO;
+    return PartyModeContext::VIDEO;
 
-  return PARTYMODECONTEXT_MUSIC;
+  return PartyModeContext::MUSIC;
 }
 
 void CPartyModeManager::ClearState()
@@ -560,22 +550,30 @@ void CPartyModeManager::UpdateStats()
 bool CPartyModeManager::IsEnabled(PartyModeContext context /* = PARTYMODECONTEXT_UNKNOWN */) const
 {
   if (!m_bEnabled) return false;
-  if (context == PARTYMODECONTEXT_VIDEO)
+  if (context == PartyModeContext::VIDEO)
     return m_bIsVideo;
-  if (context == PARTYMODECONTEXT_MUSIC)
+  if (context == PartyModeContext::MUSIC)
     return !m_bIsVideo;
   return true; // unknown, but we're enabled
 }
 
 void CPartyModeManager::Announce()
 {
-  if (g_application.GetAppPlayer().IsPlaying())
+  const auto& components = CServiceBroker::GetAppComponents();
+  const auto appPlayer = components.GetComponent<CApplicationPlayer>();
+  if (appPlayer->IsPlaying())
   {
     CVariant data;
 
-    data["player"]["playerid"] = CServiceBroker::GetPlaylistPlayer().GetCurrentPlaylist();
+    data["player"]["playerid"] =
+        static_cast<int>(CServiceBroker::GetPlaylistPlayer().GetCurrentPlaylist());
     data["property"]["partymode"] = m_bEnabled;
     CServiceBroker::GetAnnouncementManager()->Announce(ANNOUNCEMENT::Player, "OnPropertyChanged",
                                                        data);
   }
+}
+
+PLAYLIST::Id CPartyModeManager::GetPlaylistId() const
+{
+  return m_bIsVideo ? PLAYLIST::Id::TYPE_VIDEO : PLAYLIST::Id::TYPE_MUSIC;
 }

@@ -8,40 +8,65 @@
 
 #include "SavestateDatabase.h"
 
+#include "FileItem.h"
+#include "FileItemList.h"
 #include "SavestateFlatBuffer.h"
-#include "SavestateUtils.h"
+#include "ServiceBroker.h"
 #include "URL.h"
+#include "XBDateTime.h"
+#include "filesystem/Directory.h"
 #include "filesystem/File.h"
+#include "filesystem/IFileTypes.h"
+#include "games/GameUtils.h"
+#include "games/dialogs/DialogGameDefines.h"
+#include "imagefiles/ImageFileURL.h"
+#include "resources/LocalizeStrings.h"
+#include "resources/ResourcesComponent.h"
+#include "utils/URIUtils.h"
 #include "utils/log.h"
+
+#include <cstring>
+#include <memory>
+
+namespace
+{
+constexpr auto SAVESTATE_EXTENSION = ".sav";
+} // namespace
 
 using namespace KODI;
 using namespace RETRO;
 
 CSavestateDatabase::CSavestateDatabase() = default;
 
-std::unique_ptr<ISavestate> CSavestateDatabase::CreateSavestate()
+std::unique_ptr<ISavestate> CSavestateDatabase::AllocateSavestate()
 {
   std::unique_ptr<ISavestate> savestate;
 
-  savestate.reset(new CSavestateFlatBuffer);
+  savestate = std::make_unique<CSavestateFlatBuffer>();
 
   return savestate;
 }
 
-bool CSavestateDatabase::AddSavestate(const std::string& gamePath, const ISavestate& save)
+bool CSavestateDatabase::AddSavestate(const std::string& savestatePath,
+                                      const std::string& gamePath,
+                                      const ISavestate& save)
 {
   bool bSuccess = false;
+  std::string path;
 
-  const std::string savestatePath = CSavestateUtils::MakePath(gamePath);
+  if (savestatePath.empty())
+    path = MakeSavestatePath(gamePath, save.Created());
+  else
+    path = savestatePath;
 
-  CLog::Log(LOGDEBUG, "Saving savestate to {}", CURL::GetRedacted(savestatePath));
+  CLog::Log(LOGDEBUG, "Saving savestate to {}", CURL::GetRedacted(path));
 
   const uint8_t* data = nullptr;
   size_t size = 0;
   if (save.Serialize(data, size))
   {
     XFILE::CFile file;
-    if (file.OpenForWrite(savestatePath))
+    if (file.OpenForWrite(path, true))
     {
       const ssize_t written = file.Write(data, size);
       if (written == static_cast<ssize_t>(size))
@@ -57,11 +82,9 @@ bool CSavestateDatabase::AddSavestate(const std::string& gamePath, const ISavest
   return bSuccess;
 }
 
-bool CSavestateDatabase::GetSavestate(const std::string& gamePath, ISavestate& save)
+bool CSavestateDatabase::GetSavestate(const std::string& savestatePath, ISavestate& save)
 {
   bool bSuccess = false;
-
-  const std::string savestatePath = CSavestateUtils::MakePath(gamePath);
 
   CLog::Log(LOGDEBUG, "Loading savestate from {}", CURL::GetRedacted(savestatePath));
 
@@ -99,20 +122,138 @@ bool CSavestateDatabase::GetSavestatesNav(CFileItemList& items,
                                           const std::string& gamePath,
                                           const std::string& gameClient /* = "" */)
 {
-  //! @todo
-  return false;
+  const std::string savesFolder = MakePath(gamePath);
+
+  // MakePath() gives back nothing if it couldn't make the folder, and listing
+  // an empty path walks the root of the filesystem instead. Every directory
+  // there then turns up as a savestate to load.
+  if (savesFolder.empty())
+  {
+    CLog::Log(LOGERROR, "Failed to find a savestate folder for {}", CURL::GetRedacted(gamePath));
+    return false;
+  }
+
+  XFILE::CDirectory::CHints hints;
+  hints.mask = SAVESTATE_EXTENSION;
+
+  if (!XFILE::CDirectory::GetDirectory(savesFolder, items, hints))
+    return false;
+
+  if (!gameClient.empty())
+  {
+    for (int i = items.Size() - 1; i >= 0; i--)
+    {
+      std::unique_ptr<ISavestate> save = AllocateSavestate();
+      GetSavestate(items[i]->GetPath(), *save);
+      if (save->GameClientID() != gameClient)
+        items.Remove(i);
+    }
+  }
+
+  for (int i = 0; i < items.Size(); i++)
+  {
+    std::unique_ptr<ISavestate> savestate = AllocateSavestate();
+    GetSavestate(items[i]->GetPath(), *savestate);
+
+    GetSavestateItem(*savestate, items[i]->GetPath(), *items[i]);
+  }
+
+  return true;
 }
 
-bool CSavestateDatabase::RenameSavestate(const std::string& path, const std::string& label)
+void CSavestateDatabase::GetSavestateItem(const ISavestate& savestate,
+                                          const std::string& savestatePath,
+                                          CFileItem& item)
 {
-  //! @todo
-  return false;
+  CDateTime dateUTC = CDateTime::FromUTCDateTime(savestate.Created());
+
+  std::string label;
+  std::string label2;
+
+  // Date has the lowest priority of being shown
+  label = dateUTC.GetAsLocalizedDateTime(false, false);
+
+  // Label has the next priority
+  if (!savestate.Label().empty())
+  {
+    label2 = std::move(label);
+    label = savestate.Label();
+  }
+
+  // "Autosave" has the highest priority
+  if (savestate.Type() == SAVE_TYPE::AUTO)
+  {
+    label2 = std::move(label);
+    label = CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(15316); // "Autosave"
+  }
+
+  item.SetLabel(label);
+  item.SetLabel2(label2);
+  item.SetPath(savestatePath);
+  // Overwriting a savestate rewrites its thumbnail at the same path, so the
+  // time it was made is part of the image's URL. Otherwise the GUI keeps
+  // showing the image it already has for that path.
+  IMAGE_FILES::CImageFileURL thumbnail =
+      IMAGE_FILES::CImageFileURL::FromFile(MakeThumbnailPath(savestatePath));
+  thumbnail.AddOption("created", dateUTC.GetAsDBDateTime());
+  item.SetArt("screenshot", thumbnail.ToString());
+  item.SetProperty(SAVESTATE_LABEL, savestate.Label());
+  item.SetProperty(SAVESTATE_CAPTION, savestate.Caption());
+  item.SetProperty(SAVESTATE_GAME_CLIENT, savestate.GameClientID());
+  item.SetProperty(SAVESTATE_GAME_CLIENT_VERSION, savestate.GameClientVersion());
+  item.SetDateTime(dateUTC);
 }
 
-bool CSavestateDatabase::DeleteSavestate(const std::string& path)
+std::unique_ptr<ISavestate> CSavestateDatabase::RenameSavestate(const std::string& savestatePath,
+                                                                const std::string& label)
 {
-  //! @todo
-  return false;
+  std::unique_ptr<ISavestate> savestate = AllocateSavestate();
+  if (!GetSavestate(savestatePath, *savestate))
+    return {};
+
+  std::unique_ptr<ISavestate> newSavestate = AllocateSavestate();
+
+  newSavestate->SetLabel(label);
+  newSavestate->SetCaption(savestate->Caption());
+  newSavestate->SetType(savestate->Type());
+  newSavestate->SetCreated(savestate->Created());
+  newSavestate->SetGameFileName(savestate->GameFileName());
+  newSavestate->SetTimestampFrames(savestate->TimestampFrames());
+  newSavestate->SetTimestampWallClock(savestate->TimestampWallClock());
+  newSavestate->SetGameClientID(savestate->GameClientID());
+  newSavestate->SetGameClientVersion(savestate->GameClientVersion());
+
+  if (!savestate->CopyMemoryDataTo(*newSavestate))
+    return {};
+
+  newSavestate->SetDiscState(savestate->GetDiscState());
+
+  // Carried separately from the emulator's memory, which is all the copy above
+  // moves; without this a rename would drop the player's achievement progress
+  if (const size_t achievementSize = savestate->GetAchievementSize(); achievementSize > 0)
+  {
+    if (uint8_t* const achievementData = newSavestate->GetAchievementBuffer(achievementSize))
+      std::memcpy(achievementData, savestate->GetAchievementData(), achievementSize);
+  }
+
+  newSavestate->Finalize();
+
+  if (!AddSavestate(savestatePath, "", *newSavestate))
+    return {};
+
+  return newSavestate;
+}
+
+bool CSavestateDatabase::DeleteSavestate(const std::string& savestatePath)
+{
+  if (!XFILE::CFile::Delete(savestatePath))
+  {
+    CLog::Log(LOGERROR, "Failed to delete savestate file {}", CURL::GetRedacted(savestatePath));
+    return false;
+  }
+
+  XFILE::CFile::Delete(MakeThumbnailPath(savestatePath));
+  return true;
 }
 
 bool CSavestateDatabase::ClearSavestatesOfGame(const std::string& gamePath,
@@ -120,4 +261,40 @@ bool CSavestateDatabase::ClearSavestatesOfGame(const std::string& gamePath,
 {
   //! @todo
   return false;
+}
+
+std::string CSavestateDatabase::MakeSavestatePath(const std::string& gamePath,
+                                                  const CDateTime& creationTime)
+{
+  std::string path = MakePath(gamePath);
+  return URIUtils::AddFileToFolder(path, creationTime.GetAsSaveString() + SAVESTATE_EXTENSION);
+}
+
+std::string CSavestateDatabase::MakeThumbnailPath(const std::string& savestatePath)
+{
+  return URIUtils::ReplaceExtension(savestatePath, ".jpg");
+}
+
+std::string CSavestateDatabase::MakePath(const std::string& gamePath)
+{
+  const std::string folderPath = GAME::CGameUtils::GetGameFolder(gamePath);
+
+  if (!CreateFolderIfNotExists(folderPath))
+    return "";
+
+  return folderPath;
+}
+
+bool CSavestateDatabase::CreateFolderIfNotExists(const std::string& path)
+{
+  if (!XFILE::CDirectory::Exists(path))
+  {
+    if (!XFILE::CDirectory::Create(path))
+    {
+      CLog::Log(LOGERROR, "Failed to create folder: {}", path);
+      return false;
+    }
+  }
+
+  return true;
 }

@@ -9,6 +9,7 @@
 #pragma once
 
 #include "IVideoInfoTagLoader.h"
+#include "utils/Artwork.h"
 #include "video/VideoInfoTag.h"
 
 #include <map>
@@ -17,7 +18,7 @@
 #include <vector>
 
 //! \brief Video tag loader from plugin source.
-class CVideoTagLoaderPlugin : public VIDEO::IVideoInfoTagLoader
+class CVideoTagLoaderPlugin : public KODI::VIDEO::IVideoInfoTagLoader
 {
 public:
   CVideoTagLoaderPlugin(const CFileItem& item, bool forceRefresh);
@@ -29,15 +30,14 @@ public:
 
   //! \brief Load "tag" from plugin.
   //! \param tag Tag to load info into
-  CInfoScanner::INFO_TYPE Load(CVideoInfoTag& tag, bool prioritise,
-                               std::vector<EmbeddedArt>* = nullptr) override;
+  CInfoScanner::InfoType Load(CVideoInfoTag& tag,
+                              bool prioritise,
+                              std::vector<EmbeddedArt>* = nullptr) override;
 
-  inline std::unique_ptr<std::map<std::string, std::string>>& GetArt()
-  {
-    return m_art;
-  }
+  inline std::unique_ptr<KODI::ART::Artwork>& GetArt() { return m_art; }
+
 protected:
   std::unique_ptr<CVideoInfoTag> m_tag;
-  std::unique_ptr<std::map<std::string, std::string>> m_art;
+  std::unique_ptr<KODI::ART::Artwork> m_art;
   bool m_force_refresh;
 };

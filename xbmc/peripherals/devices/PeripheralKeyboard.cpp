@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2017-2018 Team Kodi
+ *  Copyright (C) 2017-2024 Team Kodi
  *  This file is part of Kodi - https://kodi.tv
  *
  *  SPDX-License-Identifier: GPL-2.0-or-later
@@ -8,10 +8,13 @@
 
 #include "PeripheralKeyboard.h"
 
+#include "games/GameServices.h"
+#include "games/controllers/Controller.h"
+#include "games/controllers/ControllerManager.h"
 #include "input/InputManager.h"
 #include "peripherals/Peripherals.h"
-#include "threads/SingleLock.h"
 
+#include <mutex>
 #include <sstream>
 
 using namespace KODI;
@@ -57,7 +60,7 @@ bool CPeripheralKeyboard::InitialiseFeature(const PeripheralFeature feature)
 void CPeripheralKeyboard::RegisterKeyboardDriverHandler(
     KODI::KEYBOARD::IKeyboardDriverHandler* handler, bool bPromiscuous)
 {
-  CSingleLock lock(m_mutex);
+  std::unique_lock lock(m_mutex);
 
   KeyboardHandle handle{handler, bPromiscuous};
   m_keyboardHandlers.insert(m_keyboardHandlers.begin(), handle);
@@ -66,7 +69,7 @@ void CPeripheralKeyboard::RegisterKeyboardDriverHandler(
 void CPeripheralKeyboard::UnregisterKeyboardDriverHandler(
     KODI::KEYBOARD::IKeyboardDriverHandler* handler)
 {
-  CSingleLock lock(m_mutex);
+  std::unique_lock lock(m_mutex);
 
   auto it =
       std::find_if(m_keyboardHandlers.begin(), m_keyboardHandlers.end(),
@@ -76,11 +79,29 @@ void CPeripheralKeyboard::UnregisterKeyboardDriverHandler(
     m_keyboardHandlers.erase(it);
 }
 
+void CPeripheralKeyboard::SetLastActive(const CDateTime& lastActive)
+{
+  // Update state
+  m_lastActive = lastActive;
+
+  // Update ancestor
+  CPeripheral::SetLastActive(lastActive);
+}
+
+GAME::ControllerPtr CPeripheralKeyboard::ControllerProfile() const
+{
+  if (m_controllerProfile)
+    return m_controllerProfile;
+
+  return m_manager.GetControllerProfiles().GetDefaultKeyboard();
+}
+
 bool CPeripheralKeyboard::OnKeyPress(const CKey& key)
 {
-  m_lastActive = CDateTime::GetCurrentDateTime();
+  std::unique_lock lock(m_mutex);
 
-  CSingleLock lock(m_mutex);
+  // Update state
+  SetLastActive(CDateTime::GetCurrentDateTime());
 
   bool bHandled = false;
 
@@ -107,7 +128,7 @@ bool CPeripheralKeyboard::OnKeyPress(const CKey& key)
 
 void CPeripheralKeyboard::OnKeyRelease(const CKey& key)
 {
-  CSingleLock lock(m_mutex);
+  std::unique_lock lock(m_mutex);
 
   for (const KeyboardHandle& handle : m_keyboardHandlers)
     handle.handler->OnKeyRelease(key);

@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2005-2018 Team Kodi
+ *  Copyright (C) 2005-2026 Team Kodi
  *  This file is part of Kodi - https://kodi.tv
  *
  *  SPDX-License-Identifier: GPL-2.0-or-later
@@ -8,19 +8,28 @@
 
 #include "RenderSystemGL.h"
 
-#include "filesystem/File.h"
+#include "ServiceBroker.h"
+#include "URL.h"
 #include "guilib/GUITextureGL.h"
+#include "platform/MessagePrinter.h"
+#include "rendering/GLExtensions.h"
 #include "rendering/MatrixGL.h"
 #include "settings/AdvancedSettings.h"
-#include "settings/DisplaySettings.h"
+#include "settings/SettingsComponent.h"
+#include "utils/FileUtils.h"
 #include "utils/GLUtils.h"
 #include "utils/MathUtils.h"
-#include "utils/StringUtils.h"
-#include "utils/SystemInfo.h"
-#include "utils/TimeUtils.h"
 #include "utils/XTimeUtils.h"
 #include "utils/log.h"
-#include "windowing/GraphicContext.h"
+#include "windowing/WinSystem.h"
+
+#include <exception>
+
+#if defined(TARGET_LINUX)
+#include "utils/EGLUtils.h"
+#endif
+
+using namespace std::chrono_literals;
 
 CRenderSystemGL::CRenderSystemGL() : CRenderSystemBase()
 {
@@ -37,17 +46,18 @@ bool CRenderSystemGL::InitRenderSystem()
   // Get the GL version number
   m_RenderVersionMajor = 0;
   m_RenderVersionMinor = 0;
-  const char* ver = (const char*)glGetString(GL_VERSION);
-  if (ver != 0)
+  m_RenderVersion = "<none>";
+  const char* ver = reinterpret_cast<const char*>(glGetString(GL_VERSION));
+  if (ver)
   {
     sscanf(ver, "%d.%d", &m_RenderVersionMajor, &m_RenderVersionMinor);
     m_RenderVersion = ver;
   }
 
-  CLog::Log(LOGINFO, "CRenderSystemGL::{} - Version: {}, Major: {}, Minor: {}", __FUNCTION__, ver,
-            m_RenderVersionMajor, m_RenderVersionMinor);
+  CLog::Log(LOGINFO, "CRenderSystemGL::{} - Version: {}, Major: {}, Minor: {}", __FUNCTION__,
+            m_RenderVersion, m_RenderVersionMajor, m_RenderVersionMinor);
 
-  m_RenderExtensions  = " ";
+  m_RenderExtensions = "";
   if (m_RenderVersionMajor > 3 ||
       (m_RenderVersionMajor == 3 && m_RenderVersionMinor >= 2))
   {
@@ -58,22 +68,26 @@ bool CRenderSystemGL::InitRenderSystem()
       GLint i;
       for (i = 0; i < n; i++)
       {
-        m_RenderExtensions += (const char*) glGetStringi(GL_EXTENSIONS, i);
-        m_RenderExtensions += " ";
+        const char* extension = reinterpret_cast<const char*>(glGetStringi(GL_EXTENSIONS, i));
+        if (extension)
+        {
+          m_RenderExtensions += extension;
+          m_RenderExtensions += " ";
+        }
       }
     }
   }
   else
   {
-    auto extensions = (const char*) glGetString(GL_EXTENSIONS);
+    const char* extensions = reinterpret_cast<const char*>(glGetString(GL_EXTENSIONS));
     if (extensions)
     {
       m_RenderExtensions += extensions;
+      m_RenderExtensions += " ";
     }
   }
-  m_RenderExtensions += " ";
 
-  ver = (const char*)glGetString(GL_SHADING_LANGUAGE_VERSION);
+  ver = reinterpret_cast<const char*>(glGetString(GL_SHADING_LANGUAGE_VERSION));
   if (ver)
   {
     sscanf(ver, "%d.%d", &m_glslMajor, &m_glslMinor);
@@ -84,17 +98,53 @@ bool CRenderSystemGL::InitRenderSystem()
     m_glslMinor = 0;
   }
 
+#if defined(GL_KHR_debug) && defined(TARGET_LINUX)
+  if (CServiceBroker::GetSettingsComponent()->GetAdvancedSettings()->m_openGlDebugging)
+  {
+    if (CGLExtensions::IsExtensionSupported(CGLExtensions::KHR_debug))
+    {
+      auto glDebugMessageCallback =
+          CEGLUtils::GetRequiredProcAddress<PFNGLDEBUGMESSAGECALLBACKPROC>(
+              "glDebugMessageCallback");
+      auto glDebugMessageControl =
+          CEGLUtils::GetRequiredProcAddress<PFNGLDEBUGMESSAGECONTROLPROC>("glDebugMessageControl");
+
+      glEnable(GL_DEBUG_OUTPUT_SYNCHRONOUS);
+      glDebugMessageCallback(KODI::UTILS::GL::GlErrorCallback, nullptr);
+
+      // ignore shader compilation information
+      glDebugMessageControl(GL_DEBUG_SOURCE_SHADER_COMPILER, GL_DEBUG_TYPE_OTHER, GL_DONT_CARE, 0,
+                            nullptr, GL_FALSE);
+
+      CLog::Log(LOGDEBUG, "OpenGL: debugging enabled");
+    }
+    else
+    {
+      CLog::Log(LOGDEBUG, "OpenGL: debugging requested but the required extension isn't "
+                          "available (GL_KHR_debug)");
+    }
+  }
+#endif
+
+  // Shut down gracefully if OpenGL context could not be allocated
+  if (m_RenderVersionMajor == 0)
+  {
+    CLog::Log(LOGFATAL, "Can not initialize OpenGL context. Exiting");
+    CMessagePrinter::DisplayError("ERROR: Can not initialize OpenGL context. Exiting");
+    return false;
+  }
+
   LogGraphicsInfo();
 
   // Get our driver vendor and renderer
-  const char* tmpVendor = (const char*) glGetString(GL_VENDOR);
+  const char* tmpVendor = reinterpret_cast<const char*>(glGetString(GL_VENDOR));
   m_RenderVendor.clear();
-  if (tmpVendor != NULL)
+  if (tmpVendor)
     m_RenderVendor = tmpVendor;
 
-  const char* tmpRenderer = (const char*) glGetString(GL_RENDERER);
+  const char* tmpRenderer = reinterpret_cast<const char*>(glGetString(GL_RENDERER));
   m_RenderRenderer.clear();
-  if (tmpRenderer != NULL)
+  if (tmpRenderer)
     m_RenderRenderer = tmpRenderer;
 
   m_bRenderCreated = true;
@@ -155,7 +205,7 @@ bool CRenderSystemGL::ResetRenderSystem(int width, int height)
   glMatrixTexture->LoadIdentity();
   glMatrixTexture.Load();
 
-  if (IsExtSupported("GL_ARB_multitexture"))
+  if (CGLExtensions::IsExtensionSupported(CGLExtensions::ARB_multitexture))
   {
     //clear error flags
     ResetGLErrors();
@@ -189,8 +239,7 @@ bool CRenderSystemGL::ResetRenderSystem(int width, int height)
   }
 
   glBlendFunc(GL_SRC_ALPHA, GL_ONE);
-  glEnable(GL_BLEND);          // Turn Blending On
-  glDisable(GL_DEPTH_TEST);
+  glEnable(GL_BLEND); // Turn Blending On
 
   return true;
 }
@@ -213,7 +262,10 @@ bool CRenderSystemGL::BeginRender()
   if (!m_bRenderCreated)
     return false;
 
-  bool useLimited = CServiceBroker::GetWinSystem()->UseLimitedColor();
+  m_GUIElementCount = 0;
+
+  bool useLimited = CServiceBroker::GetWinSystem()->UseLimitedColor() &&
+                    !CServiceBroker::GetWinSystem()->IsHdrComposite();
 
   if (m_limitedColorRange != useLimited)
   {
@@ -233,13 +285,42 @@ bool CRenderSystemGL::EndRender()
   return true;
 }
 
-bool CRenderSystemGL::ClearBuffers(UTILS::COLOR::Color color)
+void CRenderSystemGL::InvalidateColorBuffer()
+{
+  if (!m_bRenderCreated)
+    return;
+
+  /* clear is not affected by stipple pattern, so we can only clear on first frame */
+  if (m_stereoMode == RenderStereoMode::INTERLACED && m_stereoView == RenderStereoView::RIGHT)
+    return;
+
+  // some platforms prefer a clear, instead of rendering over
+  if (GetClearFunction() == ClearFunction::FIXED_FUNCTION)
+  {
+    ClearBuffers(0);
+    return;
+  }
+
+  GLbitfield flags = GL_STENCIL_BUFFER_BIT;
+  if (GetEnabledFrontToBackRendering())
+  {
+    glClearDepthf(0);
+    glDepthMask(GL_TRUE);
+    flags |= GL_DEPTH_BUFFER_BIT;
+  }
+
+  glClearStencil(0);
+  glStencilMask(0xFF);
+  glClear(flags);
+}
+
+bool CRenderSystemGL::ClearBuffers(KODI::UTILS::COLOR::Color color)
 {
   if (!m_bRenderCreated)
     return false;
 
   /* clear is not affected by stipple pattern, so we can only clear on first frame */
-  if(m_stereoMode == RENDER_STEREO_MODE_INTERLACED && m_stereoView == RENDER_STEREO_VIEW_RIGHT)
+  if (m_stereoMode == RenderStereoMode::INTERLACED && m_stereoView == RenderStereoView::RIGHT)
     return true;
 
   float r = KODI::UTILS::GL::GetChannelFromARGB(KODI::UTILS::GL::ColorChannel::R, color) / 255.0f;
@@ -250,7 +331,16 @@ bool CRenderSystemGL::ClearBuffers(UTILS::COLOR::Color color)
   glClearColor(r, g, b, a);
 
   GLbitfield flags = GL_COLOR_BUFFER_BIT;
-  glClear(flags);
+
+  if (GetEnabledFrontToBackRendering())
+  {
+    glClearDepthf(0);
+    glDepthMask(GL_TRUE);
+    flags |= GL_DEPTH_BUFFER_BIT;
+  }
+
+  glStencilMask(0xFF);
+  glClear(flags | GL_STENCIL_BUFFER_BIT);
 
   return true;
 }
@@ -293,7 +383,7 @@ void CRenderSystemGL::PresentRender(bool rendered, bool videoLayer)
   PresentRenderImpl(rendered);
 
   if (!rendered)
-    KODI::TIME::Sleep(40);
+    KODI::TIME::Sleep(40ms);
 }
 
 void CRenderSystemGL::SetVSync(bool enable)
@@ -472,6 +562,27 @@ void CRenderSystemGL::ResetScissors()
   SetScissors(CRect(0, 0, (float)m_width, (float)m_height));
 }
 
+void CRenderSystemGL::SetDepthCulling(DepthCulling culling)
+{
+  if (culling == DepthCulling::OFF)
+  {
+    glDisable(GL_DEPTH_TEST);
+    glDepthMask(GL_FALSE);
+  }
+  else if (culling == DepthCulling::BACK_TO_FRONT)
+  {
+    glEnable(GL_DEPTH_TEST);
+    glDepthMask(GL_FALSE);
+    glDepthFunc(GL_GEQUAL);
+  }
+  else if (culling == DepthCulling::FRONT_TO_BACK)
+  {
+    glEnable(GL_DEPTH_TEST);
+    glDepthMask(GL_TRUE);
+    glDepthFunc(GL_GREATER);
+  }
+}
+
 void CRenderSystemGL::GetGLSLVersion(int& major, int& minor)
 {
   major = m_glslMajor;
@@ -530,64 +641,65 @@ static const GLubyte stipple_3d[] = {
   0x00, 0x00, 0x00, 0x00,
 };
 
-void CRenderSystemGL::SetStereoMode(RENDER_STEREO_MODE mode, RENDER_STEREO_VIEW view)
+void CRenderSystemGL::SetStereoMode(RenderStereoMode mode, RenderStereoView view)
 {
   CRenderSystemBase::SetStereoMode(mode, view);
 
   glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
   glDrawBuffer(GL_BACK);
 
-  if(m_stereoMode == RENDER_STEREO_MODE_ANAGLYPH_RED_CYAN)
+  if (m_stereoMode == RenderStereoMode::ANAGLYPH_RED_CYAN)
   {
-    if(m_stereoView == RENDER_STEREO_VIEW_LEFT)
+    if (m_stereoView == RenderStereoView::LEFT)
       glColorMask(GL_TRUE, GL_FALSE, GL_FALSE, GL_TRUE);
-    else if(m_stereoView == RENDER_STEREO_VIEW_RIGHT)
+    else if (m_stereoView == RenderStereoView::RIGHT)
       glColorMask(GL_FALSE, GL_TRUE, GL_TRUE, GL_TRUE);
   }
-  if(m_stereoMode == RENDER_STEREO_MODE_ANAGLYPH_GREEN_MAGENTA)
+  if (m_stereoMode == RenderStereoMode::ANAGLYPH_GREEN_MAGENTA)
   {
-    if(m_stereoView == RENDER_STEREO_VIEW_LEFT)
+    if (m_stereoView == RenderStereoView::LEFT)
       glColorMask(GL_FALSE, GL_TRUE, GL_FALSE, GL_TRUE);
-    else if(m_stereoView == RENDER_STEREO_VIEW_RIGHT)
+    else if (m_stereoView == RenderStereoView::RIGHT)
       glColorMask(GL_TRUE, GL_FALSE, GL_TRUE, GL_TRUE);
   }
-  if(m_stereoMode == RENDER_STEREO_MODE_ANAGLYPH_YELLOW_BLUE)
+  if (m_stereoMode == RenderStereoMode::ANAGLYPH_YELLOW_BLUE)
   {
-    if(m_stereoView == RENDER_STEREO_VIEW_LEFT)
+    if (m_stereoView == RenderStereoView::LEFT)
       glColorMask(GL_TRUE, GL_TRUE, GL_FALSE, GL_TRUE);
-    else if(m_stereoView == RENDER_STEREO_VIEW_RIGHT)
+    else if (m_stereoView == RenderStereoView::RIGHT)
       glColorMask(GL_FALSE, GL_FALSE, GL_TRUE, GL_TRUE);
   }
 
-  if(m_stereoMode == RENDER_STEREO_MODE_INTERLACED)
+  if (m_stereoMode == RenderStereoMode::INTERLACED)
   {
     glEnable(GL_POLYGON_STIPPLE);
-    if(m_stereoView == RENDER_STEREO_VIEW_LEFT)
+    if (m_stereoView == RenderStereoView::LEFT)
       glPolygonStipple(stipple_3d);
-    else if(m_stereoView == RENDER_STEREO_VIEW_RIGHT)
+    else if (m_stereoView == RenderStereoView::RIGHT)
       glPolygonStipple(stipple_3d+4);
   }
 
-  if(m_stereoMode == RENDER_STEREO_MODE_HARDWAREBASED)
+  if (m_stereoMode == RenderStereoMode::HARDWAREBASED)
   {
-    if(m_stereoView == RENDER_STEREO_VIEW_LEFT)
+    if (m_stereoView == RenderStereoView::LEFT)
       glDrawBuffer(GL_BACK_LEFT);
-    else if(m_stereoView == RENDER_STEREO_VIEW_RIGHT)
+    else if (m_stereoView == RenderStereoView::RIGHT)
       glDrawBuffer(GL_BACK_RIGHT);
   }
 
 }
 
-bool CRenderSystemGL::SupportsStereo(RENDER_STEREO_MODE mode) const
+bool CRenderSystemGL::SupportsStereo(RenderStereoMode mode) const
 {
   switch(mode)
   {
-    case RENDER_STEREO_MODE_ANAGLYPH_RED_CYAN:
-    case RENDER_STEREO_MODE_ANAGLYPH_GREEN_MAGENTA:
-    case RENDER_STEREO_MODE_ANAGLYPH_YELLOW_BLUE:
-    case RENDER_STEREO_MODE_INTERLACED:
+    case RenderStereoMode::ANAGLYPH_RED_CYAN:
+    case RenderStereoMode::ANAGLYPH_GREEN_MAGENTA:
+    case RenderStereoMode::ANAGLYPH_YELLOW_BLUE:
+    case RenderStereoMode::INTERLACED:
       return true;
-    case RENDER_STEREO_MODE_HARDWAREBASED: {
+    case RenderStereoMode::HARDWAREBASED:
+    {
       //This is called by setting init, at which point GL is not inited
       //luckily if GL doesn't support this, it will just behave as if
       //it was not in effect.
@@ -607,7 +719,8 @@ bool CRenderSystemGL::SupportsStereo(RENDER_STEREO_MODE mode) const
 void CRenderSystemGL::InitialiseShaders()
 {
   std::string defines;
-  m_limitedColorRange = CServiceBroker::GetWinSystem()->UseLimitedColor();
+  m_limitedColorRange = CServiceBroker::GetWinSystem()->UseLimitedColor() &&
+                        !CServiceBroker::GetWinSystem()->IsHdrComposite();
   if (m_limitedColorRange)
   {
     defines += "#define KODI_LIMITED_RANGE 1\n";
@@ -649,13 +762,24 @@ void CRenderSystemGL::InitialiseShaders()
     CLog::Log(LOGERROR, "GUI Shader gl_shader_frag_multi.glsl - compile and link failed");
   }
 
-  m_pShader[ShaderMethodGL::SM_FONTS] =
-      std::make_unique<CGLShader>("gl_shader_frag_fonts.glsl", defines);
+  m_pShader[ShaderMethodGL::SM_FONTS] = std::make_unique<CGLShader>(
+      "gl_shader_vert_simple.glsl", "gl_shader_frag_fonts.glsl", defines);
   if (!m_pShader[ShaderMethodGL::SM_FONTS]->CompileAndLink())
   {
     m_pShader[ShaderMethodGL::SM_FONTS]->Free();
     m_pShader[ShaderMethodGL::SM_FONTS].reset();
-    CLog::Log(LOGERROR, "GUI Shader gl_shader_frag_fonts.glsl - compile and link failed");
+    CLog::Log(LOGERROR, "GUI Shader gl_shader_vert_simple.glsl + gl_shader_frag_fonts.glsl - "
+                        "compile and link failed");
+  }
+
+  m_pShader[ShaderMethodGL::SM_FONTS_SHADER_CLIP] =
+      std::make_unique<CGLShader>("gl_shader_vert_clip.glsl", "gl_shader_frag_fonts.glsl", defines);
+  if (!m_pShader[ShaderMethodGL::SM_FONTS_SHADER_CLIP]->CompileAndLink())
+  {
+    m_pShader[ShaderMethodGL::SM_FONTS_SHADER_CLIP]->Free();
+    m_pShader[ShaderMethodGL::SM_FONTS_SHADER_CLIP].reset();
+    CLog::Log(LOGERROR, "GUI Shader gl_shader_vert_clip.glsl + gl_shader_frag_fonts.glsl - compile "
+                        "and link failed");
   }
 
   m_pShader[ShaderMethodGL::SM_TEXTURE_NOBLEND] =
@@ -674,6 +798,38 @@ void CRenderSystemGL::InitialiseShaders()
     m_pShader[ShaderMethodGL::SM_MULTI_BLENDCOLOR]->Free();
     m_pShader[ShaderMethodGL::SM_MULTI_BLENDCOLOR].reset();
     CLog::Log(LOGERROR, "GUI Shader gl_shader_frag_multi_blendcolor.glsl - compile and link failed");
+  }
+
+  const std::string definesFontsRGBA = defines + "#define KODI_FONTS_RGBA 1\n";
+
+  m_pShader[ShaderMethodGL::SM_FONTS_RGBA] = std::make_unique<CGLShader>(
+      "gl_shader_vert_simple.glsl", "gl_shader_frag_fonts.glsl", definesFontsRGBA);
+  if (!m_pShader[ShaderMethodGL::SM_FONTS_RGBA]->CompileAndLink())
+  {
+    m_pShader[ShaderMethodGL::SM_FONTS_RGBA]->Free();
+    m_pShader[ShaderMethodGL::SM_FONTS_RGBA].reset();
+    CLog::Log(LOGERROR,
+              "GUI Shader gl_shader_vert_simple.glsl + gl_shader_frag_fonts.glsl (RGBA) - "
+              "compile and link failed");
+  }
+
+  m_pShader[ShaderMethodGL::SM_FONTS_RGBA_SHADER_CLIP] = std::make_unique<CGLShader>(
+      "gl_shader_vert_clip.glsl", "gl_shader_frag_fonts.glsl", definesFontsRGBA);
+  if (!m_pShader[ShaderMethodGL::SM_FONTS_RGBA_SHADER_CLIP]->CompileAndLink())
+  {
+    m_pShader[ShaderMethodGL::SM_FONTS_RGBA_SHADER_CLIP]->Free();
+    m_pShader[ShaderMethodGL::SM_FONTS_RGBA_SHADER_CLIP].reset();
+    CLog::Log(LOGERROR, "GUI Shader gl_shader_vert_clip.glsl + gl_shader_frag_fonts.glsl (RGBA) - "
+                        "compile and link failed");
+  }
+
+  m_pShader[ShaderMethodGL::SM_STENCIL] =
+      std::make_unique<CGLShader>("gl_shader_stencil.vert", "gl_shader_stencil.frag", defines);
+  if (!m_pShader[ShaderMethodGL::SM_STENCIL]->CompileAndLink())
+  {
+    m_pShader[ShaderMethodGL::SM_STENCIL]->Free();
+    m_pShader[ShaderMethodGL::SM_STENCIL].reset();
+    CLog::Log(LOGERROR, "GUI Shader SM_STENCIL - compile and link failed");
   }
 }
 
@@ -699,6 +855,10 @@ void CRenderSystemGL::ReleaseShaders()
     m_pShader[ShaderMethodGL::SM_FONTS]->Free();
   m_pShader[ShaderMethodGL::SM_FONTS].reset();
 
+  if (m_pShader[ShaderMethodGL::SM_FONTS_SHADER_CLIP])
+    m_pShader[ShaderMethodGL::SM_FONTS_SHADER_CLIP]->Free();
+  m_pShader[ShaderMethodGL::SM_FONTS_SHADER_CLIP].reset();
+
   if (m_pShader[ShaderMethodGL::SM_TEXTURE_NOBLEND])
     m_pShader[ShaderMethodGL::SM_TEXTURE_NOBLEND]->Free();
   m_pShader[ShaderMethodGL::SM_TEXTURE_NOBLEND].reset();
@@ -706,6 +866,18 @@ void CRenderSystemGL::ReleaseShaders()
   if (m_pShader[ShaderMethodGL::SM_MULTI_BLENDCOLOR])
     m_pShader[ShaderMethodGL::SM_MULTI_BLENDCOLOR]->Free();
   m_pShader[ShaderMethodGL::SM_MULTI_BLENDCOLOR].reset();
+
+  if (m_pShader[ShaderMethodGL::SM_FONTS_RGBA])
+    m_pShader[ShaderMethodGL::SM_FONTS_RGBA]->Free();
+  m_pShader[ShaderMethodGL::SM_FONTS_RGBA].reset();
+
+  if (m_pShader[ShaderMethodGL::SM_FONTS_RGBA_SHADER_CLIP])
+    m_pShader[ShaderMethodGL::SM_FONTS_RGBA_SHADER_CLIP]->Free();
+  m_pShader[ShaderMethodGL::SM_FONTS_RGBA_SHADER_CLIP].reset();
+
+  if (m_pShader[ShaderMethodGL::SM_STENCIL])
+    m_pShader[ShaderMethodGL::SM_STENCIL]->Free();
+  m_pShader[ShaderMethodGL::SM_STENCIL].reset();
 }
 
 void CRenderSystemGL::EnableShader(ShaderMethodGL method)
@@ -762,6 +934,14 @@ GLint CRenderSystemGL::ShaderGetCoord1()
   return -1;
 }
 
+GLint CRenderSystemGL::ShaderGetDepth()
+{
+  if (m_pShader[m_method])
+    return m_pShader[m_method]->GetDepthLoc();
+
+  return -1;
+}
+
 GLint CRenderSystemGL::ShaderGetUniCol()
 {
   if (m_pShader[m_method])
@@ -778,6 +958,30 @@ GLint CRenderSystemGL::ShaderGetModel()
   return -1;
 }
 
+GLint CRenderSystemGL::ShaderGetMatrix()
+{
+  if (m_pShader[m_method])
+    return m_pShader[m_method]->GetMatrixLoc();
+
+  return -1;
+}
+
+GLint CRenderSystemGL::ShaderGetClip()
+{
+  if (m_pShader[m_method])
+    return m_pShader[m_method]->GetShaderClipLoc();
+
+  return -1;
+}
+
+GLint CRenderSystemGL::ShaderGetCoordStep()
+{
+  if (m_pShader[m_method])
+    return m_pShader[m_method]->GetShaderCoordStepLoc();
+
+  return -1;
+}
+
 std::string CRenderSystemGL::GetShaderPath(const std::string &filename)
 {
   std::string path = "GL/1.2/";
@@ -786,7 +990,7 @@ std::string CRenderSystemGL::GetShaderPath(const std::string &filename)
   {
     std::string file = "special://xbmc/system/shaders/GL/4.0/" + filename;
     const CURL pathToUrl(file);
-    if (XFILE::CFile::Exists(pathToUrl))
+    if (CFileUtils::Exists(pathToUrl.Get()))
       return "GL/4.0/";
   }
   if (m_glslMajor >= 2 || (m_glslMajor == 1 && m_glslMinor >= 50))

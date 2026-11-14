@@ -9,7 +9,9 @@
 #include "GUIFadeLabelControl.h"
 
 #include "GUIMessage.h"
+#include "ServiceBroker.h"
 #include "utils/Random.h"
+#include "windowing/WinSystem.h"
 
 using namespace KODI::GUILIB;
 
@@ -120,14 +122,16 @@ void CGUIFadeLabelControl::Process(unsigned int currentTime, CDirtyRegionList &d
     else if (m_scrollInfo.m_pixelPos > m_scrollInfo.m_textWidth)
       moveToNextLabel = true;
 
-    if (m_scrollInfo.m_pixelSpeed || m_fadeAnim.GetState() == ANIM_STATE_IN_PROCESS)
-      MarkDirtyRegion();
+    // Track if any animation/scrolling is active for dirty marking
+    const bool animating =
+        m_scrollInfo.m_pixelSpeed || m_fadeAnim.GetState() == ANIM_STATE_IN_PROCESS;
 
     // apply the fading animation
     TransformMatrix matrix;
     m_fadeAnim.Animate(currentTime, true);
     m_fadeAnim.RenderAnimation(matrix);
     m_fadeMatrix = CServiceBroker::GetWinSystem()->GetGfxContext().AddTransform(matrix);
+    m_fadeMatrix.depth = m_fadeDepth;
 
     if (m_fadeAnim.GetState() == ANIM_STATE_APPLIED)
       m_fadeAnim.ResetAnimation();
@@ -149,10 +153,11 @@ void CGUIFadeLabelControl::Process(unsigned int currentTime, CDirtyRegionList &d
     }
 
     if (m_scroll)
-    {
       m_textLayout.UpdateScrollinfo(m_scrollInfo);
+
+    // Mark dirty once if any animation or scrolling is active
+    if (animating)
       MarkDirtyRegion();
-    }
 
     CServiceBroker::GetWinSystem()->GetGfxContext().RemoveTransform();
   }
@@ -170,6 +175,9 @@ bool CGUIFadeLabelControl::UpdateColors(const CGUIListItem* item)
 
 void CGUIFadeLabelControl::Render()
 {
+  if (CServiceBroker::GetWinSystem()->GetGfxContext().GetRenderOrder() ==
+      RENDER_ORDER_FRONT_TO_BACK)
+    return;
   if (!m_label.font)
   { // nothing to render
     CGUIControl::Render();
@@ -184,8 +192,7 @@ void CGUIFadeLabelControl::Render()
     float posX = m_posX + m_label.offsetX;
     if (m_label.align & XBFONT_CENTER_X)
       posX = m_posX + m_width * 0.5f;
-    else if (m_label.align & XBFONT_RIGHT)
-      posX = m_posX + m_width;
+
     m_textLayout.Render(posX, posY, m_label.angle, m_label.textColor, m_label.shadowColor, m_label.align, m_width - m_label.offsetX);
     CGUIControl::Render();
     return;
@@ -198,8 +205,7 @@ void CGUIFadeLabelControl::Render()
     float posX = m_posX + m_label.offsetX;
     if (m_label.align & XBFONT_CENTER_X)
       posX = m_posX + m_width * 0.5f;
-    else if (m_label.align & XBFONT_RIGHT)
-      posX = m_posX + m_width;
+
     m_textLayout.Render(posX, posY, 0, m_label.textColor, m_label.shadowColor, m_label.align, m_width);
   }
   else
@@ -222,6 +228,7 @@ bool CGUIFadeLabelControl::OnMessage(CGUIMessage& message)
     if (message.GetMessage() == GUI_MSG_LABEL_ADD)
     {
       AddLabel(message.GetLabel());
+      MarkDirtyRegion();
       return true;
     }
     if (message.GetMessage() == GUI_MSG_LABEL_RESET)
@@ -230,6 +237,7 @@ bool CGUIFadeLabelControl::OnMessage(CGUIMessage& message)
       m_infoLabels.clear();
       m_allLabelsShown = true;
       m_scrollInfo.Reset();
+      MarkDirtyRegion();
       return true;
     }
     if (message.GetMessage() == GUI_MSG_LABEL_SET)
@@ -239,10 +247,17 @@ bool CGUIFadeLabelControl::OnMessage(CGUIMessage& message)
       m_allLabelsShown = true;
       m_scrollInfo.Reset();
       AddLabel(message.GetLabel());
+      MarkDirtyRegion();
       return true;
     }
   }
   return CGUIControl::OnMessage(message);
+}
+
+void CGUIFadeLabelControl::AssignDepth()
+{
+  CGUIControl::AssignDepth();
+  m_fadeDepth = m_cachedTransform.depth;
 }
 
 std::string CGUIFadeLabelControl::GetDescription() const

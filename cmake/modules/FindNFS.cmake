@@ -3,87 +3,109 @@
 # -------
 # Finds the libnfs library
 #
-# This will define the following variables::
+# This will define the following target:
 #
-# NFS_FOUND - system has libnfs
-# NFS_INCLUDE_DIRS - the libnfs include directory
-# NFS_LIBRARIES - the libnfs libraries
-# NFS_DEFINITIONS - the libnfs compile definitions
-#
-# and the following imported targets::
-#
-#   NFS::NFS   - The libnfs library
+#   ${APP_NAME_LC}::NFS   - The libnfs library
 
-if(PKG_CONFIG_FOUND)
-  pkg_check_modules(PC_NFS libnfs QUIET)
-endif()
+if(NOT TARGET ${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME})
 
-find_path(NFS_INCLUDE_DIR nfsc/libnfs.h
-                          PATHS ${PC_NFS_INCLUDEDIR})
+  macro(buildmacroNFS)
+    set(CMAKE_ARGS -DBUILD_SHARED_LIBS=OFF
+                   -DENABLE_TESTS=OFF
+                   -DENABLE_DOCUMENTATION=OFF
+                   -DENABLE_UTILS=OFF
+                   -DENABLE_EXAMPLES=OFF
+                   -DCMAKE_POLICY_VERSION_MINIMUM=3.5)
 
-set(NFS_VERSION ${PC_NFS_VERSION})
+    if(WIN32 OR WINDOWS_STORE)
+      set(${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_C_FLAGS "/sdl-")
+      set(${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_CXX_FLAGS "/sdl-")
 
-find_library(NFS_LIBRARY NAMES nfs libnfs
-                         PATHS ${PC_NFS_LIBDIR})
-
-include(FindPackageHandleStandardArgs)
-find_package_handle_standard_args(NFS
-                                  REQUIRED_VARS NFS_LIBRARY NFS_INCLUDE_DIR
-                                  VERSION_VAR NFS_VERSION)
-
-if(NFS_FOUND)
-  set(NFS_LIBRARIES ${NFS_LIBRARY})
-  set(NFS_INCLUDE_DIRS ${NFS_INCLUDE_DIR})
-  set(NFS_DEFINITIONS -DHAS_FILESYSTEM_NFS=1)
-
-  set(CMAKE_REQUIRED_INCLUDES "${NFS_INCLUDE_DIR}")
-  set(CMAKE_REQUIRED_LIBRARIES ${NFS_LIBRARY})
-  if(CMAKE_SYSTEM_NAME MATCHES "Windows")
-    set(NFS_CXX_INCLUDE "#include <Winsock2.h>")
-    set(CMAKE_REQUIRED_LIBRARIES ${CMAKE_REQUIRED_LIBRARIES} "ws2_32.lib")
-  endif()
-
-# Check for nfs_set_timeout
-  check_cxx_source_compiles("
-     ${NFS_CXX_INCLUDE}
-     #include <nfsc/libnfs.h>
-     int main()
-     {
-       nfs_set_timeout(NULL, 0);
-     }
-  " NFS_SET_TIMEOUT)
-
-  if(NFS_SET_TIMEOUT)
-    list(APPEND NFS_DEFINITIONS -DHAS_NFS_SET_TIMEOUT)
-  endif()
-
-# Check for mount_getexports_timeout
-  check_cxx_source_compiles("
-     ${NFS_CXX_INCLUDE}
-     #include <nfsc/libnfs.h>
-     int main()
-     {
-       mount_getexports_timeout(NULL, 0);
-     }
-  " NFS_MOUNT_GETEXPORTS_TIMEOUT)
-
-  if(NFS_MOUNT_GETEXPORTS_TIMEOUT)
-    list(APPEND NFS_DEFINITIONS -DHAS_NFS_MOUNT_GETEXPORTS_TIMEOUT)
-  endif()
-
-  unset(CMAKE_REQUIRED_INCLUDES)
-  unset(CMAKE_REQUIRED_LIBRARIES)
-
-  if(NOT TARGET NFS::NFS)
-    add_library(NFS::NFS UNKNOWN IMPORTED)
-    if(NFS_LIBRARY)
-      set_target_properties(NFS::NFS PROPERTIES
-                                     IMPORTED_LOCATION "${NFS_LIBRARY_RELEASE}")
+      set(patches "${CORE_SOURCE_DIR}/tools/depends/target/${${CMAKE_FIND_PACKAGE_NAME}_MODULE}/01-MSUWP-compat.patch")
+      generate_patchcommand("${patches}")
+      unset(patches)
     endif()
-    set_target_properties(NFS::NFS PROPERTIES
-                                   INTERFACE_INCLUDE_DIRECTORIES "${NFS_INCLUDE_DIR}"
-                                   INTERFACE_COMPILE_DEFINITIONS HAS_FILESYSTEM_NFS=1)
+
+    BUILD_DEP_TARGET()
+
+    set(${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_COMPILE_DEFINITIONS HAS_NFS_MOUNT_GETEXPORTS_TIMEOUT)
+  endmacro()
+
+  include(cmake/scripts/common/ModuleHelpers.cmake)
+
+  set(${CMAKE_FIND_PACKAGE_NAME}_MODULE_LC libnfs)
+
+  SETUP_BUILD_VARS()
+
+  SETUP_FIND_SPECS()
+
+  SEARCH_EXISTING_PACKAGES()
+
+  # Check for existing LIBNFS. If version >= LIBNFS-VERSION file version, dont build
+  # A corner case, but if a linux/freebsd user WANTS to build internal libnfs, build anyway
+  if(("${${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME}_VERSION}" VERSION_LESS ${${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_VER} AND ENABLE_INTERNAL_NFS) OR
+     (((CORE_SYSTEM_NAME STREQUAL linux AND NOT "webos" IN_LIST CORE_PLATFORM_NAME_LC) OR CORE_SYSTEM_NAME STREQUAL freebsd) AND ENABLE_INTERNAL_NFS))
+    message(STATUS "Building ${${CMAKE_FIND_PACKAGE_NAME}_MODULE_LC}: \(version \"${${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_VER}\"\)")
+    cmake_language(EVAL CODE "
+      buildmacro${CMAKE_FIND_PACKAGE_NAME}()
+    ")
+  else()
+    if(TARGET libnfs::nfs)
+      # libnfs cmake config doesnt include INTERFACE_INCLUDE_DIRECTORIES
+      find_path(${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_INCLUDE_DIR NAMES nfsc/libnfs.h
+                                                                 HINTS ${DEPENDS_PATH}/include
+                                                                 ${${CORE_SYSTEM_NAME}_SEARCH_CONFIG})
+    elseif(TARGET PkgConfig::${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME})
+      get_target_property(${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_INCLUDE_DIR PkgConfig::${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME} INTERFACE_INCLUDE_DIRECTORIES)
+    endif()
+  endif()
+
+  if(${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME}_FOUND)
+    # Pre existing lib, so we can run checks
+    if(NOT TARGET ${${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_BUILD_NAME})
+      set(CMAKE_REQUIRED_INCLUDES "${${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_INCLUDE_DIR}")
+      set(CMAKE_REQUIRED_LIBRARIES ${${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_LIBRARY})
+
+      if(CMAKE_SYSTEM_NAME MATCHES "Windows")
+        set(CMAKE_REQUIRED_LIBRARIES ${CMAKE_REQUIRED_LIBRARIES} "ws2_32.lib")
+      endif()
+
+      # Check for mount_getexports_timeout libnfs>5.0.0
+      check_cxx_source_compiles("
+         ${LIBNFS_CXX_INCLUDE}
+         #include <nfsc/libnfs.h>
+         int main()
+         {
+           mount_getexports_timeout(NULL, 0);
+         }
+      " NFS_MOUNT_GETEXPORTS_TIMEOUT)
+
+      if(NFS_MOUNT_GETEXPORTS_TIMEOUT)
+        list(APPEND ${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_COMPILE_DEFINITIONS HAS_NFS_MOUNT_GETEXPORTS_TIMEOUT)
+      endif()
+
+      unset(CMAKE_REQUIRED_INCLUDES)
+      unset(CMAKE_REQUIRED_LIBRARIES)
+    endif()
+
+    list(APPEND ${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_COMPILE_DEFINITIONS HAS_FILESYSTEM_NFS)
+
+    # cmake target and not building internal
+    if(TARGET libnfs::nfs AND NOT TARGET ${${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_BUILD_NAME})
+      add_library(${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME} ALIAS libnfs::nfs)
+
+      # Need to manually set this, as libnfs cmake config does not provide INTERFACE_INCLUDE_DIRECTORIES
+      set_target_properties(libnfs::nfs PROPERTIES INTERFACE_INCLUDE_DIRECTORIES ${${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_INCLUDE_DIR})
+    elseif(TARGET PkgConfig::${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME} AND NOT TARGET ${${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_BUILD_NAME})
+      add_library(${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME} ALIAS PkgConfig::${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME})
+    else()
+      SETUP_BUILD_TARGET()
+
+      add_dependencies(${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME} ${${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_BUILD_NAME})
+    endif()
+
+    ADD_TARGET_COMPILE_DEFINITION()
+
+    ADD_MULTICONFIG_BUILDMACRO()
   endif()
 endif()
-
-mark_as_advanced(NFS_INCLUDE_DIR NFS_LIBRARY)

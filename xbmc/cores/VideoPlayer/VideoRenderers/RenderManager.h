@@ -10,6 +10,7 @@
 
 #include "DVDClock.h"
 #include "DebugRenderer.h"
+#include "cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodec.h"
 #include "cores/VideoPlayer/VideoRenderers/BaseRenderer.h"
 #include "cores/VideoPlayer/VideoRenderers/OverlayRenderer.h"
 #include "cores/VideoSettings.h"
@@ -22,11 +23,21 @@
 #include <atomic>
 #include <deque>
 #include <list>
-#include <map>
+#include <memory>
 
 #include "PlatformDefs.h"
 
-class CRenderCapture;
+namespace KODI
+{
+namespace RENDERING
+{
+namespace CAPTURE
+{
+class CCaptureBlit;
+}
+} // namespace RENDERING
+} // namespace KODI
+
 struct VideoPicture;
 
 class CWinRenderer;
@@ -34,6 +45,7 @@ class CLinuxRenderer;
 class CLinuxRendererGL;
 class CLinuxRendererGLES;
 class CRenderManager;
+struct DEBUG_INFO_PLAYER;
 
 class IRenderMsg
 {
@@ -42,13 +54,14 @@ public:
   virtual ~IRenderMsg() = default;
 protected:
   virtual void VideoParamsChange() = 0;
-  virtual void GetDebugInfo(std::string &audio, std::string &video, std::string &general) = 0;
+  //! \brief Fill the player's rows of \p info.
+  virtual void GetDebugInfo(DEBUG_INFO_PLAYER& info) = 0;
   virtual void UpdateClockSync(bool enabled) = 0;
   virtual void UpdateRenderInfo(CRenderInfo &info) = 0;
   virtual void UpdateRenderBuffers(int queued, int discard, int free) = 0;
   virtual void UpdateGuiRender(bool gui) = 0;
   virtual void UpdateVideoRender(bool video) = 0;
-  virtual CVideoSettings GetVideoSettings() = 0;
+  virtual CVideoSettings GetVideoSettings() const = 0;
 };
 
 class CRenderManager
@@ -58,12 +71,14 @@ public:
   virtual ~CRenderManager();
 
   // Functions called from render thread
-  void GetVideoRect(CRect &source, CRect &dest, CRect &view);
-  float GetAspectRatio();
+  void GetVideoRect(CRect& source, CRect& dest, CRect& view) const;
+  float GetAspectRatio() const;
+  unsigned int GetOrientation() const;
   void FrameMove();
-  void FrameWait(int ms);
+  void FrameWait(std::chrono::milliseconds duration);
   void Render(bool clear, DWORD flags = 0, DWORD alpha = 255, bool gui = true);
-  bool IsVideoLayer();
+  bool CompositeVideoCapture(KODI::RENDERING::CAPTURE::CaptureResult& result);
+
   RESOLUTION GetResolution();
   void UpdateResolution();
   void TriggerUpdateResolution(float fps, int width, int height, std::string &stereomode);
@@ -75,21 +90,34 @@ public:
   void ToggleDebug();
   void ToggleDebugVideo();
 
-  unsigned int AllocRenderCapture();
-  void ReleaseRenderCapture(unsigned int captureId);
-  void StartRenderCapture(unsigned int captureId, unsigned int width, unsigned int height, int flags);
-  bool RenderCaptureGetPixels(unsigned int captureId, unsigned int millis, uint8_t *buffer, unsigned int size);
+  /*!
+   * \brief Set the subtitle vertical position,
+   * it depends on current screen resolution
+   * \param value The subtitle position in pixels
+   * \param save If true, the value will be saved to resolution info
+   */
+  void SetSubtitleVerticalPosition(const int value, bool save);
 
   // Functions called from GUI
-  bool Supports(ERENDERFEATURE feature);
-  bool Supports(ESCALINGMETHOD method);
+  bool Supports(ERENDERFEATURE feature) const;
+  bool Supports(ESCALINGMETHOD method) const;
 
   int GetSkippedFrames()  { return m_QueueSkip; }
 
   bool Configure(const VideoPicture& picture, float fps, unsigned int orientation, int buffers = 0);
   bool AddVideoPicture(const VideoPicture& picture, volatile std::atomic_bool& bStop, EINTERLACEMETHOD deintMethod, bool wait);
-  void AddOverlay(CDVDOverlay* o, double pts);
+  void AddOverlay(std::shared_ptr<CDVDOverlay> o, double pts);
   void ShowVideo(bool enable);
+
+  /*!
+   * \brief True if any subtitle/overlay is visible on the current presented
+   *  frame. Per-frame accurate. See OVERLAY::CRenderer::HasVisibleOverlay
+   *  for the libass vs PGS/DVB/SPU details.
+   *
+   *  Must be called after CRenderManager::FrameMove has run this frame
+   *  (which calls PrepareOverlays). Reads cached state; cheap.
+   */
+  bool HasVisibleOverlay() const { return m_overlays.HasVisibleOverlay(m_presentsource); }
 
   /**
    * If player uses buffering it has to wait for a buffer before it calls
@@ -97,7 +125,8 @@ public:
    * in case no buffer is available. Player may call this in a loop and decides
    * by itself when it wants to drop a frame.
    */
-  int WaitForBuffer(volatile std::atomic_bool& bStop, int timeout = 100);
+  int WaitForBuffer(volatile std::atomic_bool& bStop,
+                    std::chrono::milliseconds timeout = std::chrono::milliseconds(100));
 
   /**
    * Can be called by player for lateness detection. This is done best by
@@ -106,14 +135,19 @@ public:
   bool GetStats(int &lateframes, double &pts, int &queued, int &discard);
 
   /**
-   * Video player call this on flush in oder to discard any queued frames
+   * Video player call this on flush in order to discard any queued frames
    */
   void DiscardBuffer();
 
   void SetDelay(int delay) { m_videoDelay = delay; }
   int GetDelay() { return m_videoDelay; }
 
-  void SetVideoSettings(CVideoSettings settings);
+  /*!
+   * \brief How far ahead of the clock the picture on screen is, in DVD clock units.
+   */
+  double GetDisplayLatency() const { return m_displayLatency; }
+
+  void SetVideoSettings(const CVideoSettings& settings);
 
 protected:
 
@@ -128,12 +162,16 @@ protected:
   bool Configure();
   void CreateRenderer();
   void DeleteRenderer();
-  void ManageCaptures();
+
+  //! Video-only tap: serve VIDEO capture requests from the just-presented frame.
+  void ServiceVideoCaptures();
 
   void UpdateLatencyTweak();
   void CheckEnableClockSync();
 
   CBaseRenderer *m_pRenderer = nullptr;
+  //! Owns the video tap's private FBO; render-thread only, reset in UnInit
+  std::unique_ptr<KODI::RENDERING::CAPTURE::CCaptureBlit> m_captureBlit;
   OVERLAY::CRenderer m_overlays;
   CDebugRenderer m_debugRenderer;
   mutable CCriticalSection m_statelock;
@@ -141,10 +179,10 @@ protected:
   CCriticalSection m_datalock;
   bool m_bTriggerUpdateResolution = false;
   bool m_bRenderGUI = true;
-  bool m_renderedOverlay = false;
+  bool m_renderedDebugOverlay = false;
   bool m_renderDebug = false;
   bool m_renderDebugVideo = false;
-  XbmcThreads::EndTime m_debugTimer;
+  XbmcThreads::EndTime<> m_debugTimer;
   std::atomic_bool m_showVideo = {false};
 
   enum EPRESENTSTEP
@@ -176,7 +214,7 @@ protected:
   /// in milliseconds
   double m_latencyTweak = 0.0;
   /// Display latency updated in PrepareNextRender in DVD clock units, includes m_latencyTweak
-  double m_displayLatency = 0.0;
+  std::atomic<double> m_displayLatency = 0.0;
   std::atomic_int m_videoDelay = {};
 
   int m_QueueSize = 2;
@@ -187,26 +225,26 @@ protected:
     double         pts;
     EFIELDSYNC     presentfield;
     EPRESENTMETHOD presentmethod;
-  } m_Queue[NUM_BUFFERS];
+
+    //! \brief VideoPicture::contentRect, held per buffer.
+    CRectInt contentRect;
+  } m_Queue[NUM_BUFFERS]{};
 
   std::deque<int> m_free;
   std::deque<int> m_queued;
   std::deque<int> m_discard;
 
   std::unique_ptr<VideoPicture> m_pConfigPicture;
-  unsigned int m_width = 0;
-  unsigned int m_height = 0;
-  unsigned int m_dwidth = 0;
-  unsigned int m_dheight = 0;
+
+  VideoPicture m_picture{};
+
   float m_fps = 0.0;
   unsigned int m_orientation = 0;
   int m_NumberBuffers = 0;
-  std::string m_stereomode;
-
   int m_lateframes = -1;
   double m_presentpts = 0.0;
   EPRESENTSTEP m_presentstep = PRESENT_IDLE;
-  XbmcThreads::EndTime m_presentTimer;
+  XbmcThreads::EndTime<> m_presentTimer;
   bool m_forceNext = false;
   int m_presentsource = 0;
   int m_presentsourcePast = -1;
@@ -225,14 +263,4 @@ protected:
     bool m_enabled;
   };
   CClockSync m_clockSync;
-
-  void RenderCapture(CRenderCapture* capture);
-  void RemoveCaptures();
-  CCriticalSection m_captCritSect;
-  std::map<unsigned int, CRenderCapture*> m_captures;
-  static unsigned int m_nextCaptureId;
-  unsigned int m_captureWaitCounter = 0;
-  //set to true when adding something to m_captures, set to false when m_captures is made empty
-  //std::list::empty() isn't thread safe, using an extra bool will save a lock per render when no captures are requested
-  bool m_hasCaptures = false;
 };

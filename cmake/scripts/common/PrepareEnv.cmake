@@ -4,7 +4,7 @@ core_find_versions()
 
 # in case we need to download something, set KODI_MIRROR to the default if not already set
 if(NOT DEFINED KODI_MIRROR)
-  set(KODI_MIRROR "http://mirrors.kodi.tv")
+  set(KODI_MIRROR "https://mirrors.kodi.tv")
 endif()
 
 ### copy all the addon binding header files to include/kodi
@@ -63,21 +63,31 @@ elseif(CORE_SYSTEM_NAME STREQUAL darwin_embedded)
   endif()
 elseif(CORE_SYSTEM_NAME STREQUAL osx)
   set(PLATFORM_TAG ${PLATFORM_TAG}-${CPU})
-elseif(CORE_SYSTEM_NAME STREQUAL windows)
+elseif(CORE_SYSTEM_NAME STREQUAL windows OR CORE_SYSTEM_NAME STREQUAL windowsstore)
   include(CheckSymbolExists)
   check_symbol_exists(_X86_ "Windows.h" _X86_)
   check_symbol_exists(_AMD64_ "Windows.h" _AMD64_)
+  check_symbol_exists(_ARM64_ "Windows.h" _ARM64_)
 
-  if(_X86_)
-    set(PLATFORM_TAG ${PLATFORM_TAG}-i686)
+  if(CORE_SYSTEM_NAME STREQUAL windowsstore AND CMAKE_SYSTEM_PROCESSOR)
+    set(ADDON_SYSTEM_PROCESSOR ${CMAKE_SYSTEM_PROCESSOR})
+  elseif(_X86_)
+    set(ADDON_SYSTEM_PROCESSOR i686)
   elseif(_AMD64_)
-    set(PLATFORM_TAG ${PLATFORM_TAG}-x86_64)
+    set(ADDON_SYSTEM_PROCESSOR x86_64)
+  elseif(_ARM64_)
+    set(ADDON_SYSTEM_PROCESSOR arm64)
   else()
     message(FATAL_ERROR "Unsupported architecture")
   endif()
 
+  if(CORE_SYSTEM_NAME STREQUAL windows)
+    set(PLATFORM_TAG ${PLATFORM_TAG}-${ADDON_SYSTEM_PROCESSOR})
+  endif()
+
   unset(_X86_)
   unset(_AMD64_)
+  unset(_ARM64_)
 endif()
 
 # generate the proper KodiConfig.cmake file

@@ -29,7 +29,7 @@
 #define PERIPHERAL_SAFE_DELETE_ARRAY(x) \
   do \
   { \
-    delete[](x); \
+    delete[] (x); \
     (x) = NULL; \
   } while (0)
 
@@ -178,7 +178,7 @@ public:
     m_cStructure->provides_joystick_rumble = providesJoystickRumble;
   }
 
-    /// @brief To get with @ref SetProvidesJoystickRumble changed values.
+  /// @brief To get with @ref SetProvidesJoystickRumble changed values.
   bool GetProvidesJoystickRumble() const { return m_cStructure->provides_joystick_rumble; }
 
   /// @brief Set true if the add-on provides power off about joystick.
@@ -251,12 +251,27 @@ public:
   ///                 as default
   /// @param[in] strName [optional] Name of related peripheral
   Peripheral(PERIPHERAL_TYPE type = PERIPHERAL_TYPE_UNKNOWN, const std::string& strName = "")
-    : m_type(type), m_strName(strName)
+    : m_type(type),
+      m_strName(strName)
   {
   }
 
   /// @brief Destructor.
   virtual ~Peripheral(void) = default;
+
+  /// @brief Comparison operator
+  ///
+  /// @note The index is not included in the comparison because it is affected
+  ///       by the presence of other peripherals
+  bool operator==(const Peripheral& rhs) const
+  {
+    // clang-format off
+    return m_type == rhs.m_type &&
+           m_strName == rhs.m_strName &&
+           m_vendorId == rhs.m_vendorId &&
+           m_productId == rhs.m_productId;
+    // clang-format on
+  }
 
   /// @brief Get peripheral type.
   ///
@@ -611,7 +626,7 @@ public:
   /// @brief Class copy constructor.
   ///
   /// @param[in] other Other class to copy on construct here
-  Joystick(const Joystick& other) { *this = other; }
+  Joystick(const Joystick& other) : Peripheral(other) { *this = other; }
 
   /// @brief Destructor.
   ///
@@ -635,6 +650,21 @@ public:
       m_supportsPowerOff = rhs.m_supportsPowerOff;
     }
     return *this;
+  }
+
+  /// @brief Comparison operator
+  bool operator==(const Joystick& rhs) const
+  {
+    // clang-format off
+    return Peripheral::operator==(rhs) &&
+           m_provider == rhs.m_provider &&
+           m_requestedPort == rhs.m_requestedPort &&
+           m_buttonCount == rhs.m_buttonCount &&
+           m_hatCount == rhs.m_hatCount &&
+           m_axisCount == rhs.m_axisCount &&
+           m_motorCount == rhs.m_motorCount &&
+           m_supportsPowerOff == rhs.m_supportsPowerOff;
+    // clang-format on
   }
 
   /// @brief Get provider name.
@@ -809,7 +839,8 @@ protected:
    * @brief Construct a driver primitive of the specified type
    */
   DriverPrimitive(JOYSTICK_DRIVER_PRIMITIVE_TYPE type, unsigned int driverIndex)
-    : m_type(type), m_driverIndex(driverIndex)
+    : m_type(type),
+      m_driverIndex(driverIndex)
   {
   }
 
@@ -873,7 +904,8 @@ public:
   ///
   /// @param[in] keycode Keycode to use
   DriverPrimitive(std::string keycode)
-    : m_type(JOYSTICK_DRIVER_PRIMITIVE_TYPE_KEY), m_keycode(std::move(keycode))
+    : m_type(JOYSTICK_DRIVER_PRIMITIVE_TYPE_KEY),
+      m_keycode(std::move(keycode))
   {
   }
 
@@ -892,7 +924,8 @@ public:
   ///
   /// @param[in] direction With @ref JOYSTICK_DRIVER_RELPOINTER_DIRECTION defined direction
   DriverPrimitive(JOYSTICK_DRIVER_RELPOINTER_DIRECTION direction)
-    : m_type(JOYSTICK_DRIVER_PRIMITIVE_TYPE_RELPOINTER_DIRECTION), m_relPointerDirection(direction)
+    : m_type(JOYSTICK_DRIVER_PRIMITIVE_TYPE_RELPOINTER_DIRECTION),
+      m_relPointerDirection(direction)
   {
   }
 
@@ -1149,7 +1182,9 @@ public:
   ///                 as default
   JoystickFeature(const std::string& name = "",
                   JOYSTICK_FEATURE_TYPE type = JOYSTICK_FEATURE_TYPE_UNKNOWN)
-    : m_name(name), m_type(type), m_primitives{}
+    : m_name(name),
+      m_type(type),
+      m_primitives{}
   {
   }
 
@@ -1234,7 +1269,7 @@ public:
 
   /// @brief Get all primitives on this class (as constant).
   ///
-  /// @return Constant a´rray list of primitives
+  /// @return Constant array list of primitives
   const std::array<DriverPrimitive, JOYSTICK_PRIMITIVE_MAX>& Primitives() const
   {
     return m_primitives;
@@ -1243,7 +1278,8 @@ public:
   ///@}
 
   explicit JoystickFeature(const JOYSTICK_FEATURE& feature)
-    : m_name(feature.name ? feature.name : ""), m_type(feature.type)
+    : m_name(feature.name ? feature.name : ""),
+      m_type(feature.type)
   {
     for (unsigned int i = 0; i < JOYSTICK_PRIMITIVE_MAX; i++)
       m_primitives[i] = DriverPrimitive(feature.primitives[i]);

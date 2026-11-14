@@ -126,14 +126,14 @@ namespace addon
 /// class CMyScreenSaver : public kodi::addon::CInstanceScreensaver
 /// {
 /// public:
-///   CMyScreenSaver(KODI_HANDLE instance, const std::string& version);
+///   CMyScreenSaver(const kodi::addon::IInstanceInfo& instance);
 ///
 ///   bool Start() override;
 ///   void Render() override;
 /// };
 ///
-/// CMyScreenSaver::CMyScreenSaver(KODI_HANDLE instance, const std::string& version)
-///   : CInstanceScreensaver(instance, version)
+/// CMyScreenSaver::CMyScreenSaver(const kodi::addon::IInstanceInfo& instance)
+///   : CInstanceScreensaver(instance)
 /// {
 ///   ...
 /// }
@@ -156,25 +156,19 @@ namespace addon
 /// {
 /// public:
 ///   CMyAddon() = default;
-///   ADDON_STATUS CreateInstance(int instanceType,
-///                               const std::string& instanceID,
-///                               KODI_HANDLE instance,
-///                               const std::string& version,
-///                               KODI_HANDLE& addonInstance) override;
+///   ADDON_STATUS CreateInstance(const kodi::addon::IInstanceInfo& instance,
+///                               KODI_ADDON_INSTANCE_HDL& hdl) override;
 /// };
 ///
 /// // If you use only one instance in your add-on, can be instanceType and
 /// // instanceID ignored
-/// ADDON_STATUS CMyAddon::CreateInstance(int instanceType,
-///                                       const std::string& instanceID,
-///                                       KODI_HANDLE instance,
-///                                       const std::string& version,
-///                                       KODI_HANDLE& addonInstance)
+/// ADDON_STATUS CMyAddon::CreateInstance(const kodi::addon::IInstanceInfo& instance,
+///                                       KODI_ADDON_INSTANCE_HDL& hdl)
 /// {
-///   if (instanceType == ADDON_INSTANCE_SCREENSAVER)
+///   if (instance.IsType(ADDON_INSTANCE_SCREENSAVER))
 ///   {
 ///     kodi::Log(ADDON_LOG_INFO, "Creating my Screensaver");
-///     addonInstance = new CMyScreenSaver(instance, version);
+///     hdl = new CMyScreenSaver(instance, version);
 ///     return ADDON_STATUS_OK;
 ///   }
 ///   else if (...)
@@ -200,7 +194,7 @@ public:
   /// Used by an add-on that only supports screensavers.
   ///
   CInstanceScreensaver()
-    : IAddonInstance(ADDON_INSTANCE_SCREENSAVER, GetKodiTypeVersion(ADDON_INSTANCE_SCREENSAVER))
+    : IAddonInstance(IInstanceInfo(CPrivateBase::m_interface->firstKodiInstance))
   {
     if (CPrivateBase::m_interface->globalSingleInstance != nullptr)
       throw std::logic_error("kodi::addon::CInstanceScreensaver: Creation of more as one in single "
@@ -252,10 +246,7 @@ public:
   /// }
   /// ~~~~~~~~~~~~~
   ///
-  explicit CInstanceScreensaver(KODI_HANDLE instance, const std::string& kodiVersion = "")
-    : IAddonInstance(ADDON_INSTANCE_SCREENSAVER,
-                     !kodiVersion.empty() ? kodiVersion
-                                          : GetKodiTypeVersion(ADDON_INSTANCE_SCREENSAVER))
+  explicit CInstanceScreensaver(const IInstanceInfo& instance) : IAddonInstance(instance)
   {
     if (CPrivateBase::m_interface->globalSingleInstance != nullptr)
       throw std::logic_error("kodi::addon::CInstanceScreensaver: Creation of multiple together "
@@ -327,7 +318,7 @@ public:
   /// ..
   /// ~~~~~~~~~~~~~
   ///
-  inline kodi::HardwareContext Device() { return m_instanceData->props->device; }
+  inline kodi::HardwareContext Device() { return m_props.device; }
   //----------------------------------------------------------------------------
 
   //============================================================================
@@ -336,7 +327,7 @@ public:
   ///
   /// @return The X position, in pixels
   ///
-  inline int X() { return m_instanceData->props->x; }
+  inline int X() { return m_props.x; }
   //----------------------------------------------------------------------------
 
   //============================================================================
@@ -345,7 +336,7 @@ public:
   ///
   /// @return The Y position, in pixels
   ///
-  inline int Y() { return m_instanceData->props->y; }
+  inline int Y() { return m_props.y; }
   //----------------------------------------------------------------------------
 
   //============================================================================
@@ -354,7 +345,7 @@ public:
   ///
   /// @return The width, in pixels
   ///
-  inline int Width() { return m_instanceData->props->width; }
+  inline int Width() { return m_props.width; }
   //----------------------------------------------------------------------------
 
   //============================================================================
@@ -363,7 +354,7 @@ public:
   ///
   /// @return The height, in pixels
   ///
-  inline int Height() { return m_instanceData->props->height; }
+  inline int Height() { return m_props.height; }
   //----------------------------------------------------------------------------
 
   //============================================================================
@@ -373,77 +364,39 @@ public:
   ///
   /// @return The pixel aspect ratio used by the display
   ///
-  inline float PixelRatio() { return m_instanceData->props->pixelRatio; }
-  //----------------------------------------------------------------------------
-
-  //============================================================================
-  /// @ingroup cpp_kodi_addon_screensaver_CB
-  /// @brief Used to get the name of the add-on defined in `addon.xml`.
-  ///
-  /// @return The add-on name
-  ///
-  inline std::string Name() { return m_instanceData->props->name; }
-  //----------------------------------------------------------------------------
-
-  //============================================================================
-  ///
-  /// @ingroup cpp_kodi_addon_screensaver_CB
-  /// @brief Used to get the full path where the add-on is installed.
-  ///
-  /// @return The add-on installation path
-  ///
-  inline std::string Presets() { return m_instanceData->props->presets; }
-  //----------------------------------------------------------------------------
-
-  //============================================================================
-  /// @ingroup cpp_kodi_addon_screensaver_CB
-  /// @brief Used to get the full path to the add-on's user profile.
-  ///
-  /// @note The trailing folder (consisting of the add-on's ID) is not created
-  /// by default. If it is needed, you must call kodi::vfs::CreateDirectory()
-  /// to create the folder.
-  ///
-  /// @return Path to the user profile
-  ///
-  inline std::string Profile() { return m_instanceData->props->profile; }
+  inline float PixelRatio() { return m_props.pixelRatio; }
   //----------------------------------------------------------------------------
 
   ///@}
 
 private:
-  void SetAddonStruct(KODI_HANDLE instance)
+  void SetAddonStruct(KODI_ADDON_INSTANCE_STRUCT* instance)
   {
-    if (instance == nullptr)
-      throw std::logic_error("kodi::addon::CInstanceScreensaver: Creation with empty addon "
-                             "structure not allowed, table must be given from Kodi!");
+    instance->hdl = this;
+    instance->screensaver->toAddon->start = ADDON_start;
+    instance->screensaver->toAddon->stop = ADDON_stop;
+    instance->screensaver->toAddon->render = ADDON_render;
 
-    m_instanceData = static_cast<AddonInstance_Screensaver*>(instance);
-    m_instanceData->toAddon->addonInstance = this;
-    m_instanceData->toAddon->Start = ADDON_Start;
-    m_instanceData->toAddon->Stop = ADDON_Stop;
-    m_instanceData->toAddon->Render = ADDON_Render;
+    instance->screensaver->toKodi->get_properties(instance->info->kodi, &m_props);
   }
 
-  inline static bool ADDON_Start(AddonInstance_Screensaver* instance)
+  inline static bool ADDON_start(const KODI_ADDON_SCREENSAVER_HDL hdl)
   {
-    CInstanceScreensaver* thisClass =
-        static_cast<CInstanceScreensaver*>(instance->toAddon->addonInstance);
+    CInstanceScreensaver* thisClass = static_cast<CInstanceScreensaver*>(hdl);
     thisClass->m_renderHelper = kodi::gui::GetRenderHelper();
     return thisClass->Start();
   }
 
-  inline static void ADDON_Stop(AddonInstance_Screensaver* instance)
+  inline static void ADDON_stop(const KODI_ADDON_SCREENSAVER_HDL hdl)
   {
-    CInstanceScreensaver* thisClass =
-        static_cast<CInstanceScreensaver*>(instance->toAddon->addonInstance);
+    CInstanceScreensaver* thisClass = static_cast<CInstanceScreensaver*>(hdl);
     thisClass->Stop();
     thisClass->m_renderHelper = nullptr;
   }
 
-  inline static void ADDON_Render(AddonInstance_Screensaver* instance)
+  inline static void ADDON_render(const KODI_ADDON_SCREENSAVER_HDL hdl)
   {
-    CInstanceScreensaver* thisClass =
-        static_cast<CInstanceScreensaver*>(instance->toAddon->addonInstance);
+    CInstanceScreensaver* thisClass = static_cast<CInstanceScreensaver*>(hdl);
 
     if (!thisClass->m_renderHelper)
       return;
@@ -462,7 +415,8 @@ private:
    * On Kodi with Direct X where angle is present becomes this used.
    */
   std::shared_ptr<kodi::gui::IRenderHelper> m_renderHelper;
-  AddonInstance_Screensaver* m_instanceData;
+
+  KODI_ADDON_SCREENSAVER_PROPS m_props = {};
 };
 
 } /* namespace addon */

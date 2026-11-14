@@ -9,16 +9,16 @@
 #pragma once
 
 #include "IDirectory.h"
-#include "SortFileItem.h"
 #include "interfaces/generic/RunningScriptsHandler.h"
-#include "threads/Event.h"
 
 #include <atomic>
+#include <memory>
 #include <string>
 
 class CURL;
 class CFileItem;
 class CFileItemList;
+enum class SortMethod;
 
 namespace XFILE
 {
@@ -29,11 +29,12 @@ public:
   CPluginDirectory();
   ~CPluginDirectory(void) override;
   bool GetDirectory(const CURL& url, CFileItemList& items) override;
+  bool Resolve(CFileItem& item) const override;
   bool AllowAll() const override { return true; }
   bool Exists(const CURL& url) override { return true; }
   float GetProgress() const override;
   void CancelDirectory() override;
-  static bool RunScriptWithParams(const std::string& strPath, bool resume);
+  static bool RunScriptWithParams(const CURL& url, bool resume);
 
   /*! \brief Get a reproducible CFileItem by trying to recursively resolve the plugin paths
   up to a maximum allowed limit. If no plugin paths exist it will be ignored.
@@ -62,7 +63,10 @@ public:
   static bool AddItem(int handle, const CFileItem *item, int totalItems);
   static bool AddItems(int handle, const CFileItemList *items, int totalItems);
   static void EndOfDirectory(int handle, bool success, bool replaceListing, bool cacheToDisc);
-  static void AddSortMethod(int handle, SORT_METHOD sortMethod, const std::string &labelMask, const std::string &label2Mask);
+  static void AddSortMethod(int handle,
+                            SortMethod sortMethod,
+                            const std::string& labelMask,
+                            const std::string& label2Mask);
   static std::string GetSetting(int handle, const std::string &key);
   static void SetSetting(int handle, const std::string &key, const std::string &value);
   static void SetContent(int handle, const std::string &strContent);
@@ -76,10 +80,10 @@ protected:
   bool IsCancelled() const override { return m_cancelled; }
 
 private:
-  bool StartScript(const std::string& strPath, bool resume);
+  bool StartScript(const CURL& url, bool resume);
 
-  CFileItemList* m_listItems;
-  CFileItem* m_fileResult;
+  std::unique_ptr<CFileItemList> m_listItems;
+  std::unique_ptr<CFileItem> m_fileResult;
 
   std::atomic<bool> m_cancelled;
   bool m_success = false; // set by script in EndOfDirectory

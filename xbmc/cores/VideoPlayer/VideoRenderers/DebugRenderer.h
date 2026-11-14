@@ -34,11 +34,14 @@ protected:
   {
   public:
     CRenderer();
-    void Render(int idx) override;
+    void Render(int idx, float depth = 1.0f) override;
     void CreateSubtitlesStyle();
 
   private:
-    std::shared_ptr<struct KODI::SUBTITLES::style> m_debugOverlayStyle;
+    // Implementation of Observer
+    void Notify(const Observable& obs, const ObservableMessage msg) override{};
+
+    std::shared_ptr<struct KODI::SUBTITLES::STYLE::style> m_debugOverlayStyle;
   };
 
   CRenderer m_overlayRenderer;
@@ -46,5 +49,5 @@ protected:
 private:
   CSubtitlesAdapter* m_adapter{nullptr};
   std::atomic_bool m_isInitialized{false};
-  CDVDOverlay* m_overlay{nullptr};
+  std::shared_ptr<CDVDOverlay> m_overlay;
 };

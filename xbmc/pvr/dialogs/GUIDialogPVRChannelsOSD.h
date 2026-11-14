@@ -15,47 +15,43 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <tuple>
 
 namespace PVR
 {
-  enum class PVREvent;
+class CPVRChannelGroup;
+class CPVRProvider;
 
-  class CPVRChannelGroup;
+class CGUIDialogPVRChannelsOSD : public CGUIDialogPVRItemsViewBase,
+                                 public CPVRChannelNumberInputHandler
+{
+public:
+  CGUIDialogPVRChannelsOSD();
+  ~CGUIDialogPVRChannelsOSD() override;
+  bool OnMessage(CGUIMessage& message) override;
+  bool OnAction(const CAction& action) override;
 
-  class CGUIDialogPVRChannelsOSD : public CGUIDialogPVRItemsViewBase, public CPVRChannelNumberInputHandler
-  {
-  public:
-    CGUIDialogPVRChannelsOSD();
-    ~CGUIDialogPVRChannelsOSD() override;
-    bool OnMessage(CGUIMessage& message) override;
-    bool OnAction(const CAction& action) override;
+  // CPVRChannelNumberInputHandler implementation
+  void GetChannelNumbers(std::vector<std::string>& channelNumbers) override;
+  void OnInputDone() override;
 
-    /*!
-     * @brief CEventStream callback for PVR events.
-     * @param event The event.
-     */
-    void Notify(const PVREvent& event);
+protected:
+  void OnInitWindow() override;
+  void OnDeinitWindow(int nextWindowID) override;
+  void RestoreControlStates() override;
+  void SaveControlStates() override;
+  void SetInvalid() override;
 
-    // CPVRChannelNumberInputHandler implementation
-    void GetChannelNumbers(std::vector<std::string>& channelNumbers) override;
-    void OnInputDone() override;
+private:
+  void GotoChannel(int iItem);
+  void Update();
+  void SaveSelectedItemPath(int iGroupID);
+  std::string GetLastSelectedItemPath(int iGroupID) const;
 
-  protected:
-    void OnInitWindow() override;
-    void OnDeinitWindow(int nextWindowID) override;
-    void RestoreControlStates() override;
-    void SaveControlStates() override;
-    void SetInvalid() override;
-
-  private:
-    void GotoChannel(int iItem);
-    void Update();
-    void SaveSelectedItemPath(int iGroupID);
-    std::string GetLastSelectedItemPath(int iGroupID) const;
-
-    std::shared_ptr<CPVRChannelGroup> m_group;
-    std::map<int, std::string> m_groupSelectedItemPaths;
-    XbmcThreads::EndTime m_refreshTimeout;
-  };
-}
-
+  std::shared_ptr<CPVRChannelGroup> m_group;
+  std::shared_ptr<CPVRProvider> m_provider;
+  bool m_useProviderGroups{false};
+  std::map<std::tuple<int, int, int>, std::string> m_groupSelectedItemPaths;
+  XbmcThreads::EndTime<> m_refreshTimeout;
+};
+} // namespace PVR

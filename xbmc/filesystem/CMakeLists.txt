@@ -3,20 +3,27 @@ set(SOURCES AddonsDirectory.cpp
             CacheStrategy.cpp
             CircularCache.cpp
             CurlFile.cpp
+            CurlHttpClient.cpp
             DAVCommon.cpp
             DAVDirectory.cpp
             DAVFile.cpp
+            DataFile.cpp
+            DataURI.cpp
             DirectoryCache.cpp
             Directory.cpp
             DirectoryFactory.cpp
             DirectoryHistory.cpp
             DllLibCurl.cpp
+            DiscDirectoryHelper.cpp
+            EpisodesDirectory.cpp
             EventsDirectory.cpp
             FavouritesDirectory.cpp
+            FFmpegVfsContext.cpp
             FileCache.cpp
             File.cpp
             FileDirectoryFactory.cpp
             FileFactory.cpp
+            HttpClientFactory.cpp
             FTPDirectory.cpp
             FTPParse.cpp
             HTTPDirectory.cpp
@@ -61,33 +68,44 @@ set(SOURCES AddonsDirectory.cpp
             ZipManager.cpp)
 
 set(HEADERS AddonsDirectory.h
+            AddonsPaths.h
             CacheStrategy.h
             CircularCache.h
             CurlFile.h
+            CurlHttpClient.h
             DAVCommon.h
             DAVDirectory.h
             DAVFile.h
+            DataFile.h
+            DataURI.h
             Directorization.h
             Directory.h
             DirectoryCache.h
             DirectoryFactory.h
             DirectoryHistory.h
             DllLibCurl.h
+	    DiscDirectoryHelper.h
+            EpisodesDirectory.h
             EventsDirectory.h
             FTPDirectory.h
             FTPParse.h
             FavouritesDirectory.h
+            FFmpegVfsContext.h
             File.h
             FileCache.h
             FileDirectoryFactory.h
             FileFactory.h
+            HttpClientFactory.h
             HTTPDirectory.h
             IDirectory.h
             IFile.h
+            IHttpClient.h
+            IPlaylistHints.h
             IFileDirectory.h
             IFileTypes.h
             ImageFile.h
             LibraryDirectory.h
+            LibraryPaths.h
             MultiPathDirectory.h
             MultiPathFile.h
             MusicDatabaseDirectory.h
@@ -114,6 +132,7 @@ set(HEADERS AddonsDirectory.h
             SpecialProtocolFile.h
             StackDirectory.h
             VideoDatabaseDirectory.h
+            VideoDatabaseFile.h
             VirtualDirectory.h
             XbtDirectory.h
             XbtFile.h
@@ -123,39 +142,45 @@ set(HEADERS AddonsDirectory.h
             ZipFile.h
             ZipManager.h)
 
-if(ISO9660PP_FOUND)
+if(TARGET ${APP_NAME_LC}::Iso9660pp)
   list(APPEND SOURCES ISO9660Directory.cpp
                       ISO9660File.cpp)
   list(APPEND HEADERS ISO9660Directory.h
                       ISO9660File.h)
 endif()
 
-if(UDFREAD_FOUND)
+if(TARGET ${APP_NAME_LC}::Udfread)
   list(APPEND SOURCES UDFBlockInput.cpp
+                      UDFContext.cpp
                       UDFDirectory.cpp
                       UDFFile.cpp)
   list(APPEND HEADERS UDFBlockInput.h
+                      UDFContext.h
                       UDFDirectory.h
                       UDFFile.h)
 endif()
 
-if(BLURAY_FOUND)
+if(TARGET ${APP_NAME_LC}::Bluray)
   list(APPEND SOURCES BlurayCallback.cpp
+		      BlurayDiscCache.cpp
                       BlurayDirectory.cpp
                       BlurayFile.cpp)
   list(APPEND HEADERS BlurayCallback.h
+		      BlurayDiscCache.h
                       BlurayDirectory.h
                       BlurayFile.h)
 endif()
 
 if(ENABLE_OPTICAL)
   list(APPEND SOURCES CDDADirectory.cpp
-                      CDDAFile.cpp)
+                      CDDAFile.cpp
+                      DVDDirectory.cpp)
   list(APPEND HEADERS CDDADirectory.h
-                      CDDAFile.h)
+                      CDDAFile.h
+                      DVDDirectory.h)
 endif()
 
-if(NFS_FOUND)
+if(TARGET ${APP_NAME_LC}::NFS)
   list(APPEND SOURCES NFSDirectory.cpp
                       NFSFile.cpp)
   list(APPEND HEADERS NFSDirectory.h
@@ -168,6 +193,12 @@ if(ENABLE_UPNP)
                       UPnPFile.cpp)
   list(APPEND HEADERS UPnPDirectory.h
                       UPnPFile.h)
+endif()
+
+if(CORE_SYSTEM_NAME STREQUAL wasm)
+  list(APPEND SOURCES wasm/XhrFile.cpp)
+  list(APPEND HEADERS wasm/XhrFile.h
+                      wasm/XhrHttpClient.h)
 endif()
 
 core_add_library(filesystem)

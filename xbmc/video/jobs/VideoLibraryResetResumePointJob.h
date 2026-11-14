@@ -11,6 +11,8 @@
 #include "FileItem.h"
 #include "video/jobs/VideoLibraryJob.h"
 
+#include <memory>
+
 /*!
  \brief Video library job implementation for resetting a resume point.
  */
@@ -22,15 +24,15 @@ public:
 
    \param[in] item Item for that the resume point shall be reset.
   */
-  CVideoLibraryResetResumePointJob(const CFileItemPtr& item);
+  CVideoLibraryResetResumePointJob(const std::shared_ptr<CFileItem>& item);
   ~CVideoLibraryResetResumePointJob() override = default;
 
   const char *GetType() const override { return "CVideoLibraryResetResumePointJob"; }
-  bool operator==(const CJob* job) const override;
+  bool Equals(const CJob* job) const override;
 
 protected:
   bool Work(CVideoDatabase &db) override;
 
 private:
-  CFileItemPtr m_item;
+  std::shared_ptr<CFileItem> m_item;
 };

@@ -9,9 +9,14 @@
 #include "GUIControlGroup.h"
 
 #include "GUIMessage.h"
+#include "ServiceBroker.h"
+#include "input/mouse/MouseEvent.h"
+#include "windowing/WinSystem.h"
 
 #include <cassert>
 #include <utility>
+
+using namespace KODI;
 
 CGUIControlGroup::CGUIControlGroup()
 {
@@ -105,12 +110,26 @@ void CGUIControlGroup::Render()
   CPoint pos(GetPosition());
   CServiceBroker::GetWinSystem()->GetGfxContext().SetOrigin(pos.x, pos.y);
   CGUIControl *focusedControl = NULL;
-  for (auto *control : m_children)
+  if (CServiceBroker::GetWinSystem()->GetGfxContext().GetRenderOrder() ==
+      RENDER_ORDER_FRONT_TO_BACK)
   {
-    if (m_renderFocusedLast && control->HasFocus())
-      focusedControl = control;
-    else
-      control->DoRender();
+    for (auto it = m_children.rbegin(); it != m_children.rend(); ++it)
+    {
+      if (m_renderFocusedLast && (*it)->HasFocus())
+        focusedControl = (*it);
+      else
+        (*it)->DoRender();
+    }
+  }
+  else
+  {
+    for (auto* control : m_children)
+    {
+      if (m_renderFocusedLast && control->HasFocus())
+        focusedControl = control;
+      else
+        control->DoRender();
+    }
   }
   if (focusedControl)
     focusedControl->DoRender();
@@ -127,7 +146,6 @@ void CGUIControlGroup::RenderEx()
 
 bool CGUIControlGroup::OnAction(const CAction &action)
 {
-  assert(false);  // unimplemented
   return false;
 }
 
@@ -284,6 +302,23 @@ bool CGUIControlGroup::CanFocus() const
   return false;
 }
 
+void CGUIControlGroup::AssignDepth()
+{
+  CGUIControl* focusedControl = nullptr;
+  if (!m_children.empty())
+  {
+    for (auto* control : m_children)
+    {
+      if (m_renderFocusedLast && control->HasFocus())
+        focusedControl = control;
+      else
+        control->AssignDepth();
+    }
+  }
+  if (focusedControl)
+    focusedControl->AssignDepth();
+}
+
 void CGUIControlGroup::SetInitialVisibility()
 {
   CGUIControl::SetInitialVisibility();
@@ -352,7 +387,7 @@ bool CGUIControlGroup::HasAnimation(ANIMATION_TYPE animType)
   return false;
 }
 
-EVENT_RESULT CGUIControlGroup::SendMouseEvent(const CPoint &point, const CMouseEvent &event)
+EVENT_RESULT CGUIControlGroup::SendMouseEvent(const CPoint& point, const MOUSE::CMouseEvent& event)
 {
   // transform our position into child coordinates
   CPoint childPoint(point);
@@ -505,6 +540,7 @@ bool CGUIControlGroup::RemoveControl(const CGUIControl *control)
     {
       m_children.erase(it);
       RemoveLookup(child);
+      child->SetParentControl(nullptr);
       SetInvalid();
       return true;
     }

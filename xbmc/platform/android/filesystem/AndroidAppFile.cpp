@@ -19,6 +19,7 @@
 #include <androidjni/Bitmap.h>
 #include <androidjni/BitmapDrawable.h>
 #include <androidjni/Build.h>
+#include <androidjni/Canvas.h>
 #include <androidjni/Context.h>
 #include <androidjni/DisplayMetrics.h>
 #include <androidjni/Drawable.h>
@@ -45,7 +46,7 @@ bool CFileAndroidApp::Open(const CURL& url)
   m_packageName =  URIUtils::GetFileName(url.Get());
   m_packageName = m_packageName.substr(0, m_packageName.size() - 4);
 
-  std::vector<androidPackage> applications = CXBMCApp::GetApplications();
+  const std::vector<androidPackage> applications = CXBMCApp::Get().GetApplications();
   for (const auto& i : applications)
   {
     if (i.packageName == m_packageName)
@@ -64,7 +65,7 @@ bool CFileAndroidApp::Exists(const CURL& url)
   std::string appname =  URIUtils::GetFileName(url.Get());
   appname = appname.substr(0, appname.size() - 4);
 
-  std::vector<androidPackage> applications = CXBMCApp::GetApplications();
+  const std::vector<androidPackage> applications = CXBMCApp::Get().GetApplications();
   for (const auto& i : applications)
   {
     if (i.packageName == appname)
@@ -74,6 +75,54 @@ bool CFileAndroidApp::Exists(const CURL& url)
   return false;
 }
 
+namespace
+{
+
+CJNIBitmap GetBitmapFromDrawable(CJNIDrawable& drawable)
+{
+  // Adaptive icons without sized layers have no intrinsic size, and
+  // createBitmap() throws for non-positive dimensions.
+  const int width = drawable.getIntrinsicWidth();
+  const int height = drawable.getIntrinsicHeight();
+  if (width <= 0 || height <= 0)
+    return {};
+
+  CJNIBitmap bmp = CJNIBitmap::createBitmap(width, height, CJNIBitmap::ARGB_8888);
+  CJNICanvas canvas(bmp);
+
+  drawable.setBounds(0, 0, canvas.getWidth(), canvas.getHeight());
+  drawable.draw(canvas);
+
+  return bmp;
+}
+
+CJNIBitmap GetBitmap(CJNIDrawable& drawable)
+{
+  JNIEnv* env = xbmc_jnienv();
+  CJNIBitmap bmp;
+  jclass cBmpDrw = env->FindClass("android/graphics/drawable/BitmapDrawable");
+  jclass cAidDrw = CJNIBase::GetSDKVersion() >= 26
+                       ? env->FindClass("android/graphics/drawable/AdaptiveIconDrawable")
+                       : nullptr;
+
+  if (env->IsInstanceOf(drawable.get_raw(), cBmpDrw))
+  {
+    CJNIBitmapDrawable resbmp = drawable;
+    if (resbmp)
+      bmp = resbmp.getBitmap();
+  }
+  else if (cAidDrw && env->IsInstanceOf(drawable.get_raw(), cAidDrw))
+    bmp = GetBitmapFromDrawable(drawable);
+
+  env->DeleteLocalRef(cBmpDrw);
+  if (cAidDrw)
+    env->DeleteLocalRef(cAidDrw);
+
+  return bmp;
+}
+
+} // namespace
+
 unsigned int CFileAndroidApp::ReadIcon(unsigned char** lpBuf, unsigned int* width, unsigned int* height)
 {
   JNIEnv* env = xbmc_jnienv();
@@ -81,29 +130,22 @@ unsigned int CFileAndroidApp::ReadIcon(unsigned char** lpBuf, unsigned int* widt
   int densities[] = { CJNIDisplayMetrics::DENSITY_XXXHIGH, CJNIDisplayMetrics::DENSITY_XXHIGH, CJNIDisplayMetrics::DENSITY_XHIGH, -1 };
 
   CJNIBitmap bmp;
-  jclass cBmpDrw = env->FindClass("android/graphics/drawable/BitmapDrawable");
 
-  if (CJNIBuild::SDK_INT >= 15 && m_icon)
+  if (m_icon)
   {
     CJNIResources res = CJNIContext::GetPackageManager().getResourcesForApplication(m_packageName);
+    if (env->ExceptionCheck())
+      env->ExceptionClear();
     if (res)
     {
       for (int i=0; densities[i] != -1 && !bmp; ++i)
       {
         int density = densities[i];
-        CJNIDrawable drw = res.getDrawableForDensity(m_icon, density);
-        if (xbmc_jnienv()->ExceptionCheck())
-          xbmc_jnienv()->ExceptionClear();
-        else if (!drw);
-        else
-        {
-          if (env->IsInstanceOf(drw.get_raw(), cBmpDrw))
-          {
-            CJNIBitmapDrawable resbmp = drw;
-            if (resbmp)
-              bmp = resbmp.getBitmap();
-          }
-        }
+        CJNIDrawable drw = res.getDrawableForDensity(m_icon, density, CJNIContext::getTheme());
+        if (env->ExceptionCheck())
+          env->ExceptionClear();
+        if (drw)
+          bmp = GetBitmap(drw);
       }
     }
   }
@@ -111,18 +153,10 @@ unsigned int CFileAndroidApp::ReadIcon(unsigned char** lpBuf, unsigned int* widt
   if (!bmp)
   {
     CJNIDrawable drw = CJNIContext::GetPackageManager().getApplicationIcon(m_packageName);
-    if (xbmc_jnienv()->ExceptionCheck())
-      xbmc_jnienv()->ExceptionClear();
-    else if (!drw);
-    else
-    {
-      if (env->IsInstanceOf(drw.get_raw(), cBmpDrw))
-      {
-        CJNIBitmapDrawable resbmp = drw;
-        if (resbmp)
-          bmp = resbmp.getBitmap();
-      }
-    }
+    if (env->ExceptionCheck())
+      env->ExceptionClear();
+    if (drw)
+      bmp = GetBitmap(drw);
   }
   if (!bmp)
     return 0;
@@ -167,9 +201,9 @@ int CFileAndroidApp::Stat(const CURL& url, struct __stat64* buffer)
 {
   return 0;
 }
-int CFileAndroidApp::IoControl(EIoControl request, void* param)
+int CFileAndroidApp::IoControl(IOControl request, void* param)
 {
-  if(request == IOCTRL_SEEK_POSSIBLE)
+  if (request == IOControl::SEEK_POSSIBLE)
     return 0;
   return 1;
 }

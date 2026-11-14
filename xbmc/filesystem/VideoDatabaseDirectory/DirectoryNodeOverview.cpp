@@ -9,8 +9,10 @@
 #include "DirectoryNodeOverview.h"
 
 #include "FileItem.h"
+#include "FileItemList.h"
 #include "ServiceBroker.h"
-#include "guilib/LocalizeStrings.h"
+#include "resources/LocalizeStrings.h"
+#include "resources/ResourcesComponent.h"
 #include "settings/Settings.h"
 #include "settings/SettingsComponent.h"
 #include "video/VideoDatabase.h"
@@ -20,35 +22,35 @@
 using namespace XFILE::VIDEODATABASEDIRECTORY;
 
 Node OverviewChildren[] = {
-                            { NODE_TYPE_MOVIES_OVERVIEW,            "movies",                   342 },
-                            { NODE_TYPE_TVSHOWS_OVERVIEW,           "tvshows",                  20343 },
-                            { NODE_TYPE_MUSICVIDEOS_OVERVIEW,       "musicvideos",              20389 },
-                            { NODE_TYPE_RECENTLY_ADDED_MOVIES,      "recentlyaddedmovies",      20386 },
-                            { NODE_TYPE_RECENTLY_ADDED_EPISODES,    "recentlyaddedepisodes",    20387 },
-                            { NODE_TYPE_RECENTLY_ADDED_MUSICVIDEOS, "recentlyaddedmusicvideos", 20390 },
-                            { NODE_TYPE_INPROGRESS_TVSHOWS,         "inprogresstvshows",        626 },
-                          };
+    {NodeType::MOVIES_OVERVIEW, "movies", 342},
+    {NodeType::TVSHOWS_OVERVIEW, "tvshows", 20343},
+    {NodeType::MUSICVIDEOS_OVERVIEW, "musicvideos", 20389},
+    {NodeType::RECENTLY_ADDED_MOVIES, "recentlyaddedmovies", 20386},
+    {NodeType::RECENTLY_ADDED_EPISODES, "recentlyaddedepisodes", 20387},
+    {NodeType::RECENTLY_ADDED_MUSICVIDEOS, "recentlyaddedmusicvideos", 20390},
+    {NodeType::INPROGRESS_TVSHOWS, "inprogresstvshows", 626},
+};
 
 CDirectoryNodeOverview::CDirectoryNodeOverview(const std::string& strName, CDirectoryNode* pParent)
-  : CDirectoryNode(NODE_TYPE_OVERVIEW, strName, pParent)
+  : CDirectoryNode(NodeType::OVERVIEW, strName, pParent)
 {
 
 }
 
-NODE_TYPE CDirectoryNodeOverview::GetChildType() const
+NodeType CDirectoryNodeOverview::GetChildType() const
 {
   for (const Node& node : OverviewChildren)
     if (GetName() == node.id)
       return node.node;
 
-  return NODE_TYPE_NONE;
+  return NodeType::NONE;
 }
 
 std::string CDirectoryNodeOverview::GetLocalizedName() const
 {
   for (const Node& node : OverviewChildren)
     if (GetName() == node.id)
-      return g_localizeStrings.Get(node.label);
+      return CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(node.label);
   return "";
 }
 
@@ -56,9 +58,9 @@ bool CDirectoryNodeOverview::GetContent(CFileItemList& items) const
 {
   CVideoDatabase database;
   database.Open();
-  bool hasMovies = database.HasContent(VIDEODB_CONTENT_MOVIES);
-  bool hasTvShows = database.HasContent(VIDEODB_CONTENT_TVSHOWS);
-  bool hasMusicVideos = database.HasContent(VIDEODB_CONTENT_MUSICVIDEOS);
+  bool hasMovies = database.HasContent(VideoDbContentType::MOVIES);
+  bool hasTvShows = database.HasContent(VideoDbContentType::TVSHOWS);
+  bool hasMusicVideos = database.HasContent(VideoDbContentType::MUSICVIDEOS);
   std::vector<std::pair<const char*, int> > vec;
   if (hasMovies)
   {
@@ -96,7 +98,8 @@ bool CDirectoryNodeOverview::GetContent(CFileItemList& items) const
   for (unsigned int i = 0; i < vec.size(); ++i)
   {
     CFileItemPtr pItem(new CFileItem(path + vec[i].first + "/", true));
-    pItem->SetLabel(g_localizeStrings.Get(vec[i].second));
+    pItem->SetLabel(
+        CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(vec[i].second));
     pItem->SetLabelPreformatted(true);
     pItem->SetCanQueue(false);
     items.Add(pItem);

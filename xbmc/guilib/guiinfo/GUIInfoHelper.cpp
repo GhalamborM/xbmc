@@ -8,67 +8,69 @@
 
 #include "GUIInfoHelper.h"
 
+#include "FileItem.h"
+#include "PlayListPlayer.h"
 #include "ServiceBroker.h"
 #include "guilib/GUIComponent.h"
 #include "guilib/GUIWindow.h"
 #include "guilib/GUIWindowManager.h"
 #include "guilib/IGUIContainer.h"
-#include "guilib/LocalizeStrings.h"
 #include "guilib/guiinfo/GUIInfoLabels.h"
 #include "playlists/PlayList.h"
+#include "resources/LocalizeStrings.h"
+#include "resources/ResourcesComponent.h"
 #include "utils/StringUtils.h"
 #include "utils/URIUtils.h"
+#include "windowing/GraphicContext.h"
+#include "windowing/WinSystem.h"
 #include "windows/GUIMediaWindow.h"
 
-namespace KODI
-{
-namespace GUILIB
-{
-namespace GUIINFO
+namespace KODI::GUILIB::GUIINFO
 {
 
 // conditions for window retrieval
-static const int WINDOW_CONDITION_HAS_LIST_ITEMS  = 1;
+static const int WINDOW_CONDITION_HAS_LIST_ITEMS = 1;
 static const int WINDOW_CONDITION_IS_MEDIA_WINDOW = 2;
 
-std::string GetPlaylistLabel(int item, int playlistid /* = PLAYLIST_NONE */)
+std::string GetPlaylistLabel(int item, PLAYLIST::Id playlistId /* = TYPE_NONE */)
 {
-  if (playlistid < PLAYLIST_NONE)
-    return std::string();
-
   PLAYLIST::CPlayListPlayer& player = CServiceBroker::GetPlaylistPlayer();
 
-  int iPlaylist = playlistid == PLAYLIST_NONE ? player.GetCurrentPlaylist() : playlistid;
+  if (playlistId == PLAYLIST::Id::TYPE_NONE)
+    playlistId = player.GetCurrentPlaylist();
+
   switch (item)
   {
     case PLAYLIST_LENGTH:
     {
-      return std::to_string(player.GetPlaylist(iPlaylist).size());
+      return std::to_string(player.GetPlaylist(playlistId).size());
     }
     case PLAYLIST_POSITION:
     {
-      int currentSong = player.GetCurrentSong();
+      int currentSong = player.GetCurrentItemIdx();
       if (currentSong > -1)
         return std::to_string(currentSong + 1);
       break;
     }
     case PLAYLIST_RANDOM:
     {
-      if (player.IsShuffled(iPlaylist))
-        return g_localizeStrings.Get(16041); // 16041: On
+      if (player.IsShuffled(playlistId))
+        return CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(16041); // 16041: On
       else
-        return g_localizeStrings.Get(591); // 591: Off
+        return CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(591); // 591: Off
     }
     case PLAYLIST_REPEAT:
     {
-      PLAYLIST::REPEAT_STATE state = player.GetRepeat(iPlaylist);
-      if (state == PLAYLIST::REPEAT_ONE)
-        return g_localizeStrings.Get(592); // 592: One
-      else if (state == PLAYLIST::REPEAT_ALL)
-        return g_localizeStrings.Get(593); // 593: All
+      PLAYLIST::RepeatState state = player.GetRepeat(playlistId);
+      if (state == PLAYLIST::RepeatState::ONE)
+        return CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(592); // 592: One
+      else if (state == PLAYLIST::RepeatState::ALL)
+        return CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(593); // 593: All
       else
-        return g_localizeStrings.Get(594); // 594: Off
+        return CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(594); // 594: Off
     }
+    default:
+      break;
   }
   return std::string();
 }
@@ -76,7 +78,7 @@ std::string GetPlaylistLabel(int item, int playlistid /* = PLAYLIST_NONE */)
 namespace
 {
 
-bool CheckWindowCondition(CGUIWindow *window, int condition)
+bool CheckWindowCondition(const CGUIWindow* window, int condition)
 {
   // check if it satisfies our condition
   if (!window)
@@ -90,9 +92,9 @@ bool CheckWindowCondition(CGUIWindow *window, int condition)
 
 CGUIWindow* GetWindowWithCondition(int contextWindow, int condition)
 {
-  CGUIWindowManager& windowMgr = CServiceBroker::GetGUI()->GetWindowManager();
+  const CGUIWindowManager& windowMgr = CServiceBroker::GetGUI()->GetWindowManager();
 
-  CGUIWindow *window = windowMgr.GetWindow(contextWindow);
+  CGUIWindow* window = windowMgr.GetWindow(contextWindow);
   if (CheckWindowCondition(window, condition))
     return window;
 
@@ -136,11 +138,11 @@ CGUIMediaWindow* GetMediaWindow(int contextWindow)
 
 CGUIControl* GetActiveContainer(int containerId, int contextWindow)
 {
-  CGUIWindow *window = GetWindow(contextWindow);
+  CGUIWindow* window = GetWindow(contextWindow);
   if (!window)
     return nullptr;
 
-  CGUIControl *control = nullptr;
+  CGUIControl* control = nullptr;
   if (!containerId) // No container specified, so we lookup the current view container
   {
     if (window->IsMediaWindow())
@@ -158,22 +160,26 @@ CGUIControl* GetActiveContainer(int containerId, int contextWindow)
   return nullptr;
 }
 
-CGUIListItemPtr GetCurrentListItem(int contextWindow, int containerId /* = 0 */, int itemOffset /* = 0 */, unsigned int itemFlags /* = 0 */)
+std::shared_ptr<CGUIListItem> GetCurrentListItem(int contextWindow,
+                                                 int containerId /* = 0 */,
+                                                 int itemOffset /* = 0 */,
+                                                 unsigned int itemFlags /* = 0 */)
 {
-  CGUIListItemPtr item;
+  // Add-ons ask for list items from their own threads, and the window and its
+  // controls can change under them unless the GUI is locked
+  std::unique_lock lock(CServiceBroker::GetWinSystem()->GetGfxContext());
 
-  if (containerId == 0  &&
-      itemOffset == 0 &&
-      !(itemFlags & INFOFLAG_LISTITEM_CONTAINER) &&
-      !(itemFlags & INFOFLAG_LISTITEM_ABSOLUTE) &&
-      !(itemFlags & INFOFLAG_LISTITEM_POSITION))
+  std::shared_ptr<CGUIListItem> item;
+
+  if (containerId == 0 && itemOffset == 0 && !(itemFlags & INFOFLAG_LISTITEM_CONTAINER) &&
+      !(itemFlags & INFOFLAG_LISTITEM_ABSOLUTE) && !(itemFlags & INFOFLAG_LISTITEM_POSITION))
     item = GetCurrentListItemFromWindow(contextWindow);
 
   if (!item)
   {
     CGUIControl* activeContainer = GetActiveContainer(containerId, contextWindow);
     if (activeContainer)
-      item = static_cast<IGUIContainer *>(activeContainer)->GetListItem(itemOffset, itemFlags);
+      item = static_cast<IGUIContainer*>(activeContainer)->GetListItem(itemOffset, itemFlags);
   }
 
   return item;
@@ -199,6 +205,4 @@ std::string GetFileInfoLabelValueFromPath(int info, const std::string& filenameA
   return value;
 }
 
-} // namespace GUIINFO
-} // namespace GUILIB
-} // namespace KODI
+} // namespace KODI::GUILIB::GUIINFO

@@ -36,8 +36,8 @@ public:
   bool Flush(bool saveBuffers) override;
 
   // Feature support
-  bool Supports(ERENDERFEATURE feature) override;
-  bool Supports(ESCALINGMETHOD method) override;
+  bool Supports(ERENDERFEATURE feature) const override;
+  bool Supports(ESCALINGMETHOD method) const override;
 
 protected:
   bool LoadShadersHook() override;
@@ -52,7 +52,8 @@ protected:
   EShaderFormat GetShaderFormat() override;
 
   bool m_isVAAPIBuffer = true;
-  std::unique_ptr<VAAPI::CVaapiTexture> m_vaapiTextures[NUM_BUFFERS];
+  VAAPI::CVaapiTexturePool m_texturePool;
+  VAAPI::CVaapiTexture* m_vaapiTextures[NUM_BUFFERS]{};
   GLsync m_fences[NUM_BUFFERS];
   static VAAPI::IVaapiWinSystem *m_pWinSystem;
 };

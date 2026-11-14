@@ -14,14 +14,34 @@
 #include "cores/VideoPlayer/DVDCodecs/Video/VTB.h"
 #include "utils/log.h"
 #include "windowing/WinSystem.h"
-#if defined(HAS_SDL)
-#include "windowing/osx/SDL/WinSystemOSXSDL.h"
-#endif
+#include "windowing/osx/WinSystemOSX.h"
 
 #include "platform/darwin/osx/CocoaInterface.h"
 
 #include <CoreVideo/CoreVideo.h>
 #include <OpenGL/CGLIOSurface.h>
+
+namespace
+{
+bool IsSupportedVTBGLSurface(CVPixelBufferRef pixelBuffer, IOSurfaceRef& surface)
+{
+  if (!pixelBuffer)
+    return false;
+
+  surface = CVPixelBufferGetIOSurface(pixelBuffer);
+  if (!surface)
+    return false;
+
+  const OSType formatType = IOSurfaceGetPixelFormat(surface);
+  if (formatType != kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange &&
+      formatType != kCVPixelFormatType_420YpCbCr8BiPlanarFullRange)
+  {
+    return false;
+  }
+
+  return IOSurfaceGetPlaneCount(surface) == 2;
+}
+} // namespace
 
 CBaseRenderer* CRendererVTB::Create(CVideoBuffer *buffer)
 {
@@ -153,17 +173,8 @@ bool CRendererVTB::UploadTexture(int index)
   // with an IOSurface as there is no CPU -> GPU upload.
   CWinSystemOSX* winSystem = dynamic_cast<CWinSystemOSX*>(CServiceBroker::GetWinSystem());
   CGLContextObj cgl_ctx  = (CGLContextObj)winSystem->GetCGLContextObj();
-  IOSurfaceRef surface  = CVPixelBufferGetIOSurface(cvBufferRef);
-  OSType format_type = IOSurfaceGetPixelFormat(surface);
-
-  if (format_type != kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange)
-  {
-    return false;
-  }
-
-  GLsizei surfplanes = IOSurfaceGetPlaneCount(surface);
-
-  if (surfplanes != 2)
+  IOSurfaceRef surface = nullptr;
+  if (!IsSupportedVTBGLSurface(cvBufferRef, surface))
   {
     return false;
   }

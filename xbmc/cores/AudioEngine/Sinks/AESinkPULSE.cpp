@@ -7,14 +7,20 @@
  */
 #include "AESinkPULSE.h"
 
-#include "Application.h"
 #include "ServiceBroker.h"
+#include "application/ApplicationComponents.h"
+#include "application/ApplicationVolumeHandling.h"
 #include "cores/AudioEngine/AESinkFactory.h"
-#include "guilib/LocalizeStrings.h"
+#include "threads/SingleLock.h"
 #include "utils/StringUtils.h"
 #include "utils/log.h"
 
 #include <array>
+#include <memory>
+#include <mutex>
+
+#include <pulse/context.h>
+#include <pulse/introspect.h>
 
 //-----------------------------------------------------------------------------
 //-----------------------------------------------------------------------------
@@ -24,7 +30,7 @@ class CDriverMonitor
 public:
   CDriverMonitor() = default;
   virtual ~CDriverMonitor();
-  bool Start();
+  bool Start(bool allowPipeWireCompatServer);
   bool IsInitialized();
 
   CCriticalSection m_sec;
@@ -252,7 +258,7 @@ static void SinkCallback(pa_context* c,
   if (!p)
     return;
 
-  CSingleLock lock(p->m_sec);
+  std::unique_lock lock(p->m_sec);
   if (p->IsInitialized())
   {
     if ((t & PA_SUBSCRIPTION_EVENT_FACILITY_MASK) == PA_SUBSCRIPTION_EVENT_SINK)
@@ -285,7 +291,7 @@ static void SinkChangedCallback(pa_context *c, pa_subscription_event_type_t t, u
   if(!p)
     return;
 
-  CSingleLock lock(p->m_sec);
+  std::unique_lock lock(p->m_sec);
   if (p->IsInitialized())
   {
     if ((t & PA_SUBSCRIPTION_EVENT_FACILITY_MASK) == PA_SUBSCRIPTION_EVENT_SINK_INPUT)
@@ -310,6 +316,21 @@ static void SinkChangedCallback(pa_context *c, pa_subscription_event_type_t t, u
       CLog::Log(LOGDEBUG, "Not subscribed to Event: {}", static_cast<int>(t));
     }
   }
+}
+
+struct ServerInfoStruct
+{
+  pa_threaded_mainloop* m_mainloop;
+  bool m_isInfoSet{false};
+  std::string m_serverName;
+};
+
+static void ServerInfoCallback(pa_context* c, const pa_server_info* i, void* userdata)
+{
+  auto serverInfo = reinterpret_cast<ServerInfoStruct*>(userdata);
+  serverInfo->m_serverName = i->server_name;
+  serverInfo->m_isInfoSet = true;
+  pa_threaded_mainloop_signal(serverInfo->m_mainloop, 0);
 }
 
 struct SinkInfoStruct
@@ -653,7 +674,7 @@ bool CDriverMonitor::IsInitialized()
   return m_isInit;
 }
 
-bool CDriverMonitor::Start()
+bool CDriverMonitor::Start(bool allowPipeWireCompatServer)
 {
   if (!SetupContext(nullptr, "KodiDriver", &m_pContext, &m_pMainLoop))
   {
@@ -663,9 +684,33 @@ bool CDriverMonitor::Start()
 
   pa_threaded_mainloop_lock(m_pMainLoop);
 
+  ServerInfoStruct serverInfo;
+  serverInfo.m_mainloop = m_pMainLoop;
+  pa_context_get_server_info(m_pContext, ServerInfoCallback, &serverInfo);
+  while (!serverInfo.m_isInfoSet)
+    pa_threaded_mainloop_wait(m_pMainLoop);
+
+  CLog::Log(LOGINFO, "PulseAudio: Server name: {}", serverInfo.m_serverName);
+
+#ifdef HAS_PIPEWIRE
+  // If Kodi is build with PipeWire support we prefer native PipeWire over the
+  // PulseAudio compatibility layer IF NOT PulseAudio is explicitly selected
+  if (!allowPipeWireCompatServer)
+  {
+    // Check the PulseAudio server name. If it contains PipeWire in any form
+    // it is the compatibility layer provided by PipeWire
+    if (StringUtils::Contains(serverInfo.m_serverName, "pipewire", true))
+    {
+      CLog::Log(LOGINFO, "PulseAudio: Server is PipeWire, bail and use native PipeWire interface");
+      pa_threaded_mainloop_unlock(m_pMainLoop);
+      return false;
+    }
+  }
+#endif
+
   m_isInit = true;
 
-  CSingleLock lock(m_sec);
+  std::unique_lock lock(m_sec);
   // Register Callback for Sink changes
   pa_context_set_subscribe_callback(m_pContext, SinkCallback, this);
   const pa_subscription_mask_t mask = pa_subscription_mask_t(PA_SUBSCRIPTION_MASK_SINK);
@@ -684,14 +729,14 @@ bool CDriverMonitor::Start()
 
 std::unique_ptr<CDriverMonitor> CAESinkPULSE::m_pMonitor;
 
-bool CAESinkPULSE::Register()
+bool CAESinkPULSE::Register(bool allowPipeWireCompatServer)
 {
   // check if pulseaudio is actually available
   pa_simple *s;
   pa_sample_spec ss;
   ss.format = PA_SAMPLE_S16NE;
   ss.channels = 2;
-  ss.rate = 44100;
+  ss.rate = 48000;
   s = pa_simple_new(NULL, "Kodi-Tester", PA_STREAM_PLAYBACK, NULL, "Test", &ss, NULL, NULL, NULL);
   if (!s)
   {
@@ -704,8 +749,12 @@ bool CAESinkPULSE::Register()
     pa_simple_free(s);
   }
 
-  m_pMonitor.reset(new CDriverMonitor());
-  m_pMonitor->Start();
+  m_pMonitor = std::make_unique<CDriverMonitor>();
+  if (!m_pMonitor->Start(allowPipeWireCompatServer))
+  {
+    m_pMonitor.reset();
+    return false;
+  }
 
   AE::AESinkRegEntry entry;
   entry.sinkName = "PULSE";
@@ -716,14 +765,13 @@ bool CAESinkPULSE::Register()
   return true;
 }
 
-IAESink* CAESinkPULSE::Create(std::string &device, AEAudioFormat& desiredFormat)
+std::unique_ptr<IAESink> CAESinkPULSE::Create(std::string& device, AEAudioFormat& desiredFormat)
 {
-  IAESink* sink = new CAESinkPULSE();
+  auto sink = std::make_unique<CAESinkPULSE>();
   if (sink->Initialize(desiredFormat, device))
     return sink;
 
-  delete sink;
-  return nullptr;
+  return {};
 }
 CAESinkPULSE::CAESinkPULSE()
 {
@@ -739,7 +787,6 @@ CAESinkPULSE::CAESinkPULSE()
   m_IsStreamPaused = false;
   m_volume_needs_update = false;
   m_periodSize = 0;
-  m_requestedBytes = 0;
   pa_cvolume_init(&m_Volume);
 }
 
@@ -751,7 +798,7 @@ CAESinkPULSE::~CAESinkPULSE()
 bool CAESinkPULSE::Initialize(AEAudioFormat &format, std::string &device)
 {
   {
-    CSingleLock lock(m_sec);
+    std::unique_lock lock(m_sec);
     m_IsAllocated = false;
   }
   m_passthrough = false;
@@ -971,7 +1018,7 @@ bool CAESinkPULSE::Initialize(AEAudioFormat &format, std::string &device)
   }
 
   {
-    CSingleLock lock(m_sec);
+    std::unique_lock lock(m_sec);
     // Register Callback for Sink changes
     pa_context_set_subscribe_callback(m_Context, SinkChangedCallback, this);
     const pa_subscription_mask_t mask = pa_subscription_mask_t(PA_SUBSCRIPTION_MASK_SINK_INPUT);
@@ -995,7 +1042,7 @@ bool CAESinkPULSE::Initialize(AEAudioFormat &format, std::string &device)
   // Cork stream will resume when adding first package
   Pause(true);
   {
-    CSingleLock lock(m_sec);
+    std::unique_lock lock(m_sec);
     m_IsAllocated = true;
   }
   return true;
@@ -1003,7 +1050,7 @@ bool CAESinkPULSE::Initialize(AEAudioFormat &format, std::string &device)
 
 void CAESinkPULSE::Deinitialize()
 {
-  CSingleLock lock(m_sec);
+  std::unique_lock lock(m_sec);
   m_IsAllocated = false;
   m_passthrough = false;
   m_periodSize = 0;
@@ -1089,20 +1136,21 @@ unsigned int CAESinkPULSE::AddPackets(uint8_t **data, unsigned int frames, unsig
   unsigned int available = frames * m_format.m_frameSize;
   unsigned int length = m_periodSize;
   void *buffer = data[0]+offset*m_format.m_frameSize;
-  unsigned int wait_time = static_cast<unsigned int>(1000.0 * m_BufferSize / m_BytesPerSecond);
-  m_extTimer.Set(wait_time);
+  auto wait_time =
+      std::chrono::duration<double>(static_cast<double>(m_BufferSize) / m_BytesPerSecond);
+  XbmcThreads::EndTime<std::chrono::duration<double>> timer(wait_time);
   // we don't want to block forever - if timer expires pa_stream_write will
   // fail - therefore we don't care and just return 0;
-  while (!m_extTimer.IsTimePast())
+  while (!timer.IsTimePast())
   {
     if (m_requestedBytes > 0)
       break;
     pa_threaded_mainloop_wait(m_MainLoop);
   }
 
-  if (m_extTimer.IsTimePast())
+  if (timer.IsTimePast())
   {
-    CLog::Log(LOGERROR, "Sink Timer expired for more than buffer time: {}", wait_time);
+    CLog::Log(LOGERROR, "Sink Timer expired for more than buffer time: {}s", wait_time.count());
     pa_threaded_mainloop_unlock(m_MainLoop);
     return 0;
   }
@@ -1179,10 +1227,12 @@ void CAESinkPULSE::SetVolume(float volume)
        m_volume_needs_update = false;
        pa_volume_t n_vol = pa_cvolume_avg(&m_Volume);
        n_vol = std::min(n_vol, PA_VOLUME_NORM);
-       per_cent_volume = (float) n_vol / PA_VOLUME_NORM;
+       per_cent_volume = static_cast<float>(n_vol) / PA_VOLUME_NORM;
        // only update internal volume
        pa_threaded_mainloop_unlock(m_MainLoop);
-       g_application.SetVolume(per_cent_volume, false);
+       auto& components = CServiceBroker::GetAppComponents();
+       const auto appVolume = components.GetComponent<CApplicationVolumeHandling>();
+       appVolume->SetVolume(per_cent_volume, false);
        return;
     }
 
@@ -1252,8 +1302,8 @@ void CAESinkPULSE::EnumerateDevicesEx(AEDeviceInfoList &list, bool force)
 
 bool CAESinkPULSE::IsInitialized()
 {
- CSingleLock lock(m_sec);
- return m_IsAllocated;
+  std::unique_lock lock(m_sec);
+  return m_IsAllocated;
 }
 
 void CAESinkPULSE::Pause(bool pause)

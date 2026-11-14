@@ -1,71 +1,80 @@
 # FindFlatBuffers
 # --------
-# Find the FlatBuffers schema compiler and headers
+# Find the FlatBuffers schema headers
 #
-# This will define the following variables:
+# This will define the following target:
 #
-# FLATBUFFERS_FOUND - system has FlatBuffers compiler and headers
-# FLATBUFFERS_FLATC_EXECUTABLE - the flatc compiler executable
-# FLATBUFFERS_INCLUDE_DIRS - the FlatFuffers include directory
-# FLATBUFFERS_MESSAGES_INCLUDE_DIR - the directory for generated headers
+#   ${APP_NAME_LC}::FlatBuffers - The flatbuffers headers
 
-if(ENABLE_INTERNAL_FLATBUFFERS)
-  include(ExternalProject)
-  file(STRINGS ${CMAKE_SOURCE_DIR}/tools/depends/native/flatbuffers/Makefile VER REGEX "^[ ]*VERSION[ ]*=.+$")
-  string(REGEX REPLACE "^[ ]*VERSION[ ]*=[ ]*" "" FLATBUFFERS_VER "${VER}")
+find_package(FlatC REQUIRED ${SEARCH_QUIET})
 
-  # Allow user to override the download URL with a local tarball
-  # Needed for offline build envs
-  if(FLATBUFFERS_URL)
-    get_filename_component(FLATBUFFERS_URL "${FLATBUFFERS_URL}" ABSOLUTE)
+if(NOT TARGET ${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME})
+
+  include(cmake/scripts/common/ModuleHelpers.cmake)
+
+  macro(buildmacroFlatBuffers)
+    # Override build type detection and always build as release
+    set(${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_BUILD_TYPE Release)
+
+    set(CMAKE_ARGS -DFLATBUFFERS_CODE_COVERAGE=OFF
+                   -DFLATBUFFERS_BUILD_TESTS=OFF
+                   -DFLATBUFFERS_INSTALL=ON
+                   -DFLATBUFFERS_BUILD_FLATLIB=OFF
+                   -DFLATBUFFERS_BUILD_FLATC=OFF
+                   -DFLATBUFFERS_BUILD_FLATHASH=OFF
+                   -DFLATBUFFERS_BUILD_GRPCTEST=OFF
+                   -DFLATBUFFERS_BUILD_SHAREDLIB=OFF
+                   "${EXTRA_ARGS}")
+    set(BUILD_BYPRODUCTS ${DEPENDS_PATH}/include/flatbuffers/flatbuffers.h)
+
+    BUILD_DEP_TARGET()
+  endmacro()
+
+  set(${CMAKE_FIND_PACKAGE_NAME}_MODULE_LC flatbuffers)
+  set(${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME FlatBuffers)
+  SETUP_BUILD_VARS()
+
+  set(${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_INTERFACE_LIB TRUE)
+
+  find_package(${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME} CONFIG ${SEARCH_QUIET}
+                                                         HINTS ${DEPENDS_PATH}/lib/cmake
+                                                         NAMES FlatBuffers flatbuffers
+                                                         ${${CORE_SYSTEM_NAME}_SEARCH_CONFIG})
+
+  # Check for existing Flatbuffers. If version >= FLATBUFFERS-VERSION file version, dont build
+  # A corner case, but if a linux/freebsd user WANTS to build internal flatbuffers, build anyway
+  if(("${${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME}_VERSION}" VERSION_LESS ${${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_VER} AND ENABLE_INTERNAL_FLATBUFFERS) OR
+     (((CORE_SYSTEM_NAME STREQUAL linux AND NOT "webos" IN_LIST CORE_PLATFORM_NAME_LC) OR CORE_SYSTEM_NAME STREQUAL freebsd) AND ENABLE_INTERNAL_FLATBUFFERS))
+    message(STATUS "Building ${${CMAKE_FIND_PACKAGE_NAME}_MODULE_LC}: \(version \"${${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_VER}\"\)")
+    cmake_language(EVAL CODE "
+      buildmacro${CMAKE_FIND_PACKAGE_NAME}()
+    ")
   else()
-    set(FLATBUFFERS_URL http://mirrors.kodi.tv/build-deps/sources/flatbuffers-${FLATBUFFERS_VER}.tar.gz)
+    # Flatbuffers cmake targets are odd. We dont use static/shared builds, and only use header only
+    # however they do not provide header only targets. Manually search for header to create our own
+    # target.
+    find_path(${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_INCLUDE_DIR NAMES flatbuffers/flatbuffers.h
+                                                               HINTS ${DEPENDS_PATH}/include
+                                                               ${${CORE_PLATFORM_LC}_SEARCH_CONFIG})
+
+    if(${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_INCLUDE_DIR)
+      set(${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME}_FOUND 1)
+    endif()
   endif()
-  if(VERBOSE)
-    message(STATUS "FLATBUFFERS_URL: ${FLATBUFFERS_URL}")
-  endif()
 
-  set(FLATBUFFERS_FLATC_EXECUTABLE ${CMAKE_BINARY_DIR}/${CORE_BUILD_DIR}/bin/flatc CACHE INTERNAL "FlatBuffer compiler")
-  set(FLATBUFFERS_INCLUDE_DIR ${CMAKE_BINARY_DIR}/${CORE_BUILD_DIR}/include CACHE INTERNAL "FlatBuffer include dir")
+  if(${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME}_FOUND)
+    SETUP_BUILD_TARGET()
 
-  externalproject_add(flatbuffers
-                      URL ${FLATBUFFERS_URL}
-                      DOWNLOAD_DIR ${CMAKE_BINARY_DIR}/${CORE_BUILD_DIR}/download
-                      PREFIX ${CORE_BUILD_DIR}/flatbuffers
-                      CMAKE_ARGS -DCMAKE_INSTALL_PREFIX=${CMAKE_BINARY_DIR}/${CORE_BUILD_DIR}
-                                 -DCMAKE_BUILD_TYPE=Release
-                                 -DFLATBUFFERS_CODE_COVERAGE=OFF
-                                 -DFLATBUFFERS_BUILD_TESTS=OFF
-                                 -DFLATBUFFERS_INSTALL=ON
-                                 -DFLATBUFFERS_BUILD_FLATLIB=OFF
-                                 -DFLATBUFFERS_BUILD_FLATC=ON
-                                 -DFLATBUFFERS_BUILD_FLATHASH=OFF
-                                 -DFLATBUFFERS_BUILD_GRPCTEST=OFF
-                                 -DFLATBUFFERS_BUILD_SHAREDLIB=OFF
-                                 "${EXTRA_ARGS}"
-                      BUILD_BYPRODUCTS ${FLATBUFFERS_FLATC_EXECUTABLE})
-  set_target_properties(flatbuffers PROPERTIES FOLDER "External Projects"
-                                    INTERFACE_INCLUDE_DIRECTORIES ${FLATBUFFERS_INCLUDE_DIR})
-else()
-  find_program(FLATBUFFERS_FLATC_EXECUTABLE NAMES flatc)
-  find_path(FLATBUFFERS_INCLUDE_DIR NAMES flatbuffers/flatbuffers.h)
-endif()
+    if(TARGET ${${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_BUILD_NAME})
+      add_dependencies(${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME} ${${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_BUILD_NAME})
+    endif()
 
-include(FindPackageHandleStandardArgs)
-find_package_handle_standard_args(FlatBuffers
-                                  REQUIRED_VARS FLATBUFFERS_FLATC_EXECUTABLE FLATBUFFERS_INCLUDE_DIR
-                                  VERSION_VAR FLATBUFFERS_VER)
+    add_dependencies(${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME} flatbuffers::flatc)
 
-if(FLATBUFFERS_FOUND)
-  set(FLATBUFFERS_MESSAGES_INCLUDE_DIR ${CMAKE_BINARY_DIR}/${CORE_BUILD_DIR}/cores/RetroPlayer/messages CACHE INTERNAL "Generated FlatBuffer headers")
-  set(FLATBUFFERS_INCLUDE_DIRS ${FLATBUFFERS_INCLUDE_DIR} ${FLATBUFFERS_MESSAGES_INCLUDE_DIR})
-
-  if(NOT TARGET flatbuffers)
-    add_library(flatbuffers UNKNOWN IMPORTED)
-    set_target_properties(flatbuffers PROPERTIES
-                               FOLDER "External Projects"
-                               INTERFACE_INCLUDE_DIRECTORIES ${FLATBUFFERS_INCLUDE_DIR})
+    ADD_MULTICONFIG_BUILDMACRO()
+  else()
+    if(FlatBuffers_FIND_REQUIRED)
+      message(FATAL_ERROR "Flatbuffer schema headers were not found. You may want to try -DENABLE_INTERNAL_FLATBUFFERS=ON to build the internal headers package")
+    endif()
   endif()
 endif()
-
-mark_as_advanced(FLATBUFFERS_FLATC_EXECUTABLE FLATBUFFERS_INCLUDE_DIR)

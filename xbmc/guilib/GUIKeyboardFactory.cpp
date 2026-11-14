@@ -6,26 +6,28 @@
  *  See LICENSES/README.md for more information.
  */
 
-#include "Application.h"
-#include "ServiceBroker.h"
-#include "GUIComponent.h"
-#include "messaging/ApplicationMessenger.h"
-#include "LocalizeStrings.h"
 #include "GUIKeyboardFactory.h"
+
+#include "GUIComponent.h"
 #include "GUIUserMessages.h"
 #include "GUIWindowManager.h"
+#include "ServiceBroker.h"
+#include "dialogs/GUIDialogKeyboardGeneric.h"
+#include "messaging/ApplicationMessenger.h"
 #include "messaging/helpers/DialogOKHelper.h"
+#include "resources/LocalizeStrings.h"
+#include "resources/ResourcesComponent.h"
 #include "settings/Settings.h"
 #include "settings/SettingsComponent.h"
 #include "utils/Digest.h"
 #include "utils/StringUtils.h"
 #include "utils/Variant.h"
-
-#include "dialogs/GUIDialogKeyboardGeneric.h"
-#if defined(TARGET_DARWIN_EMBEDDED)
+#if defined(TARGET_DARWIN_EMBEDDED) || defined(TARGET_ANDROID) || defined(TARGET_WASM)
 #include "dialogs/GUIDialogKeyboardTouch.h"
 
+#if defined(TARGET_DARWIN_EMBEDDED)
 #include "platform/darwin/ios-common/DarwinEmbedKeyboard.h"
+#endif
 #endif
 
 using namespace KODI::MESSAGING;
@@ -49,12 +51,13 @@ void CGUIKeyboardFactory::keyTypedCB(CGUIKeyboard *ref, const std::string &typed
       case FILTERING_SEARCH:
         message.SetParam1(GUI_MSG_SEARCH_UPDATE);
         message.SetStringParam(typedString);
-        CApplicationMessenger::GetInstance().SendGUIMessage(message, CServiceBroker::GetGUI()->GetWindowManager().GetActiveWindow());
+        CServiceBroker::GetAppMessenger()->SendGUIMessage(
+            message, CServiceBroker::GetGUI()->GetWindowManager().GetActiveWindow());
         break;
       case FILTERING_CURRENT:
         message.SetParam1(GUI_MSG_FILTER_ITEMS);
         message.SetStringParam(typedString);
-        CApplicationMessenger::GetInstance().SendGUIMessage(message);
+        CServiceBroker::GetAppMessenger()->SendGUIMessage(message);
         break;
       case FILTERING_NONE:
         break;
@@ -86,26 +89,25 @@ bool CGUIKeyboardFactory::ShowAndGetInput(std::string& aTextString,
   if (heading.isString())
     headingStr = heading.asString();
   else if (heading.isInteger() && heading.asInteger())
-    headingStr = g_localizeStrings.Get((uint32_t)heading.asInteger());
+    headingStr = CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(
+        (uint32_t)heading.asInteger());
 
   bool useKodiKeyboard = true;
-#if defined(TARGET_DARWIN_EMBEDDED)
-#if defined(TARGET_DARWIN_TVOS)
+#if defined(TARGET_DARWIN_TVOS) || defined(TARGET_ANDROID) || defined(TARGET_WASM)
   useKodiKeyboard = CServiceBroker::GetSettingsComponent()->GetSettings()->GetBool(
-      CSettings::SETTING_INPUT_TVOSUSEKODIKEYBOARD);
-#else
+      CSettings::SETTING_INPUT_USEAPPLICATIONKEYBOARD);
+#elif defined(TARGET_DARWIN_EMBEDDED)
   useKodiKeyboard = CDarwinEmbedKeyboard::hasExternalKeyboard();
-#endif // defined(TARGET_DARWIN_TVOS)
 #endif
 
   auto& winManager = CServiceBroker::GetGUI()->GetWindowManager();
   CGUIKeyboard* kb = nullptr;
   if (useKodiKeyboard)
     kb = winManager.GetWindow<CGUIDialogKeyboardGeneric>(WINDOW_DIALOG_KEYBOARD);
-#if defined(TARGET_DARWIN_EMBEDDED)
+#if defined(TARGET_DARWIN_EMBEDDED) || defined(TARGET_ANDROID) || defined(TARGET_WASM)
   else
     kb = winManager.GetWindow<CGUIDialogKeyboardTouch>(WINDOW_DIALOG_KEYBOARD_TOUCH);
-#endif // defined(TARGET_DARWIN_EMBEDDED)
+#endif // defined(TARGET_DARWIN_EMBEDDED) || defined(TARGET_ANDROID) || defined(TARGET_WASM)
 
   if (kb)
   {
@@ -192,7 +194,8 @@ bool CGUIKeyboardFactory::ShowAndVerifyNewPassword(std::string& newPassword,
 // \return true if successful display and user input entry/re-entry. false if unsuccessful display, no user input, or canceled editing.
 bool CGUIKeyboardFactory::ShowAndVerifyNewPassword(std::string& newPassword, unsigned int autoCloseMs /* = 0 */)
 {
-  const std::string& heading = g_localizeStrings.Get(12340);
+  const std::string& heading =
+      CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(12340);
   return ShowAndVerifyNewPassword(newPassword, heading, false, autoCloseMs);
 }
 
@@ -204,15 +207,15 @@ bool CGUIKeyboardFactory::ShowAndVerifyNewPassword(std::string& newPassword, uns
 int CGUIKeyboardFactory::ShowAndVerifyPassword(std::string& strPassword, const std::string& strHeading, int iRetries, unsigned int autoCloseMs /* = 0 */)
 {
   std::string strHeadingTemp;
-  if (1 > iRetries && strHeading.size())
+  if (1 > iRetries && !strHeading.empty())
     strHeadingTemp = strHeading;
   else
-    strHeadingTemp =
-        StringUtils::Format("{} - {} {}", g_localizeStrings.Get(12326),
-                            CServiceBroker::GetSettingsComponent()->GetSettings()->GetInt(
-                                CSettings::SETTING_MASTERLOCK_MAXRETRIES) -
-                                iRetries,
-                            g_localizeStrings.Get(12343));
+    strHeadingTemp = StringUtils::Format(
+        "{} - {} {}", CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(12326),
+        CServiceBroker::GetSettingsComponent()->GetSettings()->GetInt(
+            CSettings::SETTING_MASTERLOCK_MAXRETRIES) -
+            iRetries,
+        CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(12343));
 
   std::string strUserInput;
   //! @todo GUI Setting to enable disable this feature y/n?

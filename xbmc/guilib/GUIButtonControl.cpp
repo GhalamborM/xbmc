@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2005-2018 Team Kodi
+ *  Copyright (C) 2005-2026 Team Kodi
  *  This file is part of Kodi - https://kodi.tv
  *
  *  SPDX-License-Identifier: GPL-2.0-or-later
@@ -9,7 +9,14 @@
 #include "GUIButtonControl.h"
 
 #include "GUIFontManager.h"
-#include "input/Key.h"
+#include "ServiceBroker.h"
+#include "input/actions/Action.h"
+#include "input/actions/ActionIDs.h"
+#include "input/mouse/MouseEvent.h"
+#include "utils/log.h"
+#include "windowing/WinSystem.h"
+
+using namespace KODI;
 
 CGUIButtonControl::CGUIButtonControl(int parentID,
                                      int controlID,
@@ -85,8 +92,14 @@ void CGUIButtonControl::Process(unsigned int currentTime, CDirtyRegionList &dirt
       alphaChannel += 192;
       alphaChannel = (unsigned int)((float)m_alpha * (float)alphaChannel / 255.0f);
     }
-    if (m_imgFocus->SetAlpha((unsigned char)alphaChannel))
-      MarkDirtyRegion();
+
+    const auto newAlpha = static_cast<unsigned char>(alphaChannel);
+    if (m_lastFocusAlpha != newAlpha)
+    {
+      if (m_imgFocus->SetAlpha(newAlpha))
+        MarkDirtyRegion();
+      m_lastFocusAlpha = newAlpha;
+    }
 
     m_imgFocus->SetVisible(true);
     m_imgNoFocus->SetVisible(false);
@@ -106,15 +119,27 @@ void CGUIButtonControl::Process(unsigned int currentTime, CDirtyRegionList &dirt
 
 void CGUIButtonControl::Render()
 {
-  m_imgFocus->Render();
-  m_imgNoFocus->Render();
+  if (CServiceBroker::GetWinSystem()->GetGfxContext().GetRenderOrder() ==
+      RENDER_ORDER_FRONT_TO_BACK)
+  {
+    m_imgNoFocus->Render();
+    m_imgFocus->Render(-1);
+  }
+  else
+  {
+    m_imgFocus->Render(-1);
+    m_imgNoFocus->Render();
+    RenderText();
+  }
 
-  RenderText();
   CGUIControl::Render();
 }
 
 void CGUIButtonControl::RenderText()
 {
+  if (CServiceBroker::GetWinSystem()->GetGfxContext().GetRenderOrder() ==
+      RENDER_ORDER_FRONT_TO_BACK)
+    return;
   m_label.Render();
   m_label2.Render();
 }
@@ -176,7 +201,7 @@ void CGUIButtonControl::ProcessText(unsigned int currentTime)
   // auto-width - adjust hitrect
   if (m_minWidth && m_width != renderWidth)
   {
-    CRect rect(m_posX, m_posY, renderWidth, m_height);
+    CRect rect{m_posX, m_posY, m_posX + renderWidth, m_posY + m_height};
     SetHitRect(rect, m_hitColor);
   }
 
@@ -335,7 +360,7 @@ CRect CGUIButtonControl::CalcRenderRegion() const
   return buttonRect;
 }
 
-EVENT_RESULT CGUIButtonControl::OnMouseEvent(const CPoint &point, const CMouseEvent &event)
+EVENT_RESULT CGUIButtonControl::OnMouseEvent(const CPoint& point, const MOUSE::CMouseEvent& event)
 {
   if (event.m_id == ACTION_MOUSE_LEFT_CLICK)
   {
@@ -359,18 +384,19 @@ std::string CGUIButtonControl::GetLabel2() const
 
 void CGUIButtonControl::PythonSetLabel(const std::string& strFont,
                                        const std::string& strText,
-                                       UTILS::COLOR::Color textColor,
-                                       UTILS::COLOR::Color shadowColor,
-                                       UTILS::COLOR::Color focusedColor)
+                                       KODI::UTILS::COLOR::Color textColor,
+                                       KODI::UTILS::COLOR::Color shadowColor,
+                                       KODI::UTILS::COLOR::Color focusedColor)
 {
-  m_label.GetLabelInfo().font = g_fontManager.GetFont(strFont);
+  m_label.SetLabelFont(g_fontManager.GetFont(strFont));
   m_label.GetLabelInfo().textColor = textColor;
   m_label.GetLabelInfo().focusedColor = focusedColor;
   m_label.GetLabelInfo().shadowColor = shadowColor;
+  m_label2.SetLabelFont(g_fontManager.GetFont(strFont));
   SetLabel(strText);
 }
 
-void CGUIButtonControl::PythonSetDisabledColor(UTILS::COLOR::Color disabledColor)
+void CGUIButtonControl::PythonSetDisabledColor(KODI::UTILS::COLOR::Color disabledColor)
 {
   m_label.GetLabelInfo().disabledColor = disabledColor;
 }
@@ -378,9 +404,18 @@ void CGUIButtonControl::PythonSetDisabledColor(UTILS::COLOR::Color disabledColor
 void CGUIButtonControl::OnClick()
 {
   // Save values, as the click message may deactivate the window
-  int controlID = GetID();
-  int parentID = GetParentID();
-  CGUIAction clickActions = m_clickActions;
+  const int controlID = GetID();
+  const int parentID = GetParentID();
+  const CGUIAction clickActions = m_clickActions;
+
+  if (IsDisabled())
+  {
+    CLog::Log(LOGWARNING,
+              "Button control: Blocked an attempt to click a disabled button "
+              "(control {} window {})",
+              controlID, parentID);
+    return;
+  }
 
   // button selected, send a message
   CGUIMessage msg(GUI_MSG_CLICKED, controlID, parentID, 0);
@@ -397,6 +432,7 @@ void CGUIButtonControl::OnFocus()
 void CGUIButtonControl::OnUnFocus()
 {
   m_unfocusActions.ExecuteActions(GetID(), GetParentID());
+  m_lastFocusAlpha.reset();
 }
 
 void CGUIButtonControl::SetSelected(bool bSelected)

@@ -8,11 +8,15 @@
 
 #include "PlayList.h"
 
+#include "FileItem.h"
+#include "FileItemList.h"
 #include "PlayListFactory.h"
 #include "ServiceBroker.h"
 #include "filesystem/File.h"
 #include "interfaces/AnnouncementManager.h"
+#include "music/MusicFileItemClassify.h"
 #include "music/tags/MusicInfoTag.h"
+#include "utils/ItemProperties.h"
 #include "utils/Random.h"
 #include "utils/StringUtils.h"
 #include "utils/URIUtils.h"
@@ -27,15 +31,14 @@
 #include <utility>
 #include <vector>
 
-
 using namespace MUSIC_INFO;
 using namespace XFILE;
-using namespace PLAYLIST;
 
-CPlayList::CPlayList(int id)
-  : m_id(id)
+namespace KODI::PLAYLIST
 {
-  m_strPlayListName = "";
+
+CPlayList::CPlayList(Id id /* = PLAYLIST::TYPE_NONE */) : m_id(id)
+{
   m_iPlayableItems = -1;
   m_bShuffled = false;
   m_bWasPlayed = false;
@@ -43,45 +46,45 @@ CPlayList::CPlayList(int id)
 
 void CPlayList::AnnounceRemove(int pos)
 {
-  if (m_id < 0)
+  if (m_id == Id::TYPE_NONE)
     return;
 
   CVariant data;
-  data["playlistid"] = m_id;
+  data["playlistid"] = static_cast<int>(m_id);
   data["position"] = pos;
   CServiceBroker::GetAnnouncementManager()->Announce(ANNOUNCEMENT::Playlist, "OnRemove", data);
 }
 
 void CPlayList::AnnounceClear()
 {
-  if (m_id < 0)
+  if (m_id == Id::TYPE_NONE)
     return;
 
   CVariant data;
-  data["playlistid"] = m_id;
+  data["playlistid"] = static_cast<int>(m_id);
   CServiceBroker::GetAnnouncementManager()->Announce(ANNOUNCEMENT::Playlist, "OnClear", data);
 }
 
-void CPlayList::AnnounceAdd(const CFileItemPtr& item, int pos)
+void CPlayList::AnnounceAdd(const std::shared_ptr<CFileItem>& item, int pos)
 {
-  if (m_id < 0)
+  if (m_id == Id::TYPE_NONE)
     return;
 
   CVariant data;
-  data["playlistid"] = m_id;
+  data["playlistid"] = static_cast<int>(m_id);
   data["position"] = pos;
   CServiceBroker::GetAnnouncementManager()->Announce(ANNOUNCEMENT::Playlist, "OnAdd", item, data);
 }
 
-void CPlayList::Add(const CFileItemPtr &item, int iPosition, int iOrder)
+void CPlayList::Add(const std::shared_ptr<CFileItem>& item, int iPosition, int iOrder)
 {
   int iOldSize = size();
   if (iPosition < 0 || iPosition >= iOldSize)
     iPosition = iOldSize;
   if (iOrder < 0 || iOrder >= iOldSize)
-    item->m_iprogramCount = iOldSize;
+    item->SetProgramCount(iOldSize);
   else
-    item->m_iprogramCount = iOrder;
+    item->SetProgramCount(iOrder);
 
   // increment the playable counter
   item->ClearProperty("unplayable");
@@ -91,9 +94,13 @@ void CPlayList::Add(const CFileItemPtr &item, int iPosition, int iOrder)
     m_iPlayableItems++;
 
   // set 'IsPlayable' property - needed for properly handling plugin:// URLs
-  item->SetProperty("IsPlayable", true);
+  item->SetProperty(ITEM::PROPERTY::IS_PLAYABLE, true);
 
-  //CLog::Log(LOGDEBUG,"{} item:({:02}/{:02})[{}]", __FUNCTION__, iPosition, item->m_iprogramCount, item->GetPath());
+  // set 'BasePath' property - needed for properly handling browse for subtitles
+  if (!item->HasProperty("BasePath"))
+    item->SetProperty("BasePath", m_strBasePath);
+
+  //CLog::Log(LOGDEBUG,"{} item:({:02}/{:02})[{}]", __FUNCTION__, iPosition, item->GetProgramCount(), item->GetPath());
   if (iPosition == iOldSize)
     m_vecItems.push_back(item);
   else
@@ -107,7 +114,7 @@ void CPlayList::Add(const CFileItemPtr &item, int iPosition, int iOrder)
   AnnounceAdd(item, iPosition);
 }
 
-void CPlayList::Add(const CFileItemPtr &item)
+void CPlayList::Add(const std::shared_ptr<CFileItem>& item)
 {
   Add(item, -1, -1);
 }
@@ -155,7 +162,7 @@ void CPlayList::Insert(const CFileItemList& items, int iPosition /* = -1 */)
   }
 }
 
-void CPlayList::Insert(const CFileItemPtr &item, int iPosition /* = -1 */)
+void CPlayList::Insert(const std::shared_ptr<CFileItem>& item, int iPosition /* = -1 */)
 {
   // out of bounds so just add to the end
   int iSize = size();
@@ -180,10 +187,11 @@ void CPlayList::DecrementOrder(int iOrder)
   while (it != m_vecItems.end())
   {
     CFileItemPtr item = *it;
-    if (item->m_iprogramCount > iOrder)
+    const int programCount{item->GetProgramCount()};
+    if (programCount > iOrder)
     {
-      //CLog::Log(LOGDEBUG,"{} fixing item at order {}", __FUNCTION__, item->m_iprogramCount);
-      item->m_iprogramCount--;
+      //CLog::Log(LOGDEBUG,"{} fixing item at order {}", __FUNCTION__, item->GetProgramCount());
+      item->SetProgramCount(programCount - 1);
     }
     ++it;
   }
@@ -199,10 +207,11 @@ void CPlayList::IncrementOrder(int iPosition, int iOrder)
   while (it != m_vecItems.end())
   {
     CFileItemPtr item = *it;
-    if (item->m_iprogramCount >= iOrder)
+    const int programCount{item->GetProgramCount()};
+    if (programCount >= iOrder)
     {
-      //CLog::Log(LOGDEBUG,"{} fixing item at order {}", __FUNCTION__, item->m_iprogramCount);
-      item->m_iprogramCount++;
+      //CLog::Log(LOGDEBUG,"{} fixing item at order {}", __FUNCTION__, item->GetProgramCount());
+      item->SetProgramCount(programCount + 1);
     }
     ++it;
   }
@@ -229,7 +238,7 @@ int CPlayList::size() const
   return (int)m_vecItems.size();
 }
 
-const CFileItemPtr CPlayList::operator[] (int iItem) const
+const std::shared_ptr<CFileItem> CPlayList::operator[](int iItem) const
 {
   if (iItem < 0 || iItem >= size())
   {
@@ -240,7 +249,7 @@ const CFileItemPtr CPlayList::operator[] (int iItem) const
   return m_vecItems[iItem];
 }
 
-CFileItemPtr CPlayList::operator[] (int iItem)
+std::shared_ptr<CFileItem> CPlayList::operator[](int iItem)
 {
   if (iItem < 0 || iItem >= size())
   {
@@ -276,7 +285,7 @@ struct SSortPlayListItem
 {
   static bool PlaylistSort(const CFileItemPtr &left, const CFileItemPtr &right)
   {
-    return (left->m_iprogramCount < right->m_iprogramCount);
+    return (left->GetProgramCount() < right->GetProgramCount());
   }
 };
 
@@ -303,7 +312,7 @@ void CPlayList::Remove(const std::string& strFileName)
     CFileItemPtr item = *it;
     if (item->GetPath() == strFileName)
     {
-      iOrder = item->m_iprogramCount;
+      iOrder = item->GetProgramCount();
       it = m_vecItems.erase(it);
       AnnounceRemove(position);
       //CLog::Log(LOGDEBUG,"PLAYLIST, removing item at order {}", iPos);
@@ -321,7 +330,7 @@ int CPlayList::FindOrder(int iOrder) const
 {
   for (int i = 0; i < size(); i++)
   {
-    if (m_vecItems[i]->m_iprogramCount == iOrder)
+    if (m_vecItems[i]->GetProgramCount() == iOrder)
       return i;
   }
   return -1;
@@ -333,7 +342,7 @@ void CPlayList::Remove(int position)
   int iOrder = -1;
   if (position >= 0 && position < (int)m_vecItems.size())
   {
-    iOrder = m_vecItems[position]->m_iprogramCount;
+    iOrder = m_vecItems[position]->GetProgramCount();
     m_vecItems.erase(m_vecItems.begin() + position);
   }
   DecrementOrder(iOrder);
@@ -351,7 +360,7 @@ int CPlayList::RemoveDVDItems()
   while (it != m_vecItems.end() )
   {
     CFileItemPtr item = *it;
-    if ( item->IsCDDA() || item->IsOnDVD() )
+    if (MUSIC::IsCDDA(*item) || item->IsOnDVD())
     {
       vecFilenames.push_back( item->GetPath() );
     }
@@ -390,8 +399,10 @@ bool CPlayList::Swap(int position1, int position2)
   if (!IsShuffled())
   {
     // swap the ordinals before swapping the items!
-    //CLog::Log(LOGDEBUG,"PLAYLIST swapping items at orders ({}, {})",m_vecItems[position1]->m_iprogramCount,m_vecItems[position2]->m_iprogramCount);
-    std::swap(m_vecItems[position1]->m_iprogramCount, m_vecItems[position2]->m_iprogramCount);
+    //CLog::Log(LOGDEBUG,"PLAYLIST swapping items at orders ({}, {})",m_vecItems[position1]->GetProgramCount(),m_vecItems[position2]->GetProgramCount());
+    const int count1{m_vecItems[position1]->GetProgramCount()};
+    m_vecItems[position1]->SetProgramCount(m_vecItems[position2]->GetProgramCount());
+    m_vecItems[position2]->SetProgramCount(count1);
   }
 
   // swap the items
@@ -476,7 +487,13 @@ bool CPlayList::Expand(int position)
   for (int i = 0;i<playlist->size();i++)
   {
     (*playlist)[i]->SetDynPath((*playlist)[i]->GetPath());
-    (*playlist)[i]->SetPath(item->GetPath());
+    (*playlist)[i]->SetPath(item->GetDynPath());
+    // Only propagate parent's start offset if the loaded item doesn't already
+    // have its own (e.g. a CUE sheet offset loaded from the playlist file).
+    if (!(*playlist)[i]->HasProperty(ITEM::PROPERTY::ITEM_START))
+      (*playlist)[i]->SetStartOffset(item->GetStartOffset());
+    if (!(*playlist)[i]->HasProperty("BasePath"))
+      (*playlist)[i]->SetProperty("BasePath", playlist->m_strBasePath);
   }
 
   if (playlist->size() <= 0)
@@ -493,7 +510,7 @@ void CPlayList::UpdateItem(const CFileItem *item)
 
   for (ivecItems it = m_vecItems.begin(); it != m_vecItems.end(); ++it)
   {
-    CFileItemPtr playlistItem = *it;
+    const CFileItemPtr& playlistItem = *it;
     if (playlistItem->IsSamePath(item))
     {
       std::string temp = playlistItem->GetPath(); // save path, it may have been altered
@@ -504,10 +521,12 @@ void CPlayList::UpdateItem(const CFileItem *item)
   }
 }
 
-const std::string& CPlayList::ResolveURL(const CFileItemPtr &item ) const
+const std::string& CPlayList::ResolveURL(const std::shared_ptr<CFileItem>& item) const
 {
-  if (item->IsMusicDb() && item->HasMusicInfoTag())
+  if (MUSIC::IsMusicDb(*item) && item->HasMusicInfoTag())
     return item->GetMusicInfoTag()->GetURL();
   else
     return item->GetDynPath();
 }
+
+} // namespace KODI::PLAYLIST

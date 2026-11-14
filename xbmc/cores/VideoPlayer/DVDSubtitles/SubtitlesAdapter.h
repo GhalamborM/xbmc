@@ -9,6 +9,7 @@
 #pragma once
 
 #include "SubtitlesStyle.h"
+#include "cores/VideoPlayer/DVDCodecs/Overlay/DVDOverlay.h"
 
 #include <memory>
 #include <string>
@@ -50,7 +51,7 @@ public:
   int AddSubtitle(std::string& text,
                   double startTime,
                   double stopTime,
-                  KODI::SUBTITLES::subtitleOpts* opts);
+                  KODI::SUBTITLES::STYLE::subtitleOpts* opts);
 
   /*!
   * \brief Append text to the specified subtitle ID
@@ -76,7 +77,7 @@ public:
 
   void FlushSubtitles();
 
-  CDVDOverlay* CreateOverlay();
+  std::shared_ptr<CDVDOverlay> CreateOverlay();
 
 protected:
   /*!

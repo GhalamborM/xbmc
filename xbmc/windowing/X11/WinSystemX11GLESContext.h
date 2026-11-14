@@ -8,9 +8,11 @@
 
 #pragma once
 
-#include "EGL/egl.h"
 #include "WinSystemX11.h"
 #include "rendering/gles/RenderSystemGLES.h"
+#include "windowing/X11/GLContextEGL.h"
+
+#include <EGL/egl.h>
 
 class CGLContextEGL;
 
@@ -38,6 +40,7 @@ public:
   bool SetFullScreen(bool fullScreen, RESOLUTION_INFO& res, bool blankOtherDisplays) override;
   bool DestroyWindowSystem() override;
   bool DestroyWindow() override;
+  int GetBufferAge() override { return m_bufferAgeSupport ? m_pGLContext->GetBufferAge() : 2; }
 
   bool IsExtSupported(const char* extension) const override;
 
@@ -45,6 +48,10 @@ public:
   EGLSurface GetEGLSurface() const;
   EGLContext GetEGLContext() const;
   EGLConfig GetEGLConfig() const;
+
+  bool BindTextureUploadContext() override;
+  bool UnbindTextureUploadContext() override;
+  bool HasContext() override;
 
 protected:
   bool SetWindow(int width, int height, bool fullscreen, const std::string& output, int* winstate = nullptr) override;
@@ -55,6 +62,7 @@ protected:
 
   CGLContextEGL* m_pGLContext = nullptr;
   bool m_newGlContext;
+  bool m_bufferAgeSupport{false};
 };
 
 } // namespace X11

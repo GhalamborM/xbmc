@@ -1,39 +1,27 @@
-include ../../Makefile.include
+include ../../Makefile.include AUTOCONF-ARCHIVE-VERSION ../../download-files.include
 PREFIX=$(NATIVEPREFIX)
 PLATFORM=$(NATIVEPLATFORM)
-DEPS= ../../Makefile.include Makefile
-
-# lib name, version
-LIBNAME=autoconf-archive
-VERSION=2021.02.19
-SOURCE=$(LIBNAME)-$(VERSION)
-ARCHIVE=$(SOURCE).tar.xz
+DEPS = ../../Makefile.include Makefile AUTOCONF-ARCHIVE-VERSION ../../download-files.include
 
 # configuration settings
 CONFIGURE=./configure --prefix=$(PREFIX)
 
-LIBDYLIB=$(PLATFORM)/bin/autoconf
-
 all: .installed-$(PLATFORM)
 
-$(TARBALLS_LOCATION)/$(ARCHIVE):
-	cd $(TARBALLS_LOCATION); $(RETRIEVE_TOOL) $(RETRIEVE_TOOL_FLAGS) $(BASE_URL)/$(ARCHIVE)
 
-$(PLATFORM): $(TARBALLS_LOCATION)/$(ARCHIVE) $(DEPS)
+.configured-$(PLATFORM): $(DEPS) | $(TARBALLS_LOCATION)/$(ARCHIVE).$(HASH_TYPE)
 	-rm -rf $(PLATFORM)/*; mkdir -p $(PLATFORM)
 	cd $(PLATFORM); $(ARCHIVE_TOOL) $(ARCHIVE_TOOL_FLAGS) $(TARBALLS_LOCATION)/$(ARCHIVE)
-
-$(LIBDYLIB): $(PLATFORM)
 	cd $(PLATFORM); $(CONFIGURE)
-	$(MAKE) -C $(PLATFORM)
+	touch $@
 
-.installed-$(PLATFORM): $(LIBDYLIB)
+.installed-$(PLATFORM): .configured-$(PLATFORM)
 	$(MAKE) -C $(PLATFORM) install
 	touch $@
 
 clean:
 	$(MAKE) -C $(PLATFORM) clean
-	rm -f .installed-$(PLATFORM)
+	rm -f .installed-$(PLATFORM) .configured-$(PLATFORM)
 
 distclean::
-	rm -rf $(PLATFORM) .installed-$(PLATFORM)
+	rm -rf $(PLATFORM) .installed-$(PLATFORM) .configured-$(PLATFORM)

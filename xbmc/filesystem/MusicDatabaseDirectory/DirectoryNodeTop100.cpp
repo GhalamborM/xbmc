@@ -9,36 +9,39 @@
 #include "DirectoryNodeTop100.h"
 
 #include "FileItem.h"
-#include "guilib/LocalizeStrings.h"
+#include "FileItemList.h"
+#include "ServiceBroker.h"
+#include "resources/LocalizeStrings.h"
+#include "resources/ResourcesComponent.h"
 #include "utils/StringUtils.h"
 
 using namespace XFILE::MUSICDATABASEDIRECTORY;
 
 Node Top100Children[] = {
-                          { NODE_TYPE_SONG_TOP100,  "songs",   10504 },
-                          { NODE_TYPE_ALBUM_TOP100, "albums",  10505 },
-                        };
+    {NodeType::SONG_TOP100, "songs", 10504},
+    {NodeType::ALBUM_TOP100, "albums", 10505},
+};
 
 CDirectoryNodeTop100::CDirectoryNodeTop100(const std::string& strName, CDirectoryNode* pParent)
-  : CDirectoryNode(NODE_TYPE_TOP100, strName, pParent)
+  : CDirectoryNode(NodeType::TOP100, strName, pParent)
 {
 
 }
 
-NODE_TYPE CDirectoryNodeTop100::GetChildType() const
+NodeType CDirectoryNodeTop100::GetChildType() const
 {
   for (const Node& node : Top100Children)
     if (GetName() == node.id)
       return node.node;
 
-  return NODE_TYPE_NONE;
+  return NodeType::NONE;
 }
 
 std::string CDirectoryNodeTop100::GetLocalizedName() const
 {
   for (const Node& node : Top100Children)
     if (GetName() == node.id)
-      return g_localizeStrings.Get(node.label);
+      return CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(node.label);
   return "";
 }
 
@@ -46,10 +49,11 @@ bool CDirectoryNodeTop100::GetContent(CFileItemList& items) const
 {
   for (const Node& node : Top100Children)
   {
-    CFileItemPtr pItem(new CFileItem(g_localizeStrings.Get(node.label)));
+    CFileItemPtr pItem(new CFileItem(
+        CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(node.label)));
     std::string strDir = StringUtils::Format("{}/", node.id);
     pItem->SetPath(BuildPath() + strDir);
-    pItem->m_bIsFolder = true;
+    pItem->SetFolder(true);
     items.Add(pItem);
   }
 

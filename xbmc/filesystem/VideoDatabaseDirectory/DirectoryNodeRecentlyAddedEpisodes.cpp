@@ -8,12 +8,16 @@
 
 #include "DirectoryNodeRecentlyAddedEpisodes.h"
 
+#include "FileItem.h"
+#include "FileItemList.h"
+#include "utils/ItemProperties.h"
 #include "video/VideoDatabase.h"
 
 using namespace XFILE::VIDEODATABASEDIRECTORY;
 
-CDirectoryNodeRecentlyAddedEpisodes::CDirectoryNodeRecentlyAddedEpisodes(const std::string& strName, CDirectoryNode* pParent)
-  : CDirectoryNode(NODE_TYPE_RECENTLY_ADDED_EPISODES, strName, pParent)
+CDirectoryNodeRecentlyAddedEpisodes::CDirectoryNodeRecentlyAddedEpisodes(const std::string& strName,
+                                                                         CDirectoryNode* pParent)
+  : CDirectoryNode(NodeType::RECENTLY_ADDED_EPISODES, strName, pParent)
 {
 
 }
@@ -24,7 +28,9 @@ bool CDirectoryNodeRecentlyAddedEpisodes::GetContent(CFileItemList& items) const
   if (!videodatabase.Open())
     return false;
 
-  bool bSuccess=videodatabase.GetRecentlyAddedEpisodesNav(BuildPath(), items);
+  const int details =
+      items.GetProperty(KODI::ITEM::PROPERTY::SET_VIDEODB_DETAILS).asInteger32(VideoDbDetailsNone);
+  bool bSuccess = videodatabase.GetRecentlyAddedEpisodesNav(BuildPath(), items, 0, details);
 
   videodatabase.Close();
 

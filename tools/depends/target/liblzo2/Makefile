@@ -1,39 +1,40 @@
-include ../../Makefile.include
-DEPS= ../../Makefile.include Makefile
+include ../../Makefile.include LIBLZO2-VERSION ../../download-files.include
+DEPS = ../../Makefile.include Makefile LIBLZO2-VERSION ../../download-files.include \
+                                001-all-enable_tests.patch \
+                                002-all-enable_docs.patch \
+                                003-all-install_pkgconfig.patch \
+                                004-all-win_set_debug_postfix.patch
 
-# lib name, version
-LIBNAME=lzo
-VERSION=2.10
-SOURCE=$(LIBNAME)-$(VERSION)
-ARCHIVE=$(SOURCE).tar.gz
+# configuration options
+CMAKE_OPTIONS=-DCMAKE_BUILD_TYPE=Release \
+              -DENABLE_STATIC=ON \
+              -DENABLE_SHARED=OFF \
+              -DCMAKE_INSTALL_PREFIX=$(PREFIX)
 
-# configuration settings
-CONFIGURE=cp -f $(CONFIG_SUB) $(CONFIG_GUESS) autoconf/; \
-          ./configure --prefix=$(PREFIX)
+# lzo hasnt been updated since 2017. Force this for cmake 4.0
+CMAKE_OPTIONS+= -DCMAKE_POLICY_VERSION_MINIMUM=3.10
 
-LIBDYLIB=$(PLATFORM)/src/.libs/lib$(LIBNAME)2.a
+LIBDYLIB=$(PLATFORM)/build/$(BYPRODUCT)
 
 all: .installed-$(PLATFORM)
 
-$(TARBALLS_LOCATION)/$(ARCHIVE):
-	cd $(TARBALLS_LOCATION); $(RETRIEVE_TOOL) $(RETRIEVE_TOOL_FLAGS) $(BASE_URL)/$(ARCHIVE)
-
-$(PLATFORM): $(TARBALLS_LOCATION)/$(ARCHIVE) $(DEPS)
-	rm -rf $(PLATFORM)/*; mkdir -p $(PLATFORM)
+.configured-$(PLATFORM): $(DEPS) | $(TARBALLS_LOCATION)/$(ARCHIVE).$(HASH_TYPE)
+	rm -rf $(PLATFORM); mkdir -p $(PLATFORM)/build
 	cd $(PLATFORM); $(ARCHIVE_TOOL) $(ARCHIVE_TOOL_FLAGS) $(TARBALLS_LOCATION)/$(ARCHIVE)
-	cd $(PLATFORM); $(CONFIGURE)
+	cd $(PLATFORM); patch -p1 -i ../001-all-enable_tests.patch
+	cd $(PLATFORM); patch -p1 -i ../002-all-enable_docs.patch
+	cd $(PLATFORM); patch -p1 -i ../003-all-install_pkgconfig.patch
+	cd $(PLATFORM); patch -p1 -i ../004-all-win_set_debug_postfix.patch
+	cd $(PLATFORM)/build; $(CMAKE) $(CMAKE_OPTIONS) ..
+	touch $@
 
-$(LIBDYLIB): $(PLATFORM)
-	$(MAKE) -C $(PLATFORM)
-
-.installed-$(PLATFORM): $(LIBDYLIB)
-	$(MAKE) -C $(PLATFORM) install
+.installed-$(PLATFORM): .configured-$(PLATFORM)
+	$(MAKE) -C $(PLATFORM)/build install
 	touch $@
 
 clean:
-	$(MAKE) -C $(PLATFORM) clean
-	rm -f .installed-$(PLATFORM)
+	$(MAKE) -C $(PLATFORM)/build clean
+	rm -f .installed-$(PLATFORM) .configured-$(PLATFORM)
 
 distclean::
-	rm -rf $(PLATFORM) .installed-$(PLATFORM)
-
+	rm -rf $(PLATFORM) .installed-$(PLATFORM) .configured-$(PLATFORM)

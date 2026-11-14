@@ -8,6 +8,8 @@
 
 #include "RenderContext.h"
 
+#include "games/GameServices.h"
+#include "games/agents/input/AgentInput.h"
 #include "rendering/RenderSystem.h"
 #include "settings/DisplaySettings.h"
 #include "settings/MediaSettings.h"
@@ -31,12 +33,16 @@ CRenderContext::CRenderContext(CRenderSystemBase* rendering,
                                CWinSystemBase* windowing,
                                CGraphicContext& graphicsContext,
                                CDisplaySettings& displaySettings,
-                               CMediaSettings& mediaSettings)
+                               CMediaSettings& mediaSettings,
+                               GAME::CGameServices& gameServices,
+                               CGUIComponent* guiComponent)
   : m_rendering(rendering),
     m_windowing(windowing),
     m_graphicsContext(graphicsContext),
     m_displaySettings(displaySettings),
-    m_mediaSettings(mediaSettings)
+    m_mediaSettings(mediaSettings),
+    m_gameServices(gameServices),
+    m_guiComponent(guiComponent)
 {
 }
 
@@ -55,14 +61,14 @@ void CRenderContext::SetScissors(const CRect& rect)
   m_rendering->SetScissors(rect);
 }
 
+void CRenderContext::CaptureStateBlock()
+{
+  m_rendering->CaptureStateBlock();
+}
+
 void CRenderContext::ApplyStateBlock()
 {
   m_rendering->ApplyStateBlock();
-}
-
-bool CRenderContext::IsExtSupported(const char* extension)
-{
-  return m_rendering->IsExtSupported(extension);
 }
 
 #if defined(HAS_GL) || defined(HAS_GLES)
@@ -178,6 +184,21 @@ int CRenderContext::GUIShaderGetUniCol()
   return -1;
 }
 
+int CRenderContext::GUIShaderGetDepth()
+{
+#if defined(HAS_GL)
+  CRenderSystemGL* renderingGL = dynamic_cast<CRenderSystemGL*>(m_rendering);
+  if (renderingGL != nullptr)
+    return static_cast<int>(renderingGL->ShaderGetDepth());
+#elif HAS_GLES >= 2
+  CRenderSystemGLES* renderingGLES = dynamic_cast<CRenderSystemGLES*>(m_rendering);
+  if (renderingGLES != nullptr)
+    return static_cast<int>(renderingGLES->GUIShaderGetDepth());
+#endif
+
+  return -1;
+}
+
 CGUIShaderDX* CRenderContext::GetGUIShader()
 {
 #if defined(HAS_DX)
@@ -192,16 +213,6 @@ CGUIShaderDX* CRenderContext::GetGUIShader()
 bool CRenderContext::UseLimitedColor()
 {
   return m_windowing->UseLimitedColor();
-}
-
-bool CRenderContext::DisplayHardwareScalingEnabled()
-{
-  return m_windowing->DisplayHardwareScalingEnabled();
-}
-
-void CRenderContext::UpdateDisplayHardwareScaling(const RESOLUTION_INFO& resInfo)
-{
-  return m_windowing->UpdateDisplayHardwareScaling(resInfo);
 }
 
 int CRenderContext::GetScreenWidth()
@@ -249,7 +260,7 @@ RESOLUTION CRenderContext::GetVideoResolution()
   return m_graphicsContext.GetVideoResolution();
 }
 
-void CRenderContext::Clear(UTILS::COLOR::Color color /* = 0 */)
+void CRenderContext::Clear(UTILS::COLOR::Color color)
 {
   m_graphicsContext.Clear(color);
 }
@@ -294,12 +305,22 @@ RESOLUTION_INFO& CRenderContext::GetResolutionInfo(RESOLUTION resolution)
   return m_displaySettings.GetResolutionInfo(resolution);
 }
 
-CGameSettings& CRenderContext::GetGameSettings()
+::CGameSettings& CRenderContext::GetGameSettings()
 {
   return m_mediaSettings.GetCurrentGameSettings();
 }
 
-CGameSettings& CRenderContext::GetDefaultGameSettings()
+::CGameSettings& CRenderContext::GetDefaultGameSettings()
 {
   return m_mediaSettings.GetDefaultGameSettings();
+}
+
+void CRenderContext::StartAgentInput(GAME::GameClientPtr gameClient)
+{
+  m_gameServices.AgentInput().Start(std::move(gameClient));
+}
+
+void CRenderContext::StopAgentInput()
+{
+  m_gameServices.AgentInput().Stop();
 }

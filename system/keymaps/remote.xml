@@ -75,6 +75,7 @@
       <eight>JumpSMS8</eight>
       <nine>JumpSMS9</nine>
       <print>Screenshot</print>
+      <favorites>ActivateWindow(FavouritesBrowser)</favorites>
     </remote>
   </global>
   <Home>
@@ -186,8 +187,8 @@
       <nine>Number9</nine>
       <left>StepBack</left>
       <right>StepForward</right>
-      <up>ChapterOrBigStepForward</up>
-      <down>ChapterOrBigStepBack</down>
+      <up>ChapterOrSceneOrBigStepForward</up>
+      <down>ChapterOrSceneOrBigStepBack</down>
       <back>Back</back>
       <menu>OSD</menu>
       <contentsmenu>OSD</contentsmenu>
@@ -198,9 +199,9 @@
       <info>Info</info>
       <guide>ActivateWindow(TVGuide)</guide>
       <teletext>ActivateWindow(Teletext)</teletext>
-      <subtitle>NextSubtitle</subtitle>
+      <subtitle>DialogSelectSubtitle</subtitle>
       <star>NextSubtitle</star>
-      <language>AudioNextLanguage</language>
+      <language>DialogSelectAudio</language>
       <playlist>Playlist</playlist>
       <hash>AudioNextLanguage</hash>
       <pageplus>SkipNext</pageplus>
@@ -259,6 +260,7 @@
       <rootmenu>OSD</rootmenu>
       <start>OSD</start>
       <info>Info</info>
+      <hash>AudioNextLanguage</hash>
       <guide>ActivateWindow(TVGuide)</guide>
       <playlist>ActivateWindow(PVROSDChannels)</playlist>
       <zero>Number0</zero>
@@ -280,6 +282,7 @@
       <rootmenu>Back</rootmenu>
       <title>Info</title>
       <info>PlayerProcessInfo</info>
+      <hash>AudioNextLanguage</hash>
     </remote>
   </MusicOSD>
   <VisualisationPresetList>
@@ -564,11 +567,6 @@
       <teletext>Back</teletext>
     </remote>
   </Teletext>
-  <Favourites>
-    <remote>
-      <back>Close</back>
-    </remote>
-  </Favourites>
   <FullscreenLiveTV>
     <remote>
       <left>StepBack</left>
@@ -717,4 +715,9 @@
       <title>PlayerProcessInfo</title>
     </remote>
   </PlayerProcessInfo>
+  <FullScreenLiveTV>
+    <remote>
+      <last>Number0</last>
+    </remote>
+  </FullScreenLiveTV>
 </keymap>

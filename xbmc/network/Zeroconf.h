@@ -8,9 +8,8 @@
 
 #pragma once
 
-#include "utils/Job.h"
+#include "jobs/Job.h"
 
-#include <atomic>
 #include <map>
 #include <string>
 #include <utility>
@@ -83,7 +82,7 @@ public:
 
 protected:
   //methods to implement for concrete implementations
-  //publishs this service
+  //publishes this service
   virtual bool doPublishService(const std::string& fcr_identifier,
                                 const std::string& fcr_type,
                                 const std::string& fcr_name,
@@ -123,8 +122,6 @@ private:
   tServiceMap m_service_map;
   bool m_started = false;
 
-  //protects singleton creation/destruction
-  static std::atomic_flag sm_singleton_guard;
   static CZeroconf* smp_instance;
 
   class CPublish : public CJob

@@ -8,16 +8,18 @@
 
 #pragma once
 
-#include "FileItem.h"
 #include "MediaSource.h"
 #include "guilib/GUIDialog.h"
 #include "music/Album.h"
 #include "music/Artist.h"
-#include "music/Song.h"
 #include "threads/Event.h"
+
+#include <memory>
+#include <vector>
 
 class CFileItem;
 class CFileItemList;
+class CSong;
 
 class CGUIDialogMusicInfo :
       public CGUIDialog
@@ -36,9 +38,10 @@ public:
   bool HasListItems() const override { return true; }
   CFileItemPtr GetCurrentListItem(int offset = 0) override;
   std::string GetContent();
-  static void AddItemPathToFileBrowserSources(VECSOURCES &sources, const CFileItem &item);
+  static void AddItemPathToFileBrowserSources(std::vector<CMediaSource>& sources,
+                                              const CFileItem& item);
   void SetDiscography(CMusicDatabase& database) const;
-  void SetSongs(const VECSONGS &songs) const;
+  void SetSongs(const std::vector<CSong>& songs) const;
   void SetArtTypeList(CFileItemList& artlist);
   void SetScrapedInfo(bool bScraped) { m_scraperAddInfo = bScraped;  }
   CArtist& GetArtist() { return m_artist; }
@@ -61,6 +64,7 @@ protected:
   void OnArtistInfo(int id);
   void OnSetUserrating() const;
   void SetUserrating(int userrating) const;
+  void OnPlayItem(const std::shared_ptr<CFileItem>& item);
 
   CAlbum m_album;
   CArtist m_artist;
@@ -70,9 +74,9 @@ protected:
   bool m_bArtistInfo = false;
   bool m_cancelled = false;
   bool m_scraperAddInfo = false;
-  CFileItemList* m_albumSongs;
-  CFileItemPtr m_item;
-  CFileItemList m_artTypeList;
+  std::unique_ptr<CFileItemList> m_albumSongs;
+  std::shared_ptr<CFileItem> m_item;
+  std::unique_ptr<CFileItemList> m_artTypeList;
   CEvent m_event;
   std::string m_fallbackartpath;
 };

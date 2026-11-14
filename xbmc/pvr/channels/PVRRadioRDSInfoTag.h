@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "language/Territory.h"
 #include "threads/CriticalSection.h"
 #include "utils/IArchivable.h"
 #include "utils/ISerializable.h"
@@ -23,8 +24,7 @@ class CPVRRadioRDSInfoTag final : public IArchivable, public ISerializable
 public:
   CPVRRadioRDSInfoTag();
 
-  bool operator ==(const CPVRRadioRDSInfoTag& right) const;
-  bool operator !=(const CPVRRadioRDSInfoTag& right) const;
+  bool operator==(const CPVRRadioRDSInfoTag& right) const;
 
   void Archive(CArchive& ar) override;
   void Serialize(CVariant& value) const override;
@@ -36,10 +36,13 @@ public:
   void SetSpeechActive(bool active);
   void SetLanguage(const std::string& strLanguage);
   const std::string& GetLanguage() const;
-  void SetCountry(const std::string& strCountry);
-  const std::string& GetCountry() const;
+  void SetCountry(const KODI::LANGUAGE::CTerritory& territory);
+  KODI::LANGUAGE::CTerritory GetCountry() const;
+  void SetRadioText(const std::string& strRadioText);
+  std::string GetRadioText(unsigned int line) const;
+  void SetProgramServiceText(const std::string& strPSText);
 
-  /**! RDS Radiotext related information */
+  /**! RDS RadioText related information */
   void SetTitle(const std::string& strTitle);
   void SetBand(const std::string& strBand);
   void SetArtist(const std::string& strArtist);
@@ -83,56 +86,54 @@ public:
   const std::string& GetSMSStudio() const;
 
   void SetInfoNews(const std::string& strNews);
-  const std::string GetInfoNews() const;
+  std::string GetInfoNews() const;
 
   void SetInfoNewsLocal(const std::string& strNews);
-  const std::string GetInfoNewsLocal() const;
+  std::string GetInfoNewsLocal() const;
 
   void SetInfoSport(const std::string& strSport);
-  const std::string GetInfoSport() const;
+  std::string GetInfoSport() const;
 
   void SetInfoStock(const std::string& strSport);
-  const std::string GetInfoStock() const;
+  std::string GetInfoStock() const;
 
   void SetInfoWeather(const std::string& strWeather);
-  const std::string GetInfoWeather() const;
+  std::string GetInfoWeather() const;
 
   void SetInfoHoroscope(const std::string& strHoroscope);
-  const std::string GetInfoHoroscope() const;
+  std::string GetInfoHoroscope() const;
 
   void SetInfoCinema(const std::string& strCinema);
-  const std::string GetInfoCinema() const;
+  std::string GetInfoCinema() const;
 
   void SetInfoLottery(const std::string& strLottery);
-  const std::string GetInfoLottery() const;
+  std::string GetInfoLottery() const;
 
   void SetInfoOther(const std::string& strOther);
-  const std::string GetInfoOther() const;
+  std::string GetInfoOther() const;
 
   void SetEditorialStaff(const std::string& strEditorialStaff);
-  const std::string GetEditorialStaff() const;
+  std::string GetEditorialStaff() const;
 
-  void SetRadioStyle(const std::string& style);
-  const std::string GetRadioStyle() const;
+  void SetRadioStyle(std::string_view style);
+  std::string GetRadioStyle() const;
 
-  void SetPlayingRadiotext(bool yesNo);
-  bool IsPlayingRadiotext() const;
+  void SetPlayingRadioText(bool yesNo);
+  bool IsPlayingRadioText() const;
 
-  void SetPlayingRadiotextPlus(bool yesNo);
-  bool IsPlayingRadiotextPlus() const;
+  void SetPlayingRadioTextPlus(bool yesNo);
+  bool IsPlayingRadioTextPlus() const;
 
 private:
   CPVRRadioRDSInfoTag(const CPVRRadioRDSInfoTag& tag) = delete;
-  const CPVRRadioRDSInfoTag& operator =(const CPVRRadioRDSInfoTag& tag) = delete;
-
-  static std::string Trim(const std::string& value);
+  const CPVRRadioRDSInfoTag& operator=(const CPVRRadioRDSInfoTag& tag) = delete;
 
   mutable CCriticalSection m_critSection;
 
   bool m_RDS_SpeechActive;
 
   std::string m_strLanguage;
-  std::string m_strCountry;
+  KODI::LANGUAGE::CTerritory m_territory;
   std::string m_strTitle;
   std::string m_strBand;
   std::string m_strArtist;
@@ -146,29 +147,43 @@ private:
   class Info
   {
   public:
-    Info() = default;
+    Info() = delete;
+    Info(size_t maxSize, bool prependData) : m_maxSize(maxSize), m_prependData(prependData) {}
 
     bool operator==(const Info& right) const;
 
+    size_t Size() const { return m_data.size(); }
+    size_t MaxSize() const { return m_maxSize; }
+
     void Clear();
     void Add(const std::string& text);
+
     const std::string& GetText() const { return m_infoText; }
+    std::string GetLine(size_t line) const { return line < m_data.size() ? m_data.at(line) : ""; }
 
   private:
+    const size_t m_maxSize = 10;
+    const bool m_prependData = false;
     std::deque<std::string> m_data;
     std::string m_infoText;
   };
 
-  Info m_strInfoNews;
-  Info m_strInfoNewsLocal;
-  Info m_strInfoSport;
-  Info m_strInfoStock;
-  Info m_strInfoWeather;
-  Info m_strInfoLottery;
-  Info m_strInfoOther;
-  Info m_strInfoHoroscope;
-  Info m_strInfoCinema;
-  Info m_strEditorialStaff;
+  Info m_strInfoNews{10, false};
+  Info m_strInfoNewsLocal{10, false};
+  Info m_strInfoSport{10, false};
+  Info m_strInfoStock{10, false};
+  Info m_strInfoWeather{10, false};
+  Info m_strInfoLottery{10, false};
+  Info m_strInfoOther{10, false};
+  Info m_strInfoHoroscope{10, false};
+  Info m_strInfoCinema{10, false};
+  Info m_strEditorialStaff{10, false};
+
+  Info m_strRadioText{6, true};
+
+  Info m_strProgramServiceText{12, false};
+  std::string m_strProgramServiceLine0;
+  std::string m_strProgramServiceLine1;
 
   std::string m_strProgStyle;
   std::string m_strProgHost;
@@ -182,7 +197,7 @@ private:
   std::string m_strEMailStudio;
   std::string m_strSMSStudio;
 
-  bool m_bHaveRadiotext;
-  bool m_bHaveRadiotextPlus;
+  bool m_bHaveRadioText;
+  bool m_bHaveRadioTextPlus;
 };
-}
+} // namespace PVR

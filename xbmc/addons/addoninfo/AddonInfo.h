@@ -10,22 +10,30 @@
 
 #include "XBDateTime.h"
 #include "addons/AddonVersion.h"
-#include "addons/addoninfo/AddonType.h"
+#include "utils/Artwork.h"
+#include "utils/Locale.h"
 
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
-#include <unordered_map>
+#include <string_view>
 #include <utility>
 #include <vector>
 
 namespace ADDON
 {
 
+enum class AddonType;
+
 class CAddonBuilder;
 class CAddonInfo;
-typedef std::shared_ptr<CAddonInfo> AddonInfoPtr;
-typedef std::vector<AddonInfoPtr> AddonInfos;
+class CAddonType;
+
+using AddonInfoPtr = std::shared_ptr<CAddonInfo>;
+using AddonInfos = std::vector<AddonInfoPtr>;
+
+using AddonInstanceId = uint32_t;
 
 /*!
  * Defines the default language code used as fallback in case the requested language is not
@@ -64,6 +72,26 @@ enum class AddonUpdateRule
 };
 
 /*!
+ * @brief Independent add-on instance support.
+ *
+ * Used to be able to find out its instance path for the respective add-on types.
+ */
+enum class AddonInstanceSupport
+{
+  //! If add-on type does not support instances.
+  SUPPORT_NONE = 0,
+
+  //! If add-on type needs support for several instances individually.
+  SUPPORT_MANDATORY = 1,
+
+  //! If add-on type can support several instances individually.
+  SUPPORT_OPTIONAL = 2,
+
+  //! If add-on type supports multiple instances using independent settings.
+  SUPPORT_SETTINGS = 3,
+};
+
+/*!
  * @brief Add-on state defined within addon.xml to report about the current addon
  * lifecycle state.
  *
@@ -84,11 +112,13 @@ enum class AddonLifecycleState
 struct DependencyInfo
 {
   std::string id;
-  AddonVersion versionMin, version;
+  CAddonVersion versionMin;
+  CAddonVersion version;
   bool optional;
+
   DependencyInfo(std::string id,
-                 const AddonVersion& versionMin,
-                 const AddonVersion& version,
+                 const CAddonVersion& versionMin,
+                 const CAddonVersion& version,
                  bool optional)
     : id(std::move(id)),
       versionMin(versionMin.empty() ? version : versionMin),
@@ -97,20 +127,10 @@ struct DependencyInfo
   {
   }
 
-  bool operator==(const DependencyInfo& rhs) const
-  {
-    return id == rhs.id && versionMin == rhs.versionMin && version == rhs.version &&
-           optional == rhs.optional;
-  }
-
-  bool operator!=(const DependencyInfo& rhs) const
-  {
-    return !(rhs == *this);
-  }
+  bool operator==(const DependencyInfo& rhs) const = default;
 };
 
-typedef std::map<std::string, std::string> InfoMap;
-typedef std::map<std::string, std::string> ArtMap;
+using InfoMap = std::map<std::string, std::string, std::less<>>;
 
 class CAddonInfoBuilder;
 
@@ -118,13 +138,16 @@ class CAddonInfo
 {
 public:
   CAddonInfo() = default;
-  CAddonInfo(std::string id, TYPE type);
+  CAddonInfo(std::string id, AddonType type);
 
-  void SetMainType(TYPE type) { m_mainType = type; }
+  void SetMainType(AddonType type) { m_mainType = type; }
   void SetBinary(bool isBinary) { m_isBinary = isBinary; }
-  void SetLibName(const std::string& libname) { m_libname = libname; }
-  void SetPath(const std::string& path) { m_path = path; }
-  void AddExtraInfo(const std::string& idName, const std::string& value) { m_extrainfo[idName] = value; }
+  void SetLibName(std::string_view libname) { m_libname = libname; }
+  void SetPath(std::string_view path) { m_path = path; }
+  void AddExtraInfo(const std::string& idName, std::string_view value)
+  {
+    m_extrainfo[idName] = value;
+  }
   void SetLastUsed(const CDateTime& dateTime) { m_lastUsed = dateTime; }
 
   const std::string& ID() const { return m_id; }
@@ -136,7 +159,7 @@ public:
    *
    * @return The used main type of addon
    */
-  TYPE MainType() const { return m_mainType; }
+  AddonType MainType() const { return m_mainType; }
 
   /**
    * @brief To check addon contains a type
@@ -145,7 +168,7 @@ public:
    * @param[in] mainOnly to check only in first defined main addon inside addon.xml
    * @return true in case the wanted type is supported, false if not
    */
-  bool HasType(TYPE type, bool mainOnly = false) const;
+  bool HasType(AddonType type, bool mainOnly = false) const;
 
   /**
    * @brief To get all available types inside the addon
@@ -174,16 +197,16 @@ public:
    * ~~~~~~~~~~~~~
    *
    */
-  const CAddonType* Type(TYPE type) const;
+  const CAddonType* Type(AddonType type) const;
 
-  bool ProvidesSubContent(const TYPE& content, const TYPE& mainType = ADDON_UNKNOWN) const;
+  bool ProvidesSubContent(AddonType content, AddonType mainType) const;
   bool ProvidesSeveralSubContents() const;
 
-  const AddonVersion& Version() const { return m_version; }
-  const AddonVersion& MinVersion() const { return m_minversion; }
+  const CAddonVersion& Version() const { return m_version; }
+  const CAddonVersion& MinVersion() const { return m_minversion; }
   bool IsBinary() const { return m_isBinary; }
-  const AddonVersion& DependencyMinVersion(const std::string& dependencyID) const;
-  const AddonVersion& DependencyVersion(const std::string& dependencyID) const;
+  const CAddonVersion& DependencyMinVersion(const std::string& dependencyID) const;
+  const CAddonVersion& DependencyVersion(const std::string& dependencyID) const;
   const std::string& Name() const { return m_name; }
   const std::string& License() const { return m_license; }
   const std::string& Summary() const { return GetTranslatedText(m_summary); }
@@ -195,9 +218,10 @@ public:
   const std::string& Forum() const { return m_forum; }
   const std::string& EMail() const { return m_email; }
   const std::string& Path() const { return m_path; }
+  const std::string& ProfilePath() const { return m_profilePath; }
   const std::string& ChangeLog() const { return GetTranslatedText(m_changelog); }
   const std::string& Icon() const { return m_icon; }
-  const ArtMap& Art() const { return m_art; }
+  const KODI::ART::Artwork& Art() const { return m_art; }
   const std::vector<std::string>& Screenshots() const { return m_screenshots; }
   const std::string& Disclaimer() const { return GetTranslatedText(m_disclaimer); }
   const std::vector<DependencyInfo>& GetDependencies() const { return m_dependencies; }
@@ -211,61 +235,80 @@ public:
 
   const InfoMap& ExtraInfo() const { return m_extrainfo; }
 
-  bool MeetsVersion(const AddonVersion& versionMin, const AddonVersion& version) const;
+  bool MeetsVersion(const CAddonVersion& versionMin, const CAddonVersion& version) const;
   uint64_t PackageSize() const { return m_packageSize; }
   CDateTime InstallDate() const { return m_installDate; }
   CDateTime LastUpdated() const { return m_lastUpdated; }
   CDateTime LastUsed() const { return m_lastUsed; }
 
+  bool SupportsMultipleInstances() const;
+  AddonInstanceSupport InstanceUseType() const { return m_addonInstanceSupportType; }
+
+  bool SupportsAddonSettings() const { return m_supportsAddonSettings; }
+  bool SupportsInstanceSettings() const { return m_supportsInstanceSettings; }
+  std::vector<AddonInstanceId> GetKnownInstanceIds() const;
+
   /*!
     * @brief Utilities to translate add-on parts to his requested part.
     */
   //@{
-  static std::string TranslateType(TYPE type, bool pretty = false);
-  static std::string TranslateIconType(TYPE type);
-  static TYPE TranslateType(const std::string& string);
-  static TYPE TranslateSubContent(const std::string& content);
+  static std::string TranslateType(AddonType type, bool pretty = false);
+  static std::string TranslateIconType(AddonType type);
+  static AddonType TranslateType(const std::string& string);
+  static AddonType TranslateSubContent(std::string_view content);
+
+  /*!
+   * \brief The name a plugin gives \p type in what it provides, empty if \p type is not
+   * content a plugin can provide.
+   */
+  static std::string_view SubContentNameOf(AddonType type);
+  static AddonInstanceSupport InstanceSupportType(AddonType type);
   //@}
 
 private:
   friend class CAddonInfoBuilder;
+  friend class CAddonInfoBuilderFromDB;
 
   std::string m_id;
-  TYPE m_mainType = ADDON_UNKNOWN;
+  AddonType m_mainType{};
   std::vector<CAddonType> m_types;
 
-  AddonVersion m_version;
-  AddonVersion m_minversion;
+  CAddonVersion m_version;
+  CAddonVersion m_minversion;
   bool m_isBinary = false;
   std::string m_name;
   std::string m_license;
-  std::unordered_map<std::string, std::string> m_summary;
-  std::unordered_map<std::string, std::string> m_description;
+  CLocale::LocalizedStringsMap m_summary;
+  CLocale::LocalizedStringsMap m_description;
   std::string m_author;
   std::string m_source;
   std::string m_website;
   std::string m_forum;
   std::string m_email;
   std::string m_path;
-  std::unordered_map<std::string, std::string> m_changelog;
+  std::string m_profilePath;
+  CLocale::LocalizedStringsMap m_changelog;
   std::string m_icon;
-  ArtMap m_art;
+  KODI::ART::Artwork m_art;
   std::vector<std::string> m_screenshots;
-  std::unordered_map<std::string, std::string> m_disclaimer;
+  CLocale::LocalizedStringsMap m_disclaimer;
   std::vector<DependencyInfo> m_dependencies;
   AddonLifecycleState m_lifecycleState = AddonLifecycleState::NORMAL;
-  std::unordered_map<std::string, std::string> m_lifecycleStateDescription;
+  CLocale::LocalizedStringsMap m_lifecycleStateDescription;
   CDateTime m_installDate;
   CDateTime m_lastUpdated;
   CDateTime m_lastUsed;
   std::string m_origin;
-  mutable std::unique_ptr<std::string> m_originName; // @todo use std::optional once we use c++17
+  mutable std::optional<std::string> m_originName;
   uint64_t m_packageSize = 0;
   std::string m_libname;
   InfoMap m_extrainfo;
   std::vector<std::string> m_platforms;
+  AddonInstanceSupport m_addonInstanceSupportType{AddonInstanceSupport::SUPPORT_NONE};
+  bool m_supportsAddonSettings{false};
+  bool m_supportsInstanceSettings{false};
 
-  const std::string& GetTranslatedText(const std::unordered_map<std::string, std::string>& locales) const;
+  const std::string& GetTranslatedText(const CLocale::LocalizedStringsMap& locales) const;
 };
 
 } /* namespace ADDON */

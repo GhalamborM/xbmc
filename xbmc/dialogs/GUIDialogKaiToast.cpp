@@ -12,8 +12,11 @@
 #include "guilib/GUIFadeLabelControl.h"
 #include "guilib/GUIMessage.h"
 #include "peripherals/Peripherals.h"
-#include "threads/SingleLock.h"
+#include "utils/DefaultArt.h"
 #include "utils/TimeUtils.h"
+#include "windowing/WinSystem.h"
+
+#include <mutex>
 
 #define POPUP_ICON                400
 #define POPUP_CAPTION_TEXT        401
@@ -70,7 +73,7 @@ void CGUIDialogKaiToast::QueueNotification(const std::string& aImageFile, const 
 
 void CGUIDialogKaiToast::AddToQueue(const std::string& aImageFile, const eMessageType eType, const std::string& aCaption, const std::string& aDescription, unsigned int displayTime /*= TOAST_DISPLAY_TIME*/, bool withSound /*= true*/, unsigned int messageTime /*= TOAST_MESSAGE_TIME*/)
 {
-  CSingleLock lock(m_critical);
+  std::unique_lock lock(m_critical);
 
   if (!m_notifications.empty())
   {
@@ -94,7 +97,7 @@ void CGUIDialogKaiToast::AddToQueue(const std::string& aImageFile, const eMessag
 
 bool CGUIDialogKaiToast::DoWork()
 {
-  CSingleLock lock(m_critical);
+  std::unique_lock lock(m_critical);
 
   if (!m_notifications.empty() &&
       CTimeUtils::GetFrameTime() - m_timer > m_toastMessageTime)
@@ -108,12 +111,12 @@ bool CGUIDialogKaiToast::DoWork()
 
     Notification toast = m_notifications.front();
     m_notifications.pop();
-    lock.Leave();
+    lock.unlock();
 
     m_toastDisplayTime = toast.displayTime;
     m_toastMessageTime = toast.messageTime;
 
-    CSingleLock lock2(CServiceBroker::GetWinSystem()->GetGfxContext());
+    std::unique_lock lock2(CServiceBroker::GetWinSystem()->GetGfxContext());
 
     if(!Initialize())
       return false;
@@ -128,11 +131,11 @@ bool CGUIDialogKaiToast::DoWork()
       if (icon.empty())
       {
         if (toast.eType == Warning)
-          icon = "DefaultIconWarning.png";
+          icon = KODI::ART::DEFAULT::ICON_WARNING;
         else if (toast.eType == Error)
-          icon = "DefaultIconError.png";
+          icon = KODI::ART::DEFAULT::ICON_ERROR;
         else
-          icon = "DefaultIconInfo.png";
+          icon = KODI::ART::DEFAULT::ICON_INFO;
       }
       SET_CONTROL_FILENAME(POPUP_ICON, icon);
     }
@@ -173,7 +176,7 @@ void CGUIDialogKaiToast::FrameMove()
         dynamic_cast<const CGUIFadeLabelControl*>(GetControl(POPUP_NOTIFICATION_BUTTON));
     if (notificationText)
     {
-      CSingleLock lock(m_critical);
+      std::unique_lock lock(m_critical);
       bClose = notificationText->AllLabelsShown() && m_notifications.empty();
     }
 

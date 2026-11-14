@@ -8,6 +8,9 @@
 
 #include "Win32File.h"
 
+#include "ServiceBroker.h"
+#include "settings/Settings.h"
+#include "settings/SettingsComponent.h"
 #include "utils/log.h"
 
 #include "platform/win32/CharsetConverter.h"
@@ -20,9 +23,7 @@
 #include <intsafe.h>
 #include <sys/stat.h>
 
-
 using namespace XFILE;
-
 
 CWin32File::CWin32File() : m_smbFile(false)
 {
@@ -39,7 +40,6 @@ CWin32File::CWin32File(bool asSmbFile) : m_smbFile(asSmbFile)
   m_allowWrite = false;
   m_lastSMBFileErr = ERROR_SUCCESS;
 }
-
 
 CWin32File::~CWin32File()
 {
@@ -466,6 +466,10 @@ int CWin32File::Stat(const CURL& url, struct __stat64* statData)
     return -1;
   }
 
+  // stat of directories requires the removal of the trailing slash
+  if (pathnameW.back() == L'\\')
+    pathnameW.pop_back();
+
   if (pathnameW.length() <= 6) // 6 is length of "\\?\x:"
     return -1; // pathnameW is empty or points to device ("\\?\x:"), on win32 stat() for devices is not supported
 
@@ -484,6 +488,8 @@ int CWin32File::Stat(const CURL& url, struct __stat64* statData)
 
   FindClose(hSearch);
 
+  *statData = {};
+
   /* set st_gid */
   statData->st_gid = 0; // UNIX group ID is always zero on Win32
 
@@ -500,7 +506,7 @@ int CWin32File::Stat(const CURL& url, struct __stat64* statData)
   if (!m_smbFile)
   {
     assert(pathnameW.compare(0, 4, L"\\\\?\\", 4) == 0);
-    assert(pathnameW.length() >= 7); // '7' is the minimal length of "\\?\x:\"
+    assert(pathnameW.length() >= 7); // '7' is the minimal length of "\\?\x:y"
     assert(pathnameW[5] == L':');
     const wchar_t driveLetter = pathnameW[4];
     assert((driveLetter >= L'A' && driveLetter <= L'Z') || (driveLetter >= L'a' && driveLetter <= L'z'));
@@ -623,6 +629,8 @@ int CWin32File::Stat(struct __stat64* statData)
 
   if (m_hFile == INVALID_HANDLE_VALUE)
     return -1;
+
+  *statData = {};
 
   /* set st_gid */
   statData->st_gid = 0; // UNIX group ID is always zero on Win32
@@ -754,6 +762,18 @@ int CWin32File::Stat(struct __stat64* statData)
   statData->st_mode |= (statData->st_mode & (_S_IREAD | _S_IWRITE | _S_IEXEC)) >> 3;
   // copy user RWX rights to other rights
   statData->st_mode |= (statData->st_mode & (_S_IREAD | _S_IWRITE | _S_IEXEC)) >> 6;
+
+  return 0;
+}
+
+int CWin32File::GetChunkSize()
+{
+  if (m_smbFile)
+  {
+    const auto settings = CServiceBroker::GetSettingsComponent()->GetSettings();
+
+    return settings ? (settings->GetInt(CSettings::SETTING_SMB_CHUNKSIZE) * 1024) : (128 * 1024);
+  }
 
   return 0;
 }

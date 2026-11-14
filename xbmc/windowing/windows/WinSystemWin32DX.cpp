@@ -22,13 +22,8 @@
 #include "platform/win32/CharsetConverter.h"
 #include "platform/win32/WIN32Util.h"
 
-#ifndef _M_X64
+#if !defined(_M_X64) && !defined(_M_ARM64)
 #include "utils/SystemInfo.h"
-#endif
-#if _DEBUG
-#pragma comment(lib, "detoursd.lib")
-#else
-#pragma comment(lib, "detours.lib")
 #endif
 #pragma comment(lib, "dxgi.lib")
 #include <windows.h>
@@ -40,6 +35,8 @@
 #include <detours.h>
 
 using KODI::PLATFORM::WINDOWS::FromW;
+
+using namespace std::chrono_literals;
 
 // User Mode Driver hooks definitions
 void APIENTRY HookCreateResource(D3D10DDI_HDEVICE hDevice, const D3D10DDIARG_CREATERESOURCE* pResource, D3D10DDI_HRESOURCE hResource, D3D10DDI_HRTRESOURCE hRtResource);
@@ -80,7 +77,7 @@ void CWinSystemWin32DX::PresentRenderImpl(bool rendered)
   }
 
   if (!rendered)
-    KODI::TIME::Sleep(40);
+    KODI::TIME::Sleep(40ms);
 }
 
 bool CWinSystemWin32DX::CreateNewWindow(const std::string& name, bool fullScreen, RESOLUTION_INFO& res)
@@ -109,6 +106,12 @@ bool CWinSystemWin32DX::DestroyRenderSystem()
   m_deviceResources->Release();
   m_deviceResources.reset();
   return true;
+}
+
+bool CWinSystemWin32DX::CanUseExclusiveFullscreen() const
+{
+  // a GPU that doesn't own the display can't take it into exclusive mode
+  return !m_deviceResources || !m_deviceResources->IsCrossAdapter();
 }
 
 void CWinSystemWin32DX::SetDeviceFullScreen(bool fullScreen, RESOLUTION_INFO& res)
@@ -145,6 +148,17 @@ void CWinSystemWin32DX::OnMove(int x, int y)
     CDisplaySettings::GetInstance().SetMonitor(KODI::PLATFORM::WINDOWS::FromW(details->MonitorNameW));
     m_deviceResources->SetMonitor(newMonitor);
     m_hMonitor = newMonitor;
+  }
+
+  // Save window position if not fullscreen
+  if (!IsFullScreen() && (m_nLeft != x || m_nTop != y))
+  {
+    m_nLeft = x;
+    m_nTop = y;
+    const auto settings = CServiceBroker::GetSettingsComponent()->GetSettings();
+    settings->SetInt(SETTING_WINDOW_LEFT, x);
+    settings->SetInt(SETTING_WINDOW_TOP, y);
+    settings->Save();
   }
 }
 
@@ -261,7 +275,7 @@ void CWinSystemWin32DX::InitHooks(IDXGIOutput* pOutput)
   CLog::LogF(LOGDEBUG, "Hooking into UserModeDriver on device {}. ",
              FromW(displayDevice.DeviceKey));
   const wchar_t* keyName =
-#ifndef _M_X64
+#if !defined(_M_X64) && !defined(_M_ARM64)
       // on x64 system and x32 build use UserModeDriverNameWow key
       CSysInfo::GetKernelBitness() == 64 ? keyName = L"UserModeDriverNameWow" :
 #endif // !_WIN64
@@ -291,7 +305,7 @@ void CWinSystemWin32DX::InitHooks(IDXGIOutput* pOutput)
       return;
     // 3. we take only first three values (dx12 driver isn't needed if it exists ofc)
     if (drivers.size() > 3)
-      drivers = std::vector<std::wstring>(drivers.begin(), drivers.begin() + 3);
+      drivers.resize(3);
     // 4. and then iterate with reverse order to start iterate with the best candidate for d3d11 driver
     for (auto it = drivers.rbegin(); it != drivers.rend(); ++it)
     {
@@ -312,7 +326,7 @@ void CWinSystemWin32DX::InitHooks(IDXGIOutput* pOutput)
           }
           else
           {
-            CLog::Log(LOGDEBUG, __FUNCTION__": Unable to install and activate D3D11 hook.");
+            CLog::LogF(LOGDEBUG, "Unable to install and activate D3D11 hook.");
             s_fnOpenAdapter10_2 = nullptr;
             FreeLibrary(m_hDriverModule);
             m_hDriverModule = nullptr;
@@ -413,6 +427,23 @@ bool CWinSystemWin32DX::IsHDROutput() const
   return m_deviceResources->IsHDROutput();
 }
 
+KODI::UTILS::Eotf CWinSystemWin32DX::GetEotf() const
+{
+  return IsTransferPQ() ? KODI::UTILS::Eotf::PQ : KODI::UTILS::Eotf::TRADITIONAL_SDR;
+}
+
+KODI::UTILS::Colorimetry CWinSystemWin32DX::GetColorimetry() const
+{
+  return IsTransferPQ() ? KODI::UTILS::Colorimetry::BT2020_RGB : KODI::UTILS::Colorimetry::DEFAULT;
+}
+
+int CWinSystemWin32DX::GetOutputBitDepth() const
+{
+  const bool is10bit =
+      m_deviceResources->GetBackBuffer().GetFormat() == DXGI_FORMAT_R10G10B10A2_UNORM;
+  return is10bit ? 10 : 8;
+}
+
 bool CWinSystemWin32DX::IsTransferPQ() const
 {
   return m_deviceResources->IsTransferPQ();
@@ -431,4 +462,9 @@ void CWinSystemWin32DX::SetHdrColorSpace(const DXGI_COLOR_SPACE_TYPE colorSpace)
 DEBUG_INFO_RENDER CWinSystemWin32DX::GetDebugInfo()
 {
   return m_deviceResources->GetDebugInfo();
+}
+
+bool CWinSystemWin32DX::SupportsVideoSuperResolution()
+{
+  return m_deviceResources->IsSuperResolutionSupported();
 }

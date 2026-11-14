@@ -1,29 +1,22 @@
-include ../../Makefile.include
+include ../../Makefile.include MARKUPSAFE-VERSION ../../download-files.include
 PREFIX=$(NATIVEPREFIX)
 PLATFORM=$(NATIVEPLATFORM)
-DEPS= ../../Makefile.include Makefile
+DEPS = ../../Makefile.include Makefile MARKUPSAFE-VERSION ../../download-files.include
 
-# lib name, version
-LIBNAME=MarkupSafe
-VERSION=1.1.1
-ARCHIVE=$(LIBNAME)-$(VERSION).tar.gz
 
 all: .installed-$(PLATFORM)
 
-$(TARBALLS_LOCATION)/$(ARCHIVE):
-	cd $(TARBALLS_LOCATION); $(RETRIEVE_TOOL) $(RETRIEVE_TOOL_FLAGS) $(BASE_URL)/$(ARCHIVE)
-	cd $(TARBALLS_LOCATION); chmod +x $(ARCHIVE)
-
-$(PLATFORM): $(TARBALLS_LOCATION)/$(ARCHIVE) $(DEPS)
+.configured-$(PLATFORM): $(DEPS) | $(TARBALLS_LOCATION)/$(ARCHIVE).$(HASH_TYPE)
 	-rm -rf $(PLATFORM)/*; mkdir -p $(PLATFORM)
 	cd $(PLATFORM); $(ARCHIVE_TOOL) $(ARCHIVE_TOOL_FLAGS) $(TARBALLS_LOCATION)/$(ARCHIVE)
+	touch $@
 
-.installed-$(PLATFORM): $(PLATFORM)
-	cd $(PLATFORM); $(PREFIX)/bin/python3 setup.py install --prefix=$(PREFIX)
+.installed-$(PLATFORM): .configured-$(PLATFORM)
+	cd $(PLATFORM); $(PREFIX)/bin/python3 -m pip install --no-deps --no-build-isolation --prefix=$(PREFIX) .
 	touch $@
 
 clean:
-	rm -f .installed-$(PLATFORM)
+	rm -f .installed-$(PLATFORM) .configured-$(PLATFORM)
 
 distclean::
-	rm -rf $(PLATFORM) .installed-$(PLATFORM)
+	rm -rf $(PLATFORM) .installed-$(PLATFORM) .configured-$(PLATFORM)

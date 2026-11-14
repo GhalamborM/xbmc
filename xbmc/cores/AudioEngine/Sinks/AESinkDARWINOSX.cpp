@@ -20,6 +20,9 @@
 #include "utils/TimeUtils.h"
 #include "utils/log.h"
 
+#include <mutex>
+
+using namespace std::chrono_literals;
 
 static void EnumerateDevices(CADeviceList &list)
 {
@@ -71,7 +74,7 @@ static void EnumerateDevices()
   CADeviceList devices;
   EnumerateDevices(devices);
   {
-    CSingleLock lock(s_devicesLock);
+    std::unique_lock lock(s_devicesLock);
     s_devices = devices;
   }
 }
@@ -80,7 +83,7 @@ static CADeviceList GetDevices()
 {
   CADeviceList list;
   {
-    CSingleLock lock(s_devicesLock);
+    std::unique_lock lock(s_devicesLock);
     list = s_devices;
   }
   return list;
@@ -166,14 +169,13 @@ void CAESinkDARWINOSX::Register()
   AE::CAESinkFactory::RegisterSink(reg);
 }
 
-IAESink* CAESinkDARWINOSX::Create(std::string &device, AEAudioFormat &desiredFormat)
+std::unique_ptr<IAESink> CAESinkDARWINOSX::Create(std::string& device, AEAudioFormat& desiredFormat)
 {
-  IAESink *sink = new CAESinkDARWINOSX();
+  auto sink = std::make_unique<CAESinkDARWINOSX>();
   if (sink->Initialize(desiredFormat, device))
     return sink;
 
-  delete sink;
-  return nullptr;
+  return {};
 }
 
 bool CAESinkDARWINOSX::Initialize(AEAudioFormat &format, std::string &device)
@@ -421,18 +423,18 @@ unsigned int CAESinkDARWINOSX::AddPackets(uint8_t **data, unsigned int frames, u
 {
   if (m_buffer->GetWriteSize() < frames * m_frameSizePerPlane)
   { // no space to write - wait for a bit
-    CSingleLock lock(mutex);
-    unsigned int timeout = 900 * frames / m_framesPerSecond;
+    std::unique_lock lock(mutex);
+    auto timeout = std::chrono::milliseconds(900 * frames / m_framesPerSecond);
     if (!m_started)
-      timeout = 4500;
+      timeout = 4500ms;
 
     // we are using a timer here for being sure for timeouts
     // condvar can be woken spuriously as signaled
-    XbmcThreads::EndTime timer(timeout);
-    condVar.wait(mutex, std::chrono::milliseconds(timeout));
+    XbmcThreads::EndTime<> timer(timeout);
+    condVar.wait(mutex, timeout);
     if (!m_started && timer.IsTimePast())
     {
-      CLog::Log(LOGERROR, "{} engine didn't start in {} ms!", __FUNCTION__, timeout);
+      CLog::Log(LOGERROR, "{} engine didn't start in {} ms!", __FUNCTION__, timeout.count());
       return INT_MAX;
     }
   }
@@ -451,12 +453,12 @@ void CAESinkDARWINOSX::Drain()
   int bytes = m_buffer->GetReadSize();
   int totalBytes = bytes;
   int maxNumTimeouts = 3;
-  unsigned int timeout = 900 * bytes / (m_framesPerSecond * m_frameSizePerPlane);
+  auto timeout = std::chrono::milliseconds(900 * bytes / (m_framesPerSecond * m_frameSizePerPlane));
   while (bytes && maxNumTimeouts > 0)
   {
-    CSingleLock lock(mutex);
-    XbmcThreads::EndTime timer(timeout);
-    condVar.wait(mutex, std::chrono::milliseconds(timeout));
+    std::unique_lock lock(mutex);
+    XbmcThreads::EndTime<> timer(timeout);
+    condVar.wait(mutex, timeout);
 
     bytes = m_buffer->GetReadSize();
     // if we timeout and don't

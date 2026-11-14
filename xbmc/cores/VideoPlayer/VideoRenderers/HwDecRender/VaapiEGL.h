@@ -8,31 +8,26 @@
 
 #pragma once
 
-#include <array>
-
-#if defined(HAS_GL)
-// always define GL_GLEXT_PROTOTYPES before include gl headers
-#if !defined(GL_GLEXT_PROTOTYPES)
-#define GL_GLEXT_PROTOTYPES
-#endif
-#include <GL/gl.h>
-#elif defined(HAS_GLES)
-#include <GLES2/gl2.h>
-#include <GLES2/gl2ext.h>
-#include <GLES3/gl3.h>
-#endif
-
-#include "system_egl.h"
+#include "cores/VideoPlayer/Buffers/DmaBufIdentityCache.h"
 #include "utils/Geometry.h"
 
-#include "platform/posix/utils/FileHandle.h"
+#include <array>
+#include <cstdint>
+#include <memory>
+#include <span>
+#include <vector>
+
+#include <va/va.h>
+
+#include "system_egl.h"
+#include "system_gl.h"
 
 #include <EGL/eglext.h>
-#include <va/va.h>
 
 namespace VAAPI
 {
 
+class CCapabilities;
 class CVaapiRenderPicture;
 
 struct InteropInfo
@@ -51,62 +46,28 @@ public:
   virtual ~CVaapiTexture() = default;
 
   virtual void Init(InteropInfo &interop) = 0;
-  virtual bool Map(CVaapiRenderPicture *pic) = 0;
-  virtual void Unmap() = 0;
+  virtual bool Import(CVaapiRenderPicture* pic) = 0;
+  virtual void Reset() = 0;
 
   virtual GLuint GetTextureY() = 0;
   virtual GLuint GetTextureVU() = 0;
   virtual CSizeInt GetTextureSize() = 0;
 };
 
-class CVaapi1Texture : public CVaapiTexture
-{
-public:
-  CVaapi1Texture() = default;
-
-  bool Map(CVaapiRenderPicture *pic) override;
-  void Unmap() override;
-  void Init(InteropInfo &interop) override;
-
-  GLuint GetTextureY() override;
-  GLuint GetTextureVU() override;
-  CSizeInt GetTextureSize() override;
-
-  static void TestInterop(VADisplay vaDpy, EGLDisplay eglDisplay, bool &general, bool &deepColor);
-
-  GLuint m_texture = 0;
-  GLuint m_textureY = 0;
-  GLuint m_textureVU = 0;
-  int m_texWidth = 0;
-  int m_texHeight = 0;
-
-protected:
-  static bool TestInteropDeepColor(VADisplay vaDpy, EGLDisplay eglDisplay);
-
-  InteropInfo m_interop;
-  CVaapiRenderPicture *m_vaapiPic = nullptr;
-  struct GLSurface
-  {
-    VAImage vaImage;
-    VABufferInfo vBufInfo;
-    EGLImageKHR eglImage;
-    EGLImageKHR eglImageY, eglImageVU;
-  } m_glSurface;
-};
-
 class CVaapi2Texture : public CVaapiTexture
 {
 public:
-  bool Map(CVaapiRenderPicture *pic) override;
-  void Unmap() override;
+  bool Import(CVaapiRenderPicture* pic) override;
+  void Reset() override;
   void Init(InteropInfo &interop) override;
 
   GLuint GetTextureY() override;
   GLuint GetTextureVU() override;
   CSizeInt GetTextureSize() override;
 
-  static void TestInterop(VADisplay vaDpy, EGLDisplay eglDisplay, bool &general, bool &deepColor);
-  static bool TestInteropGeneral(VADisplay vaDpy, EGLDisplay eglDisplay);
+  // Probe every importable VA fourcc the renderer cares about and Add()
+  // each successful one to caps.
+  static void TestInteropFormats(VADisplay vaDpy, EGLDisplay eglDisplay, CCapabilities& caps);
 
 private:
   static bool TestEsh(VADisplay vaDpy, EGLDisplay eglDisplay, std::uint32_t rtFormat, std::int32_t pixelFormat);
@@ -118,12 +79,32 @@ private:
   };
 
   InteropInfo m_interop;
-  CVaapiRenderPicture* m_vaapiPic{};
   bool m_hasPlaneModifiers{false};
-  std::array<KODI::UTILS::POSIX::CFileHandle, 4> m_drmFDs;
+  bool m_imported{false};
   MappedTexture m_y, m_vu;
   CSizeInt m_textureSize;
 };
 
+//! \brief Textures cached per dma-buf identity; the render slot's picture reference pins content.
+class CVaapiTexturePool
+{
+public:
+  // must exceed the largest VAAPI surface pool (AV1: 27) or cycling evicts every frame
+  static constexpr size_t MAX_ENTRIES = 32;
+
+  void Init(InteropInfo& interop);
+  //! \brief Imported texture for the picture's surface dma-buf; nullptr on export or import failure.
+  //! Textures in inUse are protected from eviction while a render slot still names them.
+  CVaapi2Texture* Get(CVaapiRenderPicture* pic, std::span<CVaapiTexture* const> inUse);
+  //! \brief Reset and drop every cached texture; needs the GL context current.
+  void ReleaseAll();
+
+private:
+  InteropInfo m_interop{};
+  DRMPRIME::CDmaBufIdentityCache m_cache{MAX_ENTRIES, "vaapi"};
+  // cache handle = entry index + 1; freed slots are recycled
+  std::vector<std::unique_ptr<CVaapi2Texture>> m_entries;
+  std::vector<size_t> m_free;
+};
 }
 

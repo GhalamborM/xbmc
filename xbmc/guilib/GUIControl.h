@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2005-2018 Team Kodi
+ *  Copyright (C) 2005-2026 Team Kodi
  *  This file is part of Kodi - https://kodi.tv
  *
  *  SPDX-License-Identifier: GPL-2.0-or-later
@@ -24,9 +24,17 @@
 
 class CGUIListItem; // forward
 class CAction;
-class CMouseEvent;
+
 class CGUIMessage;
 class CGUIAction;
+
+namespace KODI
+{
+namespace MOUSE
+{
+class CMouseEvent;
+} // namespace MOUSE
+} // namespace KODI
 
 enum ORIENTATION { HORIZONTAL = 0, VERTICAL };
 
@@ -123,7 +131,7 @@ public:
    \return EVENT_RESULT corresponding to whether the control handles this event
    \sa HitTest, CanFocusFromPoint, CMouseEvent, EVENT_RESULT
    */
-  virtual EVENT_RESULT SendMouseEvent(const CPoint &point, const CMouseEvent &event);
+  virtual EVENT_RESULT SendMouseEvent(const CPoint& point, const KODI::MOUSE::CMouseEvent& event);
 
   /*! \brief Perform a mouse action
 
@@ -135,7 +143,7 @@ public:
    \return EVENT_RESULT corresponding to whether the control handles this event
    \sa SendMouseEvent, HitTest, CanFocusFromPoint, CMouseEvent
    */
-  virtual EVENT_RESULT OnMouseEvent(const CPoint& point, const CMouseEvent& event)
+  virtual EVENT_RESULT OnMouseEvent(const CPoint& point, const KODI::MOUSE::CMouseEvent& event)
   {
     return EVENT_RESULT_UNHANDLED;
   }
@@ -167,7 +175,7 @@ public:
   bool IsVisibleFromSkin() const { return m_visibleFromSkinCondition; }
   virtual bool IsDisabled() const;
   virtual void SetPosition(float posX, float posY);
-  virtual void SetHitRect(const CRect& rect, const UTILS::COLOR::Color& color);
+  virtual void SetHitRect(const CRect& rect, const KODI::UTILS::COLOR::Color& color);
   virtual void SetCamera(const CPoint &camera);
   virtual void SetStereoFactor(const float &factor);
   bool SetColorDiffuse(const KODI::GUILIB::GUIINFO::CGUIInfoColor &color);
@@ -176,7 +184,10 @@ public:
   virtual float GetYPosition() const;
   virtual float GetWidth() const;
   virtual float GetHeight() const;
+  virtual void AssignDepth();
 
+  static const unsigned int DIRTY_STATE_CONTROL = 1; //This control is dirty
+  static const unsigned int DIRTY_STATE_CHILD = 2; //One / more children are dirty
   void MarkDirtyRegion(const unsigned int dirtyState = DIRTY_STATE_CONTROL);
   bool IsControlDirty() const { return m_controlDirtyState != 0; }
 
@@ -257,43 +268,52 @@ public:
   enum GUICONTROLTYPES
   {
     GUICONTROL_UNKNOWN,
-    GUICONTROL_BUTTON,
-    GUICONTROL_FADELABEL,
-    GUICONTROL_IMAGE,
+
+    // Keep sorted
+    GUICONTAINER_EPGGRID,
+    GUICONTAINER_FIXEDLIST,
+    GUICONTAINER_LIST,
+    GUICONTAINER_PANEL,
+    GUICONTAINER_WRAPLIST,
     GUICONTROL_BORDEREDIMAGE,
+    GUICONTROL_BUTTON,
+    GUICONTROL_COLORBUTTON,
+    GUICONTROL_EDIT,
+    GUICONTROL_FADELABEL,
+    GUICONTROL_GAME,
+    GUICONTROL_GAMECONTROLLER,
+    GUICONTROL_GAMECONTROLLERLIST,
+    GUICONTROL_GROUP,
+    GUICONTROL_GROUPLIST,
+    GUICONTROL_GROUPMASK,
+    GUICONTROL_IMAGE,
     GUICONTROL_LABEL,
     GUICONTROL_LISTGROUP,
+    GUICONTROL_LISTLABEL,
+    GUICONTROL_MOVER,
+    GUICONTROL_MULTI_IMAGE,
     GUICONTROL_PROGRESS,
     GUICONTROL_RADIO,
+    GUICONTROL_RANGES,
+    GUICONTROL_RENDERADDON,
+    GUICONTROL_RESIZE,
     GUICONTROL_RSS,
-    GUICONTROL_SLIDER,
+    GUICONTROL_SCROLLBAR,
     GUICONTROL_SETTINGS_SLIDER,
+    GUICONTROL_SLIDER,
     GUICONTROL_SPIN,
     GUICONTROL_SPINEX,
     GUICONTROL_TEXTBOX,
     GUICONTROL_TOGGLEBUTTON,
     GUICONTROL_VIDEO,
-    GUICONTROL_GAME,
-    GUICONTROL_MOVER,
-    GUICONTROL_RESIZE,
-    GUICONTROL_EDIT,
     GUICONTROL_VISUALISATION,
-    GUICONTROL_RENDERADDON,
-    GUICONTROL_MULTI_IMAGE,
-    GUICONTROL_GROUP,
-    GUICONTROL_GROUPLIST,
-    GUICONTROL_SCROLLBAR,
-    GUICONTROL_LISTLABEL,
-    GUICONTROL_GAMECONTROLLER,
-    GUICONTAINER_LIST,
-    GUICONTAINER_WRAPLIST,
-    GUICONTAINER_FIXEDLIST,
-    GUICONTAINER_EPGGRID,
-    GUICONTAINER_PANEL,
-    GUICONTROL_RANGES,
-    GUICONTROL_COLORBUTTON
   };
   GUICONTROLTYPES GetControlType() const { return ControlType; }
+
+  /*! \brief Test whether the control is "drawable" (not a group or similar)
+   \return true if the control has textures/labels it wants to render
+   */
+  bool IsControlRenderable();
 
   enum GUIVISIBLE { HIDDEN = 0, DELAYED, VISIBLE };
 
@@ -337,7 +357,7 @@ protected:
   float m_height;
   float m_width;
   CRect m_hitRect;
-  UTILS::COLOR::Color m_hitColor = 0xffffffff;
+  KODI::UTILS::COLOR::Color m_hitColor = 0xffffffff;
   KODI::GUILIB::GUIINFO::CGUIInfoColor m_diffuseColor;
   int m_controlID;
   int m_parentID;
@@ -360,6 +380,7 @@ protected:
   // enable/disable state
   INFO::InfoPtr m_enableCondition;
   bool m_enabled;
+  bool m_enabledFromSkinCondition;
 
   bool m_pushedUpdates;
 
@@ -370,9 +391,7 @@ protected:
   float m_stereo;
   TransformMatrix m_transform;
   TransformMatrix m_cachedTransform; // Contains the absolute transform the control
-
-  static const unsigned int DIRTY_STATE_CONTROL = 1; //This control is dirty
-  static const unsigned int DIRTY_STATE_CHILD = 2; //One / more children are dirty
+  bool m_isCulled{true};
 
   unsigned int  m_controlDirtyState;
   CRect m_renderRegion;         // In screen coordinates

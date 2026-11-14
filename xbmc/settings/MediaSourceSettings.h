@@ -9,12 +9,20 @@
 #pragma once
 
 #include "MediaSource.h"
+#include "media/MediaSection.h"
 #include "settings/lib/ISettingsHandler.h"
 
+#include <array>
 #include <string>
+#include <string_view>
+#include <vector>
 
 class CProfileManager;
-class TiXmlNode;
+
+namespace tinyxml2
+{
+class XMLNode;
+}
 
 class CMediaSourceSettings : public ISettingsHandler
 {
@@ -28,18 +36,27 @@ public:
 
   bool Load();
   bool Load(const std::string &file);
-  bool Save();
+  bool Save() const;
   bool Save(const std::string &file) const;
   void Clear();
 
-  VECSOURCES* GetSources(const std::string &type);
-  const std::string& GetDefaultSource(const std::string &type) const;
-  void SetDefaultSource(const std::string &type, const std::string &source);
+  std::vector<CMediaSource>& GetSources(KODI::MEDIA::MediaSection section);
+  const std::string& GetDefaultSource(KODI::MEDIA::MediaSection section) const;
+  void SetDefaultSource(KODI::MEDIA::MediaSection section, std::string_view source);
+  static bool HasDefaultSource(KODI::MEDIA::MediaSection section);
 
-  bool UpdateSource(const std::string &strType, const std::string &strOldName, const std::string &strUpdateChild, const std::string &strUpdateValue);
-  bool DeleteSource(const std::string &strType, const std::string &strName, const std::string &strPath, bool virtualSource = false);
-  bool AddShare(const std::string &type, const CMediaSource &share);
-  bool UpdateShare(const std::string &type, const std::string &oldName, const CMediaSource &share);
+  bool UpdateSource(KODI::MEDIA::MediaSection section,
+                    std::string_view strOldName,
+                    std::string_view strUpdateChild,
+                    const std::string& strUpdateValue);
+  bool DeleteSource(KODI::MEDIA::MediaSection section,
+                    std::string_view strName,
+                    std::string_view strPath,
+                    bool virtualSource = false);
+  bool AddShare(KODI::MEDIA::MediaSection section, const CMediaSource& share);
+  bool UpdateShare(KODI::MEDIA::MediaSection section,
+                   std::string_view oldName,
+                   const CMediaSource& share);
 
 protected:
   CMediaSourceSettings();
@@ -48,19 +65,24 @@ protected:
   ~CMediaSourceSettings() override;
 
 private:
-  bool GetSource(const std::string &category, const TiXmlNode *source, CMediaSource &share);
-  void GetSources(const TiXmlNode* pRootElement, const std::string& strTagName, VECSOURCES& items, std::string& strDefault);
-  bool SetSources(TiXmlNode *root, const char *section, const VECSOURCES &shares, const std::string &defaultPath) const;
+  struct SectionSources
+  {
+    std::vector<CMediaSource> sources;
+    std::string defaultSource;
+  };
 
-  VECSOURCES m_programSources;
-  VECSOURCES m_pictureSources;
-  VECSOURCES m_fileSources;
-  VECSOURCES m_musicSources;
-  VECSOURCES m_videoSources;
-  VECSOURCES m_gameSources;
+  bool GetSource(KODI::MEDIA::MediaSection section,
+                 const tinyxml2::XMLNode* source,
+                 CMediaSource& share) const;
+  void GetSources(const tinyxml2::XMLNode* rootElement,
+                  KODI::MEDIA::MediaSection section,
+                  SectionSources& sources) const;
+  bool SetSources(tinyxml2::XMLNode* rootNode,
+                  KODI::MEDIA::MediaSection section,
+                  const SectionSources& sources) const;
 
-  std::string m_defaultProgramSource;
-  std::string m_defaultMusicSource;
-  std::string m_defaultPictureSource;
-  std::string m_defaultFileSource;
+  SectionSources& At(KODI::MEDIA::MediaSection section);
+  const SectionSources& At(KODI::MEDIA::MediaSection section) const;
+
+  std::array<SectionSources, KODI::MEDIA::MEDIA_SECTIONS.size()> m_sections;
 };

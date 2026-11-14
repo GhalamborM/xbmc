@@ -44,27 +44,27 @@ bool Interface_GUIDialogYesNo::show_and_get_input_single_text(KODI_HANDLE kodiBa
                                                               const char* noLabel,
                                                               const char* yesLabel)
 {
-  CAddonDll* addon = static_cast<CAddonDll*>(kodiBase);
+  const auto* addon = static_cast<const CAddonDll*>(kodiBase);
   if (!addon)
   {
-    CLog::Log(LOGERROR, "Interface_GUIDialogYesNo::{} - invalid data", __func__);
+    CLog::LogF(LOGERROR, "Invalid data");
     return false;
   }
 
   if (!heading || !text || !canceled || !noLabel || !yesLabel)
   {
-    CLog::Log(LOGERROR,
-              "Interface_GUIDialogYesNo::{} - invalid handler data (heading='{}', text='{}', "
-              "canceled='{}', noLabel='{}', yesLabel='{}') on addon '{}'",
-              __func__, static_cast<const void*>(heading), static_cast<const void*>(text),
-              static_cast<void*>(canceled), static_cast<const void*>(noLabel),
-              static_cast<const void*>(yesLabel), addon->ID());
+    CLog::LogF(LOGERROR,
+               "Invalid handler data (heading='{}', text='{}', "
+               "canceled='{}', noLabel='{}', yesLabel='{}') on addon '{}'",
+               static_cast<const void*>(heading), static_cast<const void*>(text),
+               static_cast<void*>(canceled), static_cast<const void*>(noLabel),
+               static_cast<const void*>(yesLabel), addon->ID());
     return false;
   }
 
-  DialogResponse result = HELPERS::ShowYesNoDialogText(heading, text, noLabel, yesLabel);
-  *canceled = (result == DialogResponse::CANCELLED);
-  return (result == DialogResponse::YES);
+  const DialogResponse result{HELPERS::ShowYesNoDialogText(heading, text, noLabel, yesLabel)};
+  *canceled = (result == DialogResponse::CHOICE_CANCELLED);
+  return (result == DialogResponse::CHOICE_YES);
 }
 
 bool Interface_GUIDialogYesNo::show_and_get_input_line_text(KODI_HANDLE kodiBase,
@@ -75,27 +75,27 @@ bool Interface_GUIDialogYesNo::show_and_get_input_line_text(KODI_HANDLE kodiBase
                                                             const char* noLabel,
                                                             const char* yesLabel)
 {
-  CAddonDll* addon = static_cast<CAddonDll*>(kodiBase);
+  const auto* addon = static_cast<const CAddonDll*>(kodiBase);
   if (!addon)
   {
-    CLog::Log(LOGERROR, "Interface_GUIDialogYesNo::{} - invalid data", __func__);
+    CLog::LogF(LOGERROR, "Invalid data");
     return false;
   }
 
   if (!heading || !line0 || !line1 || !line2 || !noLabel || !yesLabel)
   {
-    CLog::Log(LOGERROR,
-              "Interface_GUIDialogYesNo::{} - invalid handler data (heading='{}', line0='{}', "
-              "line1='{}', line2='{}', "
-              "noLabel='{}', yesLabel='{}') on addon '{}'",
-              __func__, static_cast<const void*>(heading), static_cast<const void*>(line0),
-              static_cast<const void*>(line1), static_cast<const void*>(line2),
-              static_cast<const void*>(noLabel), static_cast<const void*>(yesLabel), addon->ID());
+    CLog::LogF(LOGERROR,
+               "Invalid handler data (heading='{}', line0='{}', "
+               "line1='{}', line2='{}', "
+               "noLabel='{}', yesLabel='{}') on addon '{}'",
+               static_cast<const void*>(heading), static_cast<const void*>(line0),
+               static_cast<const void*>(line1), static_cast<const void*>(line2),
+               static_cast<const void*>(noLabel), static_cast<const void*>(yesLabel), addon->ID());
     return false;
   }
 
   return HELPERS::ShowYesNoDialogLines(heading, line0, line1, line2, noLabel, yesLabel) ==
-         DialogResponse::YES;
+         DialogResponse::CHOICE_YES;
 }
 
 bool Interface_GUIDialogYesNo::show_and_get_input_line_button_text(KODI_HANDLE kodiBase,
@@ -107,30 +107,30 @@ bool Interface_GUIDialogYesNo::show_and_get_input_line_button_text(KODI_HANDLE k
                                                                    const char* noLabel,
                                                                    const char* yesLabel)
 {
-  CAddonDll* addon = static_cast<CAddonDll*>(kodiBase);
+  const auto* addon = static_cast<const CAddonDll*>(kodiBase);
   if (!addon)
   {
-    CLog::Log(LOGERROR, "Interface_GUIDialogYesNo::{} - invalid data", __func__);
+    CLog::LogF(LOGERROR, "Invalid data");
     return false;
   }
 
   if (!heading || !line0 || !line1 || !line2 || !canceled || !noLabel || !yesLabel)
   {
-    CLog::Log(LOGERROR,
-              "Interface_GUIDialogYesNo::{} - invalid handler data (heading='{}', line0='{}', "
-              "line1='{}', line2='{}', "
-              "canceled='{}', noLabel='{}', yesLabel='{}') on addon '{}'",
-              __func__, static_cast<const void*>(heading), static_cast<const void*>(line0),
-              static_cast<const void*>(line1), static_cast<const void*>(line2),
-              static_cast<const void*>(canceled), static_cast<const void*>(noLabel),
-              static_cast<const void*>(yesLabel), addon->ID());
+    CLog::LogF(LOGERROR,
+               "Invalid handler data (heading='{}', line0='{}', "
+               "line1='{}', line2='{}', "
+               "canceled='{}', noLabel='{}', yesLabel='{}') on addon '{}'",
+               static_cast<const void*>(heading), static_cast<const void*>(line0),
+               static_cast<const void*>(line1), static_cast<const void*>(line2),
+               static_cast<const void*>(canceled), static_cast<const void*>(noLabel),
+               static_cast<const void*>(yesLabel), addon->ID());
     return false;
   }
 
-  DialogResponse result =
-      HELPERS::ShowYesNoDialogLines(heading, line0, line1, line2, noLabel, yesLabel);
-  *canceled = (result == DialogResponse::CANCELLED);
-  return (result == DialogResponse::YES);
+  const DialogResponse result{
+      HELPERS::ShowYesNoDialogLines(heading, line0, line1, line2, noLabel, yesLabel)};
+  *canceled = (result == DialogResponse::CHOICE_CANCELLED);
+  return (result == DialogResponse::CHOICE_YES);
 }
 
 } /* namespace ADDON */

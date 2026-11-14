@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2005-2018 Team Kodi
+ *  Copyright (C) 2005-2024 Team Kodi
  *  This file is part of Kodi - https://kodi.tv
  *
  *  SPDX-License-Identifier: GPL-2.0-or-later
@@ -8,9 +8,11 @@
 
 #include "PeripheralHID.h"
 
-#include "guilib/LocalizeStrings.h"
+#include "ServiceBroker.h"
 #include "input/InputManager.h"
 #include "peripherals/Peripherals.h"
+#include "resources/LocalizeStrings.h"
+#include "resources/ResourcesComponent.h"
 #include "utils/log.h"
 
 using namespace PERIPHERALS;
@@ -20,8 +22,9 @@ CPeripheralHID::CPeripheralHID(CPeripherals& manager,
                                CPeripheralBus* bus)
   : CPeripheral(manager, scanResult, bus)
 {
-  m_strDeviceName = scanResult.m_strDeviceName.empty() ? g_localizeStrings.Get(35001)
-                                                       : scanResult.m_strDeviceName;
+  m_strDeviceName = scanResult.m_strDeviceName.empty()
+                        ? CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(35001)
+                        : scanResult.m_strDeviceName;
   m_features.push_back(FEATURE_HID);
 }
 
@@ -60,7 +63,7 @@ bool CPeripheralHID::InitialiseFeature(const PeripheralFeature feature)
         CLog::Log(LOGDEBUG, "{} - adding keymapping for: {}", __FUNCTION__, m_strKeymap);
         m_manager.GetInputManager().AddKeymap(m_strKeymap);
       }
-      else if (!bKeymapEnabled)
+      else
       {
         CLog::Log(LOGDEBUG, "{} - removing keymapping for: {}", __FUNCTION__, m_strKeymap);
         m_manager.GetInputManager().RemoveKeymap(m_strKeymap);

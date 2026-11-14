@@ -8,13 +8,18 @@
 
 #include "GUIDialogSubtitles.h"
 
-#include "Application.h"
-#include "LangInfo.h"
+#include "FileItem.h"
+#include "FileItemList.h"
 #include "ServiceBroker.h"
 #include "URL.h"
 #include "Util.h"
 #include "addons/AddonManager.h"
+#include "addons/addoninfo/AddonInfo.h"
+#include "addons/addoninfo/AddonType.h"
 #include "addons/gui/GUIDialogAddonSettings.h"
+#include "application/Application.h"
+#include "application/ApplicationComponents.h"
+#include "application/ApplicationPlayer.h"
 #include "cores/IPlayer.h"
 #include "dialogs/GUIDialogContextMenu.h"
 #include "dialogs/GUIDialogKaiToast.h"
@@ -26,17 +31,23 @@
 #include "guilib/GUIComponent.h"
 #include "guilib/GUIKeyboardFactory.h"
 #include "guilib/GUIWindowManager.h"
-#include "guilib/LocalizeStrings.h"
+#include "input/actions/ActionIDs.h"
+#include "jobs/Job.h"
+#include "language/LangInfo.h"
+#include "resources/LocalizeStrings.h"
+#include "resources/ResourcesComponent.h"
 #include "settings/Settings.h"
 #include "settings/SettingsComponent.h"
 #include "settings/lib/Setting.h"
-#include "utils/JobManager.h"
+#include "utils/ItemProperties.h"
 #include "utils/LangCodeExpander.h"
 #include "utils/StringUtils.h"
 #include "utils/URIUtils.h"
 #include "utils/Variant.h"
 #include "utils/log.h"
 #include "video/VideoDatabase.h"
+
+#include <mutex>
 
 using namespace ADDON;
 using namespace XFILE;
@@ -76,7 +87,7 @@ public:
     CDirectory::GetDirectory(m_url.Get(), *m_items, "", DIR_FLAG_DEFAULTS);
     return true;
   }
-  bool operator==(const CJob *job) const override
+  bool Equals(const CJob* job) const override
   {
     if (strcmp(job->GetType(),GetType()) == 0)
     {
@@ -142,7 +153,8 @@ bool CGUIDialogSubtitles::OnMessage(CGUIMessage& message)
       int item = msg.GetParam1();
       if (item >= 0 && item < m_serviceItems->Size())
       {
-        SetService(m_serviceItems->Get(item)->GetProperty("Addon.ID").asString());
+        SetService(
+            m_serviceItems->Get(item)->GetProperty(KODI::ITEM::PROPERTY::ADDON_ID).asString());
         Search();
       }
       return true;
@@ -161,7 +173,10 @@ bool CGUIDialogSubtitles::OnMessage(CGUIMessage& message)
     else if (iControl == CONTROL_MANUALSEARCH)
     {
       //manual search
-      if (CGUIKeyboardFactory::ShowAndGetInput(m_strManualSearch, CVariant{g_localizeStrings.Get(24121)}, true))
+      if (CGUIKeyboardFactory::ShowAndGetInput(
+              m_strManualSearch,
+              CVariant{CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(24121)},
+              true))
       {
         Search(m_strManualSearch);
         return true;
@@ -170,9 +185,11 @@ bool CGUIDialogSubtitles::OnMessage(CGUIMessage& message)
   }
   else if (message.GetMessage() == GUI_MSG_WINDOW_DEINIT)
   {
+    auto& components = CServiceBroker::GetAppComponents();
+    const auto appPlayer = components.GetComponent<CApplicationPlayer>();
     // Resume the video if the user has requested it
-    if (g_application.GetAppPlayer().IsPaused() && m_pausedOnRun)
-      g_application.GetAppPlayer().Pause();
+    if (appPlayer->IsPaused() && m_pausedOnRun)
+      appPlayer->Pause();
 
     CGUIDialog::OnMessage(message);
 
@@ -187,9 +204,13 @@ void CGUIDialogSubtitles::OnInitWindow()
 {
   // Pause the video if the user has requested it
   m_pausedOnRun = false;
-  if (CServiceBroker::GetSettingsComponent()->GetSettings()->GetBool(CSettings::SETTING_SUBTITLES_PAUSEONSEARCH) && !g_application.GetAppPlayer().IsPaused())
+  auto& components = CServiceBroker::GetAppComponents();
+  const auto appPlayer = components.GetComponent<CApplicationPlayer>();
+  if (CServiceBroker::GetSettingsComponent()->GetSettings()->GetBool(
+          CSettings::SETTING_SUBTITLES_PAUSEONSEARCH) &&
+      !appPlayer->IsPaused())
   {
-    g_application.GetAppPlayer().Pause();
+    appPlayer->Pause();
     m_pausedOnRun = true;
   }
 
@@ -206,7 +227,7 @@ void CGUIDialogSubtitles::Process(unsigned int currentTime, CDirtyRegionList &di
     std::string status;
     CFileItemList subs;
     {
-      CSingleLock lock(m_critsection);
+      std::unique_lock lock(m_critsection);
       status = m_status;
       subs.Assign(*m_subtitles);
     }
@@ -248,7 +269,7 @@ void CGUIDialogSubtitles::FillServices()
   ClearServices();
 
   VECADDONS addons;
-  CServiceBroker::GetAddonMgr().GetAddons(addons, ADDON_SUBTITLE_MODULE);
+  CServiceBroker::GetAddonMgr().GetAddons(addons, AddonType::SUBTITLE_MODULE);
 
   if (addons.empty())
   {
@@ -258,8 +279,8 @@ void CGUIDialogSubtitles::FillServices()
 
   std::string defaultService;
   const CFileItem &item = g_application.CurrentUnstackedItem();
-  if (item.GetVideoContentType() == VIDEODB_CONTENT_TVSHOWS ||
-      item.GetVideoContentType() == VIDEODB_CONTENT_EPISODES)
+  if (item.GetVideoContentType() == VideoDbContentType::TVSHOWS ||
+      item.GetVideoContentType() == VideoDbContentType::EPISODES)
     // Set default service for tv shows
     defaultService = CServiceBroker::GetSettingsComponent()->GetSettings()->GetString(CSettings::SETTING_SUBTITLES_TV);
   else
@@ -305,7 +326,9 @@ bool CGUIDialogSubtitles::SetService(const std::string &service)
       SET_CONTROL_FILENAME(CONTROL_NAMELOGO, icon);
     }
 
-    if (g_application.GetAppPlayer().GetSubtitleCount() == 0)
+    const auto& components = CServiceBroker::GetAppComponents();
+    const auto appPlayer = components.GetComponent<CApplicationPlayer>();
+    if (appPlayer->GetSubtitleCount() == 0)
       SET_CONTROL_HIDDEN(CONTROL_SUBSEXIST);
     else
       SET_CONTROL_VISIBLE(CONTROL_SUBSEXIST);
@@ -319,7 +342,7 @@ const CFileItemPtr CGUIDialogSubtitles::GetService() const
 {
   for (int i = 0; i < m_serviceItems->Size(); i++)
   {
-    if (m_serviceItems->Get(i)->GetProperty("Addon.ID") == m_currentService)
+    if (m_serviceItems->Get(i)->GetProperty(KODI::ITEM::PROPERTY::ADDON_ID) == m_currentService)
       return m_serviceItems->Get(i);
   }
   return CFileItemPtr();
@@ -353,19 +376,22 @@ void CGUIDialogSubtitles::Search(const std::string &search/*=""*/)
 
   std::string preferredLanguage = settings->GetString(CSettings::SETTING_LOCALE_SUBTITLELANGUAGE);
 
-  if(StringUtils::EqualsNoCase(preferredLanguage, "original"))
+  if (StringUtils::EqualsNoCase(preferredLanguage, KODI::LANGINFO::subLanguageOriginal))
   {
     AudioStreamInfo info;
-    std::string strLanguage;
 
-    g_application.GetAppPlayer().GetAudioStreamInfo(CURRENT_STREAM, info);
+    const auto& components = CServiceBroker::GetAppComponents();
+    const auto appPlayer = components.GetComponent<CApplicationPlayer>();
+    appPlayer->GetAudioStreamInfo(CURRENT_STREAM, info);
 
-    if (!g_LangCodeExpander.Lookup(info.language, strLanguage))
-      strLanguage = "Unknown";
-
-    preferredLanguage = strLanguage;
+    // Passed to the subtitle service addon as a url option: it must stay unlocalized, and must
+    // name the language alone, as addons match on names such as "English", never on qualified
+    // names such as "English (Australia)"
+    preferredLanguage = info.language.GetEnglishLanguageName();
+    if (preferredLanguage.empty())
+      preferredLanguage = "Unknown";
   }
-  else if (StringUtils::EqualsNoCase(preferredLanguage, "default"))
+  else if (StringUtils::EqualsNoCase(preferredLanguage, KODI::LANGINFO::subLanguageDefault))
     preferredLanguage = g_langInfo.GetEnglishLanguageName();
 
   url.SetOption("preferredlanguage", preferredLanguage);
@@ -387,14 +413,18 @@ void CGUIDialogSubtitles::OnJobComplete(unsigned int jobID, bool success, CJob *
 
 void CGUIDialogSubtitles::OnSearchComplete(const CFileItemList *items)
 {
-  CSingleLock lock(m_critsection);
+  std::unique_lock lock(m_critsection);
   m_subtitles->Assign(*items);
   UpdateStatus(SEARCH_COMPLETE);
   m_updateSubsList = true;
   MarkDirtyRegion();
 
-  if (!items->IsEmpty() && g_application.GetAppPlayer().GetSubtitleCount() == 0 &&
-    m_LastAutoDownloaded != g_application.CurrentFile() && CServiceBroker::GetSettingsComponent()->GetSettings()->GetBool(CSettings::SETTING_SUBTITLES_DOWNLOADFIRST))
+  const auto& components = CServiceBroker::GetAppComponents();
+  const auto appPlayer = components.GetComponent<CApplicationPlayer>();
+  if (!items->IsEmpty() && appPlayer->GetSubtitleCount() == 0 &&
+      m_LastAutoDownloaded != g_application.CurrentFile() &&
+      CServiceBroker::GetSettingsComponent()->GetSettings()->GetBool(
+          CSettings::SETTING_SUBTITLES_DOWNLOADFIRST))
   {
     CFileItemPtr item = items->Get(0);
     CLog::Log(LOGDEBUG, "{} - Automatically download first subtitle: {}", __FUNCTION__,
@@ -413,10 +443,10 @@ void CGUIDialogSubtitles::OnSubtitleServiceContextMenu(int itemIdx)
   CContextButtons buttons;
   // Subtitle addon settings
   buttons.Add(static_cast<int>(SUBTITLE_SERVICE_CONTEXT_BUTTONS::ADDON_SETTINGS),
-              g_localizeStrings.Get(21417));
+              CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(21417));
   // Disable addon
   buttons.Add(static_cast<int>(SUBTITLE_SERVICE_CONTEXT_BUTTONS::ADDON_DISABLE),
-              g_localizeStrings.Get(24021));
+              CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(24021));
 
   auto idx = static_cast<SUBTITLE_SERVICE_CONTEXT_BUTTONS>(CGUIDialogContextMenu::Show(buttons));
   switch (idx)
@@ -424,24 +454,26 @@ void CGUIDialogSubtitles::OnSubtitleServiceContextMenu(int itemIdx)
     case SUBTITLE_SERVICE_CONTEXT_BUTTONS::ADDON_SETTINGS:
     {
       AddonPtr addon;
-      if (CServiceBroker::GetAddonMgr().GetAddon(service->GetProperty("Addon.ID").asString(), addon,
-                                                 ADDON_SUBTITLE_MODULE, OnlyEnabled::YES))
+      if (CServiceBroker::GetAddonMgr().GetAddon(
+              service->GetProperty(KODI::ITEM::PROPERTY::ADDON_ID).asString(), addon,
+              AddonType::SUBTITLE_MODULE, OnlyEnabled::CHOICE_YES))
       {
         CGUIDialogAddonSettings::ShowForAddon(addon);
       }
       else
       {
         CLog::Log(LOGERROR, "{} - Could not open settings for addon: {}", __FUNCTION__,
-                  service->GetProperty("Addon.ID").asString());
+                  service->GetProperty(KODI::ITEM::PROPERTY::ADDON_ID).asString());
       }
       break;
     }
     case SUBTITLE_SERVICE_CONTEXT_BUTTONS::ADDON_DISABLE:
     {
-      CServiceBroker::GetAddonMgr().DisableAddon(service->GetProperty("Addon.ID").asString(),
-                                                 AddonDisabledReason::USER);
+      CServiceBroker::GetAddonMgr().DisableAddon(
+          service->GetProperty(KODI::ITEM::PROPERTY::ADDON_ID).asString(),
+          AddonDisabledReason::USER);
       const bool currentActiveServiceWasDisabled =
-          m_currentService == service->GetProperty("Addon.ID").asString();
+          m_currentService == service->GetProperty(KODI::ITEM::PROPERTY::ADDON_ID).asString();
       FillServices();
       // restart search if the current active service was disabled
       if (currentActiveServiceWasDisabled && !m_serviceItems->IsEmpty())
@@ -462,24 +494,26 @@ void CGUIDialogSubtitles::OnSubtitleServiceContextMenu(int itemIdx)
 
 void CGUIDialogSubtitles::UpdateStatus(STATUS status)
 {
-  CSingleLock lock(m_critsection);
+  std::unique_lock lock(m_critsection);
   std::string label;
   switch (status)
   {
     case NO_SERVICES:
-      label = g_localizeStrings.Get(24114);
+      label = CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(24114);
       break;
     case SEARCHING:
-      label = g_localizeStrings.Get(24107);
+      label = CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(24107);
       break;
     case SEARCH_COMPLETE:
       if (!m_subtitles->IsEmpty())
-        label = StringUtils::Format(g_localizeStrings.Get(24108), m_subtitles->Size());
+        label = StringUtils::Format(
+            CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(24108),
+            m_subtitles->Size());
       else
-        label = g_localizeStrings.Get(24109);
+        label = CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(24109);
       break;
     case DOWNLOADING:
-      label = g_localizeStrings.Get(24110);
+      label = CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(24110);
       break;
     default:
       break;
@@ -510,7 +544,9 @@ void CGUIDialogSubtitles::OnDownloadComplete(const CFileItemList *items, const s
   {
     CFileItemPtr service = GetService();
     if (service)
-      CGUIDialogKaiToast::QueueNotification(CGUIDialogKaiToast::Error, service->GetLabel(), g_localizeStrings.Get(24113));
+      CGUIDialogKaiToast::QueueNotification(
+          CGUIDialogKaiToast::Error, service->GetLabel(),
+          CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(24113));
     UpdateStatus(SEARCH_COMPLETE);
     return;
   }
@@ -518,21 +554,22 @@ void CGUIDialogSubtitles::OnDownloadComplete(const CFileItemList *items, const s
   SUBTITLE_STORAGEMODE storageMode = (SUBTITLE_STORAGEMODE) CServiceBroker::GetSettingsComponent()->GetSettings()->GetInt(CSettings::SETTING_SUBTITLES_STORAGEMODE);
 
   // Get (unstacked) path
-  std::string strCurrentFile = g_application.CurrentUnstackedItem().GetDynPath();
+  std::string strCurrentFile = g_application.CurrentUnstackedItem().GetSubtitleAnchorPath();
 
   std::string strDownloadPath = "special://temp";
   std::string strDestPath;
   std::vector<std::string> vecFiles;
 
   std::string strCurrentFilePath;
-  if (StringUtils::StartsWith(strCurrentFilePath, "http://"))
+  const std::string subPath = CSpecialProtocol::TranslatePath("special://subtitles");
+
+  if (subPath.empty() && URIUtils::IsHTTP(strCurrentFile))
   {
     strCurrentFile = "TempSubtitle";
     vecFiles.push_back(strCurrentFile);
   }
   else
   {
-    std::string subPath = CSpecialProtocol::TranslatePath("special://subtitles");
     if (!subPath.empty())
       strDownloadPath = subPath;
 
@@ -574,7 +611,8 @@ void CGUIDialogSubtitles::OnDownloadComplete(const CFileItemList *items, const s
 
   // Extract the language and appropriate extension
   std::string strSubLang;
-  g_LangCodeExpander.ConvertToISO6391(language, strSubLang);
+  CLangCodeExpander::ConvertToISO6391(language, strSubLang);
+  const std::string langSuffix{strSubLang.empty() ? "" : "." + strSubLang};
 
   // Iterate over all items to transfer
   for (unsigned int i = 0; i < vecFiles.size() && i < (unsigned int) items->Size(); i++)
@@ -585,7 +623,7 @@ void CGUIDialogSubtitles::OnDownloadComplete(const CFileItemList *items, const s
 
     // construct subtitle path
     std::string strSubExt = URIUtils::GetExtension(strUrl);
-    std::string strSubName = StringUtils::Format("{}.{}{}", strFileName, strSubLang, strSubExt);
+    std::string strSubName = StringUtils::Format("{}{}{}", strFileName, langSuffix, strSubExt);
 
     // Handle URL encoding:
     std::string strDownloadFile = URIUtils::ChangeBasePath(strCurrentFilePath, strSubName, strDownloadPath);
@@ -593,7 +631,9 @@ void CGUIDialogSubtitles::OnDownloadComplete(const CFileItemList *items, const s
 
     if (!CFile::Copy(strUrl, strDownloadFile))
     {
-      CGUIDialogKaiToast::QueueNotification(CGUIDialogKaiToast::Error, strSubName, g_localizeStrings.Get(24113));
+      CGUIDialogKaiToast::QueueNotification(
+          CGUIDialogKaiToast::Error, strSubName,
+          CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(24113));
       CLog::Log(LOGERROR, "{} - Saving of subtitle {} to {} failed", __FUNCTION__, strUrl,
                 strDownloadFile);
     }
@@ -635,7 +675,7 @@ void CGUIDialogSubtitles::OnDownloadComplete(const CFileItemList *items, const s
         strUrl = URIUtils::ReplaceExtension(strUrl, ".idx");
         if(CFile::Exists(strUrl))
         {
-          std::string strSubNameIdx = StringUtils::Format("{}.{}.idx", strFileName, strSubLang);
+          std::string strSubNameIdx = StringUtils::Format("{}{}.idx", strFileName, langSuffix);
           // Handle URL encoding:
           strDestFile = URIUtils::ChangeBasePath(strCurrentFilePath, strSubNameIdx, strDestPath);
           CFile::Copy(strUrl, strDestFile);
@@ -660,7 +700,7 @@ void CGUIDialogSubtitles::ClearSubtitles()
 {
   CGUIMessage msg(GUI_MSG_LABEL_RESET, GetID(), CONTROL_SUBLIST);
   OnMessage(msg);
-  CSingleLock lock(m_critsection);
+  std::unique_lock lock(m_critsection);
   m_subtitles->Clear();
 }
 
@@ -674,5 +714,7 @@ void CGUIDialogSubtitles::ClearServices()
 
 void CGUIDialogSubtitles::SetSubtitles(const std::string &subtitle)
 {
-  g_application.GetAppPlayer().AddSubtitle(subtitle);
+  auto& components = CServiceBroker::GetAppComponents();
+  const auto appPlayer = components.GetComponent<CApplicationPlayer>();
+  appPlayer->AddSubtitle(subtitle);
 }

@@ -25,31 +25,27 @@ public:
 
   void Pack(CAEStreamInfo &info, uint8_t* data, int size);
   bool PackPause(CAEStreamInfo &info, unsigned int millis, bool iecBursts);
+
+  //! Re-emit the last complete burst. Returns false when none has been packed
+  //! yet. The retained burst is not byte-swapped, so the caller swaps it as it
+  //! does a newly packed one.
+  bool PackLastBurst();
+  //! Start the next packet. The last complete burst is kept: a packer lives as long as the
+  //! sink it was opened for.
   void Reset();
   uint8_t* GetBuffer();
   unsigned int GetSize() const;
-  static unsigned int GetOutputRate(CAEStreamInfo &info);
-  static CAEChannelInfo GetOutputChannelMap(CAEStreamInfo &info);
+  static unsigned int GetOutputRate(const CAEStreamInfo& info);
+  static CAEChannelInfo GetOutputChannelMap(const CAEStreamInfo& info);
 
 private:
-  void PackTrueHD(CAEStreamInfo &info, uint8_t* data, int size);
   void PackDTSHD(CAEStreamInfo &info, uint8_t* data, int size);
   void PackEAC3(CAEStreamInfo &info, uint8_t* data, int size);
+  void RetainBurst();
 
-  /* we keep the trueHD and dtsHD buffers separate so that we can handle a fast stream switch */
-  std::vector<uint8_t> m_trueHD[2];
-
-  struct TrueHD
-  {
-    int prevFrameSize;
-    int samplesPerFrame;
-    int bufferFilled;
-    int bufferIndex;
-    uint16_t prevFrameTime;
-    uint8_t* outputBuffer;
-  };
-
-  TrueHD m_thd{};
+  //! The last complete burst handed to the sink, kept apart from m_packedBuffer
+  //! so re-emitting it cannot disturb an assembly in progress.
+  std::vector<uint8_t> m_lastBurst;
 
   std::vector<uint8_t> m_dtsHD;
   unsigned int m_dtsHDSize = 0;

@@ -12,13 +12,11 @@
 
 namespace KODI
 {
-namespace RETRO
-{
-class CGUIGameSettingsHandle;
-}
-
 namespace GAME
 {
+/*!
+ * \ingroup games
+ */
 class CDialogGameAdvancedSettings : public CGUIDialog
 {
 public:

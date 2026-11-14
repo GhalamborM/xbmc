@@ -6,7 +6,8 @@
  *  See LICENSES/README.md for more information.
  */
 
-#include "Application.h"
+#include "application/Application.h"
+#include "platform/MessagePrinter.h"
 
 #ifdef TARGET_WINDOWS_DESKTOP
 #include "platform/win32/IMMNotificationClient.h"
@@ -18,34 +19,32 @@
 #include "platform/android/activity/XBMCApp.h"
 #endif
 
-#include "platform/MessagePrinter.h"
-#include "utils/log.h"
-#include "commons/Exception.h"
-
-extern "C" int XBMC_Run(bool renderGUI, const CAppParamParser &params)
+extern "C" int XBMC_Run(bool renderGUI)
 {
   int status = -1;
 
-  if (!g_application.Create(params))
+  if (!g_application.Create())
   {
     CMessagePrinter::DisplayError("ERROR: Unable to create application. Exiting");
     return status;
   }
 
 #if defined(TARGET_ANDROID)
-  CXBMCApp::get()->Initialize();
+  CXBMCApp::Get().Initialize();
 #endif
 
   if (renderGUI && !g_application.CreateGUI())
   {
     CMessagePrinter::DisplayError("ERROR: Unable to create GUI. Exiting");
-    g_application.Stop(EXITCODE_QUIT);
-    g_application.Cleanup();
+    if (g_application.Stop(EXITCODE_QUIT))
+      g_application.Cleanup();
     return status;
   }
   if (!g_application.Initialize())
   {
     CMessagePrinter::DisplayError("ERROR: Unable to Initialize. Exiting");
+    if (g_application.Stop(EXITCODE_QUIT))
+      g_application.Cleanup();
     return status;
   }
 
@@ -61,7 +60,7 @@ extern "C" int XBMC_Run(bool renderGUI, const CAppParamParser &params)
   }
 #endif
 
-  status = g_application.Run(params);
+  status = g_application.Run();
 
 #ifdef TARGET_WINDOWS_DESKTOP
   // the end
@@ -75,7 +74,7 @@ extern "C" int XBMC_Run(bool renderGUI, const CAppParamParser &params)
 #endif
 
 #if defined(TARGET_ANDROID)
-  CXBMCApp::get()->Deinitialize();
+  CXBMCApp::Get().Deinitialize();
 #endif
 
   return status;

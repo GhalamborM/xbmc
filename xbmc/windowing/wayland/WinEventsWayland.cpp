@@ -8,10 +8,9 @@
 
 #include "WinEventsWayland.h"
 
-#include "AppInboundProtocol.h"
 #include "ServiceBroker.h"
+#include "application/AppInboundProtocol.h"
 #include "threads/CriticalSection.h"
-#include "threads/SingleLock.h"
 #include "threads/Thread.h"
 #include "utils/log.h"
 
@@ -19,6 +18,7 @@
 
 #include <exception>
 #include <memory>
+#include <mutex>
 #include <system_error>
 
 #include <sys/poll.h>
@@ -67,7 +67,7 @@ public:
   {
     Stop();
     // Wait for roundtrip invocation to finish
-    CSingleLock lock(m_roundtripQueueMutex);
+    std::unique_lock lock(m_roundtripQueueMutex);
   }
 
   void Stop()
@@ -86,7 +86,7 @@ public:
 
     // Serialize invocations of this function - it's used very rarely and usually
     // not in parallel anyway, and doing it avoids lots of complications
-    CSingleLock lock(m_roundtripQueueMutex);
+    std::unique_lock lock(m_roundtripQueueMutex);
 
     m_roundtripQueueEvent.Reset();
     // We can just set the value here since there is no other writer in parallel
@@ -111,7 +111,8 @@ private:
   void InterruptPoll()
   {
     char c = 0;
-    write(m_pipeWrite, &c, 1);
+    if (write(m_pipeWrite, &c, 1) != 1)
+      throw std::runtime_error("Failed to write to wayland message pipe");
   }
 
   void Process() override
@@ -179,9 +180,10 @@ private:
         if (cancelPoll.revents & POLLIN)
         {
           // Read away the char so we don't get another notification
-          // Indepentent from m_roundtripQueue so there are no races
+          // Independent from m_roundtripQueue so there are no races
           char c;
-          read(m_pipeRead, &c, 1);
+          if (read(m_pipeRead, &c, 1) != 1)
+            throw std::runtime_error("Error reading from wayland message pipe");
         }
       }
 
@@ -214,7 +216,7 @@ void CWinEventsWayland::SetDisplay(wayland::display_t* display)
   if (display && !g_WlMessagePump)
   {
     // Start message processing as soon as we have a display
-    g_WlMessagePump.reset(new CWinEventsWaylandThread(*display));
+    g_WlMessagePump = std::make_unique<CWinEventsWaylandThread>(*display);
   }
   else if (g_WlMessagePump)
   {
@@ -248,7 +250,7 @@ bool CWinEventsWayland::MessagePump()
     XBMC_Event event;
     {
       // Scoped lock for reentrancy
-      CSingleLock lock(m_queueMutex);
+      std::unique_lock lock(m_queueMutex);
 
       if (m_queue.empty())
       {
@@ -270,6 +272,6 @@ bool CWinEventsWayland::MessagePump()
 
 void CWinEventsWayland::MessagePush(XBMC_Event* ev)
 {
-  CSingleLock lock(m_queueMutex);
+  std::unique_lock lock(m_queueMutex);
   m_queue.emplace(*ev);
 }

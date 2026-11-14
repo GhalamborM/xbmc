@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2007-2018 Team Kodi
+ *  Copyright (C) 2007-2026 Team Kodi
  *  This file is part of Kodi - https://kodi.tv
  *
  *  SPDX-License-Identifier: GPL-2.0-or-later
@@ -9,6 +9,7 @@
 #include "WinVideoFilter.h"
 
 #include "ConvolutionKernels.h"
+#include "ToneMappers.h"
 #include "Util.h"
 #include "VideoRenderers/windows/RendererBase.h"
 #include "cores/VideoPlayer/VideoRenderers/VideoShaders/dither.h"
@@ -27,7 +28,48 @@
 using namespace DirectX::PackedVector;
 using namespace Microsoft::WRL;
 
+namespace
+{
+// HDR hue and saturation are applied to BT.2020, before any primaries conversion
+void SetHueSaturationParameters(CD3DEffect& effect,
+                                AVColorTransferCharacteristic transfer,
+                                float hue,
+                                float saturation,
+                                float peakLuminance,
+                                bool limited)
+{
+  const float peak = transfer == AVCOL_TRC_SMPTE2084 ? peakLuminance / 10000.0f : 1.0f;
+  Matrix4 hueSatMat(CConvertMatrix::GetLinearHueSatMat(AVCOL_SPC_BT2020_NCL, hue, saturation));
+  Matrix3x1 coefs = CConvertMatrix::GetRGBYuvCoefs(AVCOL_SPC_BT2020_NCL);
+  float range[2] = {limited ? 876.0f / 1023.0f : 1.0f, limited ? 64.0f / 1023.0f : 0.0f};
+
+  effect.SetMatrix("g_hsMat", hueSatMat.ToRaw());
+  effect.SetFloatArray("g_hsCoefs", coefs.data(), coefs.size());
+  effect.SetScalar("g_hsPeak", peak);
+  effect.SetFloatArray("g_hsRange", range, 2);
+}
+} // namespace
+
 //===================================================================
+
+CWinShader::~CWinShader()
+{
+  Unregister();
+}
+
+void CWinShader::OnDestroyDevice(bool fatal)
+{
+  // Nothing to save: the layout element descriptions cannot be retrieved from an existing input
+  // layout and were saved during the creation.
+  if (m_inputLayout != nullptr)
+    m_inputLayout.Reset();
+}
+
+void CWinShader::OnCreateDevice()
+{
+  if (!m_inputLayoutElementDesc.empty())
+    CreateInputLayoutResources(m_inputLayoutElementDesc);
+}
 
 bool CWinShader::CreateVertexBuffer(unsigned int count, unsigned int size)
 {
@@ -44,7 +86,7 @@ bool CWinShader::CreateVertexBuffer(unsigned int count, unsigned int size)
   return true;
 }
 
-bool CWinShader::CreateInputLayout(D3D11_INPUT_ELEMENT_DESC *layout, unsigned numElements)
+bool CWinShader::CreateInputLayoutResources(std::span<const D3D11_INPUT_ELEMENT_DESC> elementDesc)
 {
   D3DX11_PASS_DESC desc = {};
   if (FAILED(m_effect.Get()->GetTechniqueByIndex(0)->GetPassByIndex(0)->GetDesc(&desc)))
@@ -54,14 +96,28 @@ bool CWinShader::CreateInputLayout(D3D11_INPUT_ELEMENT_DESC *layout, unsigned nu
   }
 
   ComPtr<ID3D11Device> pDevice = DX::DeviceResources::Get()->GetD3DDevice();
-  return SUCCEEDED(pDevice->CreateInputLayout(layout, numElements, desc.pIAInputSignature, desc.IAInputSignatureSize, &m_inputLayout));
+  return pDevice && SUCCEEDED(pDevice->CreateInputLayout(
+                        elementDesc.data(), elementDesc.size(), desc.pIAInputSignature,
+                        desc.IAInputSignatureSize, m_inputLayout.ReleaseAndGetAddressOf()));
 }
 
-void CWinShader::SetTarget(CD3DTexture* target)
+bool CWinShader::CreateInputLayout(std::span<const D3D11_INPUT_ELEMENT_DESC> elementDesc)
+{
+  if (CreateInputLayoutResources(elementDesc))
+  {
+    m_inputLayoutElementDesc = elementDesc;
+    Register();
+    return true;
+  }
+  return false;
+}
+
+void CWinShader::SetTarget(CD3DTexture* target, ID3D11DepthStencilView* dsv)
 {
   m_target = target;
-  if (m_target)
-    DX::DeviceResources::Get()->GetD3DContext()->OMSetRenderTargets(1, target->GetAddressOfRTV(), nullptr);
+  if (m_target != nullptr)
+    DX::DeviceResources::Get()->GetD3DContext()->OMSetRenderTargets(1, target->GetAddressOfRTV(),
+                                                                    dsv);
 }
 
 bool CWinShader::LockVertexBuffer(void **data)
@@ -107,19 +163,32 @@ bool CWinShader::LoadEffect(const std::string& filename, DefinesMap* defines)
   return true;
 }
 
-bool CWinShader::Execute(const std::vector<CD3DTexture*> &targets, unsigned int vertexIndexStep)
+bool CWinShader::Execute(const std::vector<CD3DTexture*>& targets, unsigned int vertexIndexStep)
 {
   ID3D11DeviceContext* pContext = DX::DeviceResources::Get()->GetD3DContext();
-  ComPtr<ID3D11RenderTargetView> oldRT;
+  if (pContext == nullptr)
+  {
+    CLog::LogF(LOGERROR, "unable to retrieve the device context");
+    return false;
+  }
 
-  // The render target will be overridden: save the caller's original RT
-  if (!targets.empty())
-    pContext->OMGetRenderTargets(1, &oldRT, nullptr);
+  ComPtr<ID3D11RenderTargetView> origRTV{};
+  ComPtr<ID3D11DepthStencilView> origDSV{};
+
+  // The current RTV and DSV are modified for the effect execution. Save them / restore later.
+  pContext->OMGetRenderTargets(1, &origRTV, &origDSV);
 
   unsigned cPasses;
   if (!m_effect.Begin(&cPasses, 0))
   {
     CLog::LogF(LOGERROR, "failed to begin d3d effect");
+    return false;
+  }
+
+  if (cPasses != targets.size())
+  {
+    CLog::LogF(LOGERROR, "different count of render targets ({}) and effect passes ({}).",
+               targets.size(), cPasses);
     return false;
   }
 
@@ -134,7 +203,9 @@ bool CWinShader::Execute(const std::vector<CD3DTexture*> &targets, unsigned int 
 
   for (unsigned iPass = 0; iPass < cPasses; iPass++)
   {
-    SetTarget(targets.size() > iPass ? targets.at(iPass) : nullptr);
+    // No depth buffer for intermediate render targets
+    // Set it only for the last pass of the last shader (expected to render to the back buffer)
+    SetTarget(targets[iPass], (iPass == cPasses - 1) && m_isFinalShader ? origDSV.Get() : nullptr);
     SetStepParams(iPass);
 
     if (!m_effect.BeginPass(iPass))
@@ -153,8 +224,7 @@ bool CWinShader::Execute(const std::vector<CD3DTexture*> &targets, unsigned int 
   if (!m_effect.End())
     CLog::LogF(LOGERROR, "failed to end d3d effect");
 
-  if (oldRT)
-    pContext->OMSetRenderTargets(1, oldRT.GetAddressOf(), nullptr);
+  pContext->OMSetRenderTargets(1, origRTV.GetAddressOf(), origDSV.Get());
 
   return true;
 }
@@ -163,15 +233,11 @@ bool CWinShader::Execute(const std::vector<CD3DTexture*> &targets, unsigned int 
 
 void COutputShader::ApplyEffectParameters(CD3DEffect &effect, unsigned sourceWidth, unsigned sourceHeight)
 {
-  if (m_useLut)
+  if (m_useLut && HasLUT())
   {
-    float lut_params[2] = { 0.0f, 0.0f };
-    if (HasLUT())
-    {
-      lut_params[0] = (m_lutSize - 1) / static_cast<float>(m_lutSize);
-      lut_params[1] = 0.5f / static_cast<float>(m_lutSize);
-    };
-    effect.SetResources("m_LUT", &m_pLUTView, 1);
+    float lut_params[2] = {(m_lutSize - 1) / static_cast<float>(m_lutSize),
+                           0.5f / static_cast<float>(m_lutSize)};
+    effect.SetResources("m_LUT", m_pLUTView.GetAddressOf(), 1);
     effect.SetFloatArray("m_LUTParams", lut_params, 2);
   }
   if (m_useDithering)
@@ -210,51 +276,35 @@ void COutputShader::ApplyEffectParameters(CD3DEffect &effect, unsigned sourceWid
   }
   else if (m_toneMapping && m_toneMappingMethod == VS_TONEMAPMETHOD_ACES)
   {
-    float lumin = GetLuminanceValue();
+    const float lumin = CToneMappers::GetLuminanceValue(m_hasDisplayMetadata, m_displayMetadata,
+                                                        m_hasLightMetadata, m_lightMetadata);
     effect.SetScalar("g_luminance", lumin);
     effect.SetScalar("g_toneP1", m_toneMappingParam);
     m_toneMappingDebug = lumin;
   }
   else if (m_toneMapping && m_toneMappingMethod == VS_TONEMAPMETHOD_HABLE)
   {
-    float lumin = GetLuminanceValue();
-    float lumin_factor = (10000.0f / lumin) * (2.0f / m_toneMappingParam);
-    float lumin_div100 = lumin / (100.0f * m_toneMappingParam);
+    const float lumin = CToneMappers::GetLuminanceValue(m_hasDisplayMetadata, m_displayMetadata,
+                                                        m_hasLightMetadata, m_lightMetadata);
+    const float lumin_factor = (10000.0f / lumin) * (2.0f / m_toneMappingParam);
+    const float lumin_div100 = lumin / (100.0f * m_toneMappingParam);
     effect.SetScalar("g_toneP1", lumin_factor);
     effect.SetScalar("g_toneP2", lumin_div100);
     m_toneMappingDebug = lumin;
   }
-}
-
-float COutputShader::GetLuminanceValue() const
-{
-  float lum1 = 400.0f; // default for bad quality HDR-PQ sources (with no metadata)
-  float lum2 = lum1;
-  float lum3 = lum1;
-
-  if (m_hasLightMetadata)
+  if (m_hueSatTransfer != AVCOL_TRC_UNSPECIFIED)
+    SetHueSaturationParameters(
+        effect, m_hueSatTransfer, m_hue, m_saturation,
+        CToneMappers::GetPeakLuminanceValue(m_hasDisplayMetadata, m_displayMetadata,
+                                            m_hasLightMetadata, m_lightMetadata),
+        DX::Windowing()->UseLimitedColor());
+  if (m_useGamma)
   {
-    uint16_t lum = m_displayMetadata.max_luminance.num / m_displayMetadata.max_luminance.den;
-    if (m_lightMetadata.MaxCLL >= lum)
-    {
-      lum1 = static_cast<float>(lum);
-      lum2 = static_cast<float>(m_lightMetadata.MaxCLL);
-    }
-    else
-    {
-      lum1 = static_cast<float>(m_lightMetadata.MaxCLL);
-      lum2 = static_cast<float>(lum);
-    }
-    lum3 = static_cast<float>(m_lightMetadata.MaxFALL);
-    lum1 = (lum1 * 0.5f) + (lum2 * 0.2f) + (lum3 * 0.3f);
+    const bool limited = DX::Windowing()->UseLimitedColor();
+    float range[2] = {limited ? 876.0f / 1023.0f : 1.0f, limited ? 64.0f / 1023.0f : 0.0f};
+    effect.SetScalar("g_gammaInv", 1.0f / m_gammaExponent);
+    effect.SetFloatArray("g_gammaRange", range, 2);
   }
-  else if (m_hasDisplayMetadata && m_displayMetadata.has_luminance)
-  {
-    uint16_t lum = m_displayMetadata.max_luminance.num / m_displayMetadata.max_luminance.den;
-    lum1 = static_cast<float>(lum);
-  }
-
-  return lum1;
 }
 
 void COutputShader::GetDefines(DefinesMap& map) const
@@ -283,12 +333,32 @@ void COutputShader::GetDefines(DefinesMap& map) const
   {
     map["KODI_HLG_TO_PQ"] = "";
   }
+  if (m_hueSatTransfer == AVCOL_TRC_SMPTE2084)
+  {
+    map["KODI_HUESAT_PQ"] = "";
+  }
+  else if (m_hueSatTransfer == AVCOL_TRC_ARIB_STD_B67)
+  {
+    map["KODI_HUESAT_HLG"] = "";
+  }
+  if (m_useGamma)
+  {
+    map["KODI_GAMMA"] = "";
+  }
 }
 
-bool COutputShader::Create(
-    bool useLUT, bool useDithering, int ditherDepth, bool toneMapping, int toneMethod, bool HLGtoPQ)
+bool COutputShader::Create(bool useLUT,
+                           bool useDithering,
+                           int ditherDepth,
+                           bool toneMapping,
+                           ETONEMAPMETHOD toneMethod,
+                           bool HLGtoPQ,
+                           AVColorTransferCharacteristic hueSatTransfer,
+                           bool gamma)
 {
   m_useLut = useLUT;
+  m_hueSatTransfer = hueSatTransfer;
+  m_useGamma = gamma;
   m_ditherDepth = ditherDepth;
   m_toneMapping = toneMapping;
   m_useHLGtoPQ = HLGtoPQ;
@@ -312,12 +382,11 @@ bool COutputShader::Create(
   }
 
   // Create input layout
-  D3D11_INPUT_ELEMENT_DESC layout[] =
-  {
-    { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 },
-    { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 12, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+  static constexpr D3D11_INPUT_ELEMENT_DESC layout[] = {
+      {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0},
+      {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 12, D3D11_INPUT_PER_VERTEX_DATA, 0},
   };
-  return CWinShader::CreateInputLayout(layout, ARRAYSIZE(layout));
+  return CWinShader::CreateInputLayout(layout);
 }
 
 void COutputShader::Render(CD3DTexture& sourceTexture, CRect sourceRect, const CPoint points[4]
@@ -355,7 +424,13 @@ void COutputShader::SetDisplayMetadata(bool hasDisplayMetadata, AVMasteringDispl
   m_lightMetadata = lightMetadata;
 }
 
-void COutputShader::SetToneMapParam(int method, float param)
+void COutputShader::SetHueSaturation(float hue, float saturation)
+{
+  m_hue = hue;
+  m_saturation = saturation;
+}
+
+void COutputShader::SetToneMapParam(ETONEMAPMETHOD method, float param)
 {
   m_toneMappingMethod = method;
   m_toneMappingParam = param;
@@ -553,11 +628,15 @@ std::string COutputShader::GetDebugInfo()
 
 //==================================================================================
 
-bool CYUV2RGBShader::Create(AVPixelFormat fmt, AVColorPrimaries dstPrimaries,
-                            AVColorPrimaries srcPrimaries, const std::shared_ptr<COutputShader>& pOutputShader)
+bool CYUV2RGBShader::Create(AVPixelFormat fmt,
+                            AVColorPrimaries dstPrimaries,
+                            AVColorPrimaries srcPrimaries,
+                            const std::shared_ptr<COutputShader>& pOutputShader,
+                            AVColorTransferCharacteristic hueSatTransfer)
 {
   m_format = fmt;
   m_pOutShader = pOutputShader;
+  m_hueSatTransfer = hueSatTransfer;
 
   DefinesMap defines;
 
@@ -593,6 +672,13 @@ bool CYUV2RGBShader::Create(AVPixelFormat fmt, AVColorPrimaries dstPrimaries,
     defines["XBMC_COL_CONVERSION"] = "";
   }
 
+  if (m_hueSatTransfer == AVCOL_TRC_SMPTE2084)
+    defines["KODI_HUESAT_PQ"] = "";
+  else if (m_hueSatTransfer == AVCOL_TRC_ARIB_STD_B67)
+    defines["KODI_HUESAT_HLG"] = "";
+  if (m_hueSatTransfer != AVCOL_TRC_UNSPECIFIED)
+    defines["KODI_HUESAT_YUV"] = "";
+
   if (m_pOutShader)
     m_pOutShader->GetDefines(defines);
 
@@ -606,14 +692,13 @@ bool CYUV2RGBShader::Create(AVPixelFormat fmt, AVColorPrimaries dstPrimaries,
 
   CWinShader::CreateVertexBuffer(4, sizeof(Vertex));
   // Create input layout
-  D3D11_INPUT_ELEMENT_DESC layout[] =
-  {
-    { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0,  0, D3D11_INPUT_PER_VERTEX_DATA, 0 },
-    { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT,    0, 12, D3D11_INPUT_PER_VERTEX_DATA, 0 },
-    { "TEXCOORD", 1, DXGI_FORMAT_R32G32_FLOAT,    0, 20, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+  static constexpr D3D11_INPUT_ELEMENT_DESC layout[] = {
+      {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0},
+      {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 12, D3D11_INPUT_PER_VERTEX_DATA, 0},
+      {"TEXCOORD", 1, DXGI_FORMAT_R32G32_FLOAT, 0, 20, D3D11_INPUT_PER_VERTEX_DATA, 0},
   };
 
-  if (!CWinShader::CreateInputLayout(layout, ARRAYSIZE(layout)))
+  if (!CWinShader::CreateInputLayout(layout))
   {
     CLog::LogF(LOGERROR, "Failed to create input layout for Input Assembler.");
     return false;
@@ -631,11 +716,22 @@ void CYUV2RGBShader::Render(CRect sourceRect, CPoint dest[], CRenderBuffer* vide
   Execute({ &target }, 4);
 }
 
-void CYUV2RGBShader::SetParams(float contrast, float black, bool limited)
+void CYUV2RGBShader::SetParams(
+    float contrast, float black, float hue, float saturation, bool limited)
 {
   m_convMatrix.SetDestinationContrast(contrast * 0.02f)
       .SetDestinationBlack(black * 0.01f - 0.5f)
+      .SetDestinationHue((hue - 50.0f) * 3.6f)
+      .SetDestinationSaturation(saturation * 0.02f)
       .SetDestinationLimitedRange(limited);
+  m_limited = limited;
+}
+
+void CYUV2RGBShader::SetHueSaturation(float hue, float saturation, float peakLuminance)
+{
+  m_hue = hue;
+  m_saturation = saturation;
+  m_peakLuminance = peakLuminance;
 }
 
 void CYUV2RGBShader::SetColParams(AVColorSpace colSpace, int bits, bool limited, int texBits)
@@ -726,6 +822,10 @@ void CYUV2RGBShader::SetShaderParameters(CRenderBuffer* videoBuffer)
 
   Matrix4 yuvMat = m_convMatrix.GetYuvMat();
   m_effect.SetMatrix("g_ColorMatrix", yuvMat.ToRaw());
+
+  if (m_hueSatTransfer != AVCOL_TRC_UNSPECIFIED)
+    SetHueSaturationParameters(m_effect, m_hueSatTransfer, m_hue, m_saturation, m_peakLuminance,
+                               m_limited);
 
   if (m_colorConversion)
   {
@@ -856,12 +956,11 @@ bool CConvolutionShader1Pass::Create(ESCALINGMETHOD method, const std::shared_pt
     return false;
 
   // Create input layout
-  D3D11_INPUT_ELEMENT_DESC layout[] =
-  {
-    { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 },
-    { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 12, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+  static constexpr D3D11_INPUT_ELEMENT_DESC layout[] = {
+      {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0},
+      {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 12, D3D11_INPUT_PER_VERTEX_DATA, 0},
   };
-  return CWinShader::CreateInputLayout(layout, ARRAYSIZE(layout));
+  return CWinShader::CreateInputLayout(layout);
 }
 
 void CConvolutionShader1Pass::Render(CD3DTexture& sourceTexture, CD3DTexture& target,
@@ -996,12 +1095,11 @@ bool CConvolutionShaderSeparable::Create(ESCALINGMETHOD method, const std::share
     return false;
 
   // Create input layout
-  D3D11_INPUT_ELEMENT_DESC layout[] =
-  {
-    { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 },
-    { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 12, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+  static constexpr D3D11_INPUT_ELEMENT_DESC layout[] = {
+      {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0},
+      {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 12, D3D11_INPUT_PER_VERTEX_DATA, 0},
   };
-  return CWinShader::CreateInputLayout(layout, ARRAYSIZE(layout));
+  return CWinShader::CreateInputLayout(layout);
 }
 
 void CConvolutionShaderSeparable::Render(CD3DTexture& sourceTexture, CD3DTexture& target,
@@ -1044,7 +1142,7 @@ bool CConvolutionShaderSeparable::ChooseIntermediateD3DFormat()
     return false;
   }
 
-  CLog::LogF(LOGDEBUG, "format {}", m_IntermediateFormat);
+  CLog::LogF(LOGDEBUG, "format {}", DX::DXGIFormatToString(m_IntermediateFormat));
   return true;
 }
 

@@ -8,12 +8,17 @@
 
 #include "FDEventMonitor.h"
 
+#include "threads/SingleLock.h"
 #include "utils/log.h"
 
 #include <errno.h>
+#include <mutex>
 
 #include <poll.h>
 #include <sys/eventfd.h>
+#include <unistd.h>
+
+#include "PlatformDefs.h"
 
 CFDEventMonitor::CFDEventMonitor() :
   CThread("FDEventMonitor")
@@ -22,7 +27,7 @@ CFDEventMonitor::CFDEventMonitor() :
 
 CFDEventMonitor::~CFDEventMonitor()
 {
-  CSingleLock lock(m_mutex);
+  std::unique_lock lock(m_mutex);
   InterruptPoll();
 
   if (m_wakeupfd >= 0)
@@ -45,7 +50,7 @@ CFDEventMonitor::~CFDEventMonitor()
 
 void CFDEventMonitor::AddFD(const MonitoredFD& monitoredFD, int& id)
 {
-  CSingleLock lock(m_mutex);
+  std::unique_lock lock(m_mutex);
   InterruptPoll();
 
   AddFDLocked(monitoredFD, id);
@@ -56,7 +61,7 @@ void CFDEventMonitor::AddFD(const MonitoredFD& monitoredFD, int& id)
 void CFDEventMonitor::AddFDs(const std::vector<MonitoredFD>& monitoredFDs,
                              std::vector<int>& ids)
 {
-  CSingleLock lock(m_mutex);
+  std::unique_lock lock(m_mutex);
   InterruptPoll();
 
   for (unsigned int i = 0; i < monitoredFDs.size(); ++i)
@@ -71,7 +76,7 @@ void CFDEventMonitor::AddFDs(const std::vector<MonitoredFD>& monitoredFDs,
 
 void CFDEventMonitor::RemoveFD(int id)
 {
-  CSingleLock lock(m_mutex);
+  std::unique_lock lock(m_mutex);
   InterruptPoll();
 
   if (m_monitoredFDs.erase(id) != 1)
@@ -85,7 +90,7 @@ void CFDEventMonitor::RemoveFD(int id)
 
 void CFDEventMonitor::RemoveFDs(const std::vector<int>& ids)
 {
-  CSingleLock lock(m_mutex);
+  std::unique_lock lock(m_mutex);
   InterruptPoll();
 
   for (unsigned int i = 0; i < ids.size(); ++i)
@@ -108,8 +113,8 @@ void CFDEventMonitor::Process()
 
   while (!m_bStop)
   {
-    CSingleLock lock(m_mutex);
-    CSingleLock pollLock(m_pollMutex);
+    std::unique_lock lock(m_mutex);
+    std::unique_lock pollLock(m_pollMutex);
 
     /*
      * Leave the main mutex here to allow another thread to
@@ -118,9 +123,9 @@ void CFDEventMonitor::Process()
      * wake up poll and wait for the processing to pause at
      * the above lock(m_mutex).
      */
-    lock.Leave();
+    lock.unlock();
 
-    int err = poll(&m_pollDescs[0], m_pollDescs.size(), -1);
+    int err = poll(m_pollDescs.data(), m_pollDescs.size(), -1);
 
     if (err < 0 && errno != EINTR)
     {
@@ -172,7 +177,7 @@ void CFDEventMonitor::AddFDLocked(const MonitoredFD& monitoredFD, int& id)
 {
   id = m_nextID;
 
-  while (m_monitoredFDs.count(id))
+  while (m_monitoredFDs.contains(id))
   {
     ++id;
   }
@@ -233,6 +238,6 @@ void CFDEventMonitor::InterruptPoll()
   {
     eventfd_write(m_wakeupfd, 1);
     /* wait for the poll() result handling (if any) to end */
-    CSingleLock pollLock(m_pollMutex);
+    std::unique_lock pollLock(m_pollMutex);
   }
 }

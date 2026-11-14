@@ -10,6 +10,9 @@
 
 #include "threads/Thread.h"
 
+#include <memory>
+#include <mutex>
+
 #include <gtest/gtest.h>
 
 template<class E>
@@ -37,7 +40,7 @@ inline static bool waitForThread(std::atomic<long>& mutex,
       return true;
 
     {
-      CSingleLock tmplock(sec); // kick any memory syncs
+      std::unique_lock tmplock(sec); // kick any memory syncs
     }
 
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -56,25 +59,14 @@ public:
 
 class thread
 {
-  IRunnable* f;
-  CThread* cthread;
+  std::unique_ptr<CThread> cthread;
 
-//  inline thread(const thread& other) { }
 public:
-  inline explicit thread(IRunnable& runnable) :
-    f(&runnable), cthread(new CThread(f, "DumbThread"))
+  inline explicit thread(IRunnable& runnable)
+    : cthread(std::make_unique<CThread>(&runnable, "DumbThread"))
   {
     cthread->Create();
   }
-
-  inline thread() : f(NULL), cthread(NULL) {}
-  ~thread()
-  {
-    delete cthread;
-  }
-
-  inline thread(thread& other) : f(other.f), cthread(other.cthread) { other.f = NULL; other.cthread = NULL; }
-  inline thread& operator=(thread& other) { f = other.f; other.f = NULL; cthread = other.cthread; other.cthread = NULL; return *this; }
 
   void join() { cthread->Join(std::chrono::milliseconds::max()); }
 

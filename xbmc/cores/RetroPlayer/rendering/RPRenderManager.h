@@ -10,6 +10,7 @@
 
 #include "IRenderManager.h"
 #include "RenderVideoSettings.h"
+#include "cores/RetroPlayer/buffers/IRenderBufferPool.h"
 #include "cores/RetroPlayer/guibridge/IRenderCallback.h"
 #include "threads/CriticalSection.h"
 
@@ -21,7 +22,9 @@ extern "C"
 #include <atomic>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <set>
+#include <string>
 #include <vector>
 
 struct SwsContext;
@@ -38,6 +41,7 @@ class CRPProcessInfo;
 class IGUIRenderSettings;
 class IRenderBuffer;
 class IRenderBufferPool;
+struct VideoStreamBuffer;
 
 /*!
  * \brief Renders video frames provided by the game loop
@@ -74,20 +78,47 @@ public:
    */
   CGUIRenderTargetFactory* GetGUIRenderTargetFactory() { return m_renderControlFactory.get(); }
 
+  // Stream properties, set upon configuration
+  AVPixelFormat GetPixelFormat() const { return m_format; }
+  unsigned int GetNominalWidth() const { return m_nominalWidth; }
+  unsigned int GetNominalHeight() const { return m_nominalHeight; }
+  float GetNominalDisplayAspectRatio() const { return m_nominalDisplayAspectRatio; }
+  unsigned int GetMaxWidth() const { return m_maxWidth; }
+  unsigned int GetMaxHeight() const { return m_maxHeight; }
+
   // Functions called from game loop
   bool Configure(AVPixelFormat format,
                  unsigned int nominalWidth,
                  unsigned int nominalHeight,
+                 float nominalDisplayAspectRatio,
                  unsigned int maxWidth,
                  unsigned int maxHeight);
-  bool GetVideoBuffer(
-      unsigned int width, unsigned int height, AVPixelFormat& format, uint8_t*& data, size_t& size);
+  bool GetVideoBuffer(unsigned int width, unsigned int height, VideoStreamBuffer& buffer);
   void AddFrame(const uint8_t* data,
                 size_t size,
                 unsigned int width,
                 unsigned int height,
+                float displayAspectRatio,
                 unsigned int orientationDegCW);
   void Flush();
+  bool CreateContext(const HwContextProperties& properties);
+  bool BeginClientFrame();
+  void EndClientFrame();
+  void DestroyContext();
+  void FlushRendered();
+
+  // Hardware rendering functions
+  bool Create(unsigned int width, unsigned int height);
+  uintptr_t GetCurrentFramebuffer(unsigned int width, unsigned int height);
+  void RenderFrame(unsigned int width,
+                   unsigned int height,
+                   float displayAspectRatio,
+                   unsigned int orientationDegCCW);
+
+  /*!
+   * \brief Release the framebuffer the game client renders into
+   */
+  void ReleaseHwRenderBuffer();
 
   // Functions called from the player
   void SetSpeed(double speed);
@@ -107,17 +138,29 @@ public:
   bool SupportsRenderFeature(RENDERFEATURE feature) const override;
   bool SupportsScalingMethod(SCALINGMETHOD method) const override;
 
+  // Savestate functions
+  using VideoFrame = std::vector<std::shared_ptr<IRenderBuffer>>;
+  bool TryCaptureVideoFrame(VideoFrame& frame);
+
+  /*!
+   * \brief Save a thumbnail of a savestate
+   *
+   * \param frame The frame captured with the savestate, or empty to use the
+   *        frame on screen
+   */
+  void SaveThumbnail(const std::string& thumbnailPath, const VideoFrame& frame = {});
+
 private:
   /*!
    * \brief Get or create a renderer compatible with the given render settings
    */
-  std::shared_ptr<CRPBaseRenderer> GetRenderer(const IGUIRenderSettings* renderSettings);
+  std::shared_ptr<CRPBaseRenderer> GetRendererForSettings(const IGUIRenderSettings* renderSettings);
 
   /*!
    * \brief Get or create a renderer for the given buffer pool and render settings
    */
-  std::shared_ptr<CRPBaseRenderer> GetRenderer(IRenderBufferPool* bufferPool,
-                                               const CRenderSettings& renderSettings);
+  std::shared_ptr<CRPBaseRenderer> GetRendererForPool(IRenderBufferPool* bufferPool,
+                                                      const CRenderSettings& renderSettings);
 
   /*!
    * \brief Render a frame using the given renderer
@@ -185,6 +228,29 @@ private:
 
   void CheckFlush();
 
+  /*!
+   * \brief Release the textures of renderers nothing draws any more, such as
+   * a filter preview that has scrolled off screen
+   *
+   * Called on the rendering thread with m_oldRenderersMutex held.
+   */
+  void ReleaseUnusedTextures();
+  void DestroyContextInternal();
+
+  /*!
+   * \brief True if the game client renders its own frames on the GPU
+   *
+   * Hardware-rendered frames live in a GPU framebuffer and are never read back
+   * to system memory, so anything that works on frame pixels has nothing to
+   * work with. Asking the buffer, rather than the pixel format, keeps a
+   * software stream that hasn't configured itself yet from looking like one.
+   */
+  bool IsHardwareRendering() const { return m_hasHardwareContext; }
+
+  bool ReadHardwareFrame(VideoFrame& frame);
+  void GetVideoFrame(IRenderBuffer*& readableBuffer, std::vector<uint8_t>& cachedFrame);
+  void FreeVideoFrame(IRenderBuffer* readableBuffer, std::vector<uint8_t> cachedFrame);
+
   // Construction parameters
   CRPProcessInfo& m_processInfo;
   CRenderContext& m_renderContext;
@@ -195,17 +261,75 @@ private:
 
   // Stream properties
   AVPixelFormat m_format = AV_PIX_FMT_NONE;
+  unsigned int m_nominalWidth{0};
+  unsigned int m_nominalHeight{0};
+  float m_nominalDisplayAspectRatio{0.0f}; // 0.0f means square pixels
   unsigned int m_maxWidth = 0;
   unsigned int m_maxHeight = 0;
 
   // Render resources
   std::set<std::shared_ptr<CRPBaseRenderer>> m_renderers;
-  std::vector<IRenderBuffer*> m_pendingBuffers; // Only access from game thread
+  std::set<std::shared_ptr<CRPBaseRenderer>> m_oldRenderers;
+  mutable std::mutex m_oldRenderersMutex;
+  /*!
+   * \brief A buffer lent to the game client to draw its next frame into
+   *
+   * The memory the client was given is recorded alongside the buffer, because
+   * that is how the frame it hands back is recognized as the one it was lent,
+   * and asking the buffer for its memory again would start another round of
+   * CPU access. A null memory pointer means no CPU access was started, as with
+   * a framebuffer lent by GetCurrentFramebuffer().
+   */
+  struct PendingBuffer
+  {
+    IRenderBuffer* buffer;
+    uint8_t* memory;
+  };
+  std::vector<PendingBuffer> m_pendingBuffers; // Only access from game thread
+
+  // The framebuffer a hardware-rendering client draws into, held for the life
+  // of the stream, and the pool that owns its context.
+  //
+  // Exactly one, deliberately. Clients treat the framebuffer they are given as
+  // theirs for the whole session and many do not clear it, drawing over what
+  // the last frame left behind. Handing them alternate buffers gives each only
+  // every other frame's drawing, and the frames in between show through.
+  // Held across each client call, including calls made before negotiation.
+  std::recursive_mutex m_hwMutex;
+  unsigned int m_clientFrameDepth{0};
+  bool m_hwContextBound{false};
+  bool m_destroyContextPending{false};
+  std::atomic<bool> m_hasHardwareContext{false};
+  IRenderBuffer* m_hwRenderBuffer{nullptr};
+  IRenderBufferPool* m_hwBufferPool{nullptr};
+
+  //! \brief Size the client's framebuffer was allocated at
+  //!
+  //! Kept apart from the buffer's own width and height, which are set to the
+  //! size of each frame the client draws so the renderer knows what part of the
+  //! framebuffer to sample. Asking the buffer how large it is would then give
+  //! the last frame's size, not the space available.
+  unsigned int m_hwBufferWidth{0};
+  unsigned int m_hwBufferHeight{0};
+
+  //! \brief The client's framebuffer and its allocated size, for a client that
+  //! asks for it from a thread of its own while one of its calls holds m_hwMutex
+  std::mutex m_framebufferMutex;
+  uintptr_t m_framebuffer{0};
+  unsigned int m_framebufferWidth{0};
+  unsigned int m_framebufferHeight{0};
+
+  uintptr_t m_loggedFramebuffer{0};
+  bool m_loggedHardwareCapture{false};
   std::vector<IRenderBuffer*> m_renderBuffers;
-  std::map<AVPixelFormat, SwsContext*> m_scalers;
+  std::atomic<uint64_t> m_framesGiven{0};
+  uint64_t m_lastFrameTaken{0}; // Rendering thread only
+  std::map<AVPixelFormat, std::map<AVPixelFormat, SwsContext*>> m_scalers; // From -> to -> context
   std::vector<uint8_t> m_cachedFrame;
   unsigned int m_cachedWidth = 0;
   unsigned int m_cachedHeight = 0;
+  float m_cachedDisplayAspectRatio{0.0f}; // 0.0f means square pixels
+  unsigned int m_cachedRotationCCW{0};
 
   // State parameters
   enum class RENDER_STATE
@@ -218,9 +342,6 @@ private:
   bool m_bHasCachedFrame = false; // Invariant: m_cachedFrame is empty if false
   std::set<std::string> m_failedShaderPresets;
   std::atomic<bool> m_bFlush = {false};
-
-  // Windowing state
-  bool m_bDisplayScaleSet = false;
 
   // Playback parameters
   std::atomic<double> m_speed = {1.0};

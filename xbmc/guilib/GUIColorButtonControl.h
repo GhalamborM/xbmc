@@ -60,12 +60,12 @@ public:
 protected:
   bool UpdateColors(const CGUIListItem* item) override;
   void ProcessInfoText(unsigned int currentTime);
-  void RenderInfoText();
+  void RenderText() override;
   CGUILabel::COLOR GetTextColor() const override;
   std::unique_ptr<CGUITexture> m_imgColorMask;
   std::unique_ptr<CGUITexture> m_imgColorDisabledMask;
   float m_colorPosX;
   float m_colorPosY;
-  UTILS::COLOR::Color m_imgBoxColor;
+  KODI::GUILIB::GUIINFO::CGUIInfoColor m_imgBoxColor;
   CGUILabel m_labelInfo;
 };

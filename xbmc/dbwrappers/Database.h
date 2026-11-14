@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2005-2018 Team Kodi
+ *  Copyright (C) 2005-2026 Team Kodi
  *  This file is part of Kodi - https://kodi.tv
  *
  *  SPDX-License-Identifier: GPL-2.0-or-later
@@ -8,16 +8,22 @@
 
 #pragma once
 
-namespace dbiplus {
-  class Database;
-  class Dataset;
-}
+#include "media/MediaType.h"
+#include "utils/Artwork.h"
 
 #include <memory>
+#include <set>
 #include <string>
+#include <string_view>
 #include <vector>
 
-class DatabaseSettings; // forward
+namespace dbiplus
+{
+class Database;
+class Dataset;
+} // namespace dbiplus
+
+class DatabaseSettings;
 class CDbUrl;
 class CProfileManager;
 struct SortDescription;
@@ -28,17 +34,17 @@ public:
   class Filter
   {
   public:
-    Filter() : fields("*") {}
-    explicit Filter(const char* w) : fields("*"), where(w) {}
-    explicit Filter(const std::string& w) : fields("*"), where(w) {}
+    Filter();
+    explicit Filter(const char* w) : where(w) {}
+    explicit Filter(const std::string& w) : where(w) {}
 
-    void AppendField(const std::string &strField);
-    void AppendJoin(const std::string &strJoin);
-    void AppendWhere(const std::string &strWhere, bool combineWithAnd = true);
-    void AppendOrder(const std::string &strOrder);
-    void AppendGroup(const std::string &strGroup);
+    void AppendField(const std::string& strField);
+    void AppendJoin(const std::string& strJoin);
+    void AppendWhere(const std::string& strWhere, bool combineWithAnd = true);
+    void AppendOrder(const std::string& strOrder);
+    void AppendGroup(const std::string& strGroup);
 
-    std::string fields;
+    std::string fields{"*"};
     std::string join;
     std::string where;
     std::string order;
@@ -46,32 +52,31 @@ public:
     std::string limit;
   };
 
-
-  typedef struct DatasetFieldInfo {
+  struct DatasetFieldInfo
+  {
     DatasetFieldInfo(bool fetch, bool output, int recno)
-      : fetch(fetch),
-      output(output),
-      recno(recno)
-    { }
+      : fetch(fetch), output(output), recno(recno)
+    {
+    }
 
     bool fetch;
     bool output;
     int recno;
     std::string strField;
-  } DatasetFieldInfo;
+  };
 
   class DatasetLayout
   {
   public:
-    DatasetLayout(size_t totalfields);
-    void SetField(int fieldNo, const std::string &strField, bool bOutput = false);
+    explicit DatasetLayout(size_t totalfields);
+    void SetField(int fieldNo, std::string_view strField, bool bOutput = false);
     void AdjustRecordNumbers(int offset);
     bool GetFetch(int fieldno);
     void SetFetch(int fieldno, bool bFetch = true);
     bool GetOutput(int fieldno);
     int GetRecNo(int fieldno);
-    const std::string GetFields();
-    bool HasFilterFields();
+    std::string GetFields() const;
+    bool HasFilterFields() const;
 
   private:
     std::vector<DatasetFieldInfo> m_fields;
@@ -85,9 +90,9 @@ public:
       : tablename(table), param(parameter)
     {
     }
-    void AppendJoin(const std::string &strJoin);
-    void AppendWhere(const std::string &strWhere, bool combineWithAnd = true);
-    bool BuildSQL(std::string &strSQL);
+    void AppendJoin(const std::string& strJoin);
+    void AppendWhere(std::string_view strWhere, bool combineWithAnd = true);
+    bool BuildSQL(std::string& strSQL) const;
 
     std::string tablename;
     std::string param;
@@ -95,47 +100,63 @@ public:
     std::string where;
   };
 
+  /*!
+   \brief The outcome of a query for a single record.
+   */
+  enum class GetResult
+  {
+    Ok, ///< the record was found and has been returned
+    NotFound, ///< the database was queried successfully and holds no such record
+    Error, ///< the record could not be returned, so whether it exists may be unknown
+  };
 
-  CDatabase();
-  virtual ~CDatabase(void);
-  bool IsOpen();
+  explicit CDatabase(const std::string& dbType);
+  virtual ~CDatabase();
+
+  bool IsOpen() const;
+  bool Open(const DatabaseSettings& db);
   virtual void Close();
-  bool Compress(bool bForce=true);
-  void Interrupt();
 
-  bool Open(const DatabaseSettings &db);
+  const std::string& GetType() const { return m_type; }
+
+  bool Compress(bool bForce = true);
+  void Interrupt();
 
   void BeginTransaction();
   virtual bool CommitTransaction();
   void RollbackTransaction();
+  bool InTransaction() const;
   void CopyDB(const std::string& latestDb);
   void DropAnalytics();
 
-  std::string PrepareSQL(std::string strStmt, ...) const;
+  std::string PrepareSQL(std::string_view sqlFormat, ...) const;
 
   /*!
    * @brief Get a single value from a table.
    * @remarks The values of the strWhereClause and strOrderBy parameters have to be FormatSQL'ed when used.
-   * @param strTable The table to get the value from.
+   * @param strTable The table to get the value from. Cannot be a complex expression with joins for example.
    * @param strColumn The column to get.
    * @param strWhereClause If set, use this WHERE clause.
    * @param strOrderBy If set, use this ORDER BY clause.
    * @return The requested value or an empty string if it wasn't found.
    */
-  std::string GetSingleValue(const std::string &strTable, const std::string &strColumn, const std::string &strWhereClause = std::string(), const std::string &strOrderBy = std::string());
-  std::string GetSingleValue(const std::string &query);
+  std::string GetSingleValue(const std::string& strTable,
+                             const std::string& strColumn,
+                             const std::string& strWhereClause = std::string(),
+                             const std::string& strOrderBy = std::string()) const;
+  std::string GetSingleValue(const std::string& query) const;
 
   /*! \brief Get a single value from a query on a dataset.
    \param query the query in question.
    \param ds the dataset to use for the query.
    \return the value from the query, empty on failure.
    */
-  std::string GetSingleValue(const std::string &query, std::unique_ptr<dbiplus::Dataset> &ds);
+  std::string GetSingleValue(const std::string& query, dbiplus::Dataset& ds) const;
 
   /*!
  * @brief Get a single integer value from a table.
  * @remarks The values of the strWhereClause and strOrderBy parameters have to be FormatSQL'ed when used.
- * @param strTable The table to get the value from.
+ * @param strTable The table to get the value from. Cannot be a complex expression with joins for example.
  * @param strColumn The column to get.
  * @param strWhereClause If set, use this WHERE clause.
  * @param strOrderBy If set, use this ORDER BY clause.
@@ -144,15 +165,15 @@ public:
   int GetSingleValueInt(const std::string& strTable,
                         const std::string& strColumn,
                         const std::string& strWhereClause = std::string(),
-                        const std::string& strOrderBy = std::string());
-  int GetSingleValueInt(const std::string& query);
+                        const std::string& strOrderBy = std::string()) const;
+  int GetSingleValueInt(const std::string& query) const;
 
   /*! \brief Get a single integer value from a query on a dataset.
    \param query the query in question.
    \param ds the dataset to use for the query.
    \return the value from the query, 0 on failure.
    */
-  int GetSingleValueInt(const std::string& query, std::unique_ptr<dbiplus::Dataset>& ds);
+  int GetSingleValueInt(const std::string& query, dbiplus::Dataset& ds) const;
 
   /*!
    * @brief Delete values from a table.
@@ -160,7 +181,7 @@ public:
    * @param filter The Filter to apply to this query.
    * @return True if the query was executed successfully, false otherwise.
    */
-  bool DeleteValues(const std::string &strTable, const Filter &filter = Filter());
+  bool DeleteValues(const std::string& strTable, const Filter& filter = Filter());
 
   /*!
    * @brief Execute a query that does not return any result.
@@ -170,7 +191,7 @@ public:
    * @return True if the query was executed successfully, false otherwise.
    * @sa BeginMultipleExecute, CommitMultipleExecute
    */
-  bool ExecuteQuery(const std::string &strQuery);
+  bool ExecuteQuery(const std::string& strQuery);
 
   /*!
    * @brief Execute a query that returns a result.
@@ -178,7 +199,7 @@ public:
    * @param strQuery The query to execute.
    * @return True if the query was executed successfully, false otherwise.
    */
-  bool ResultQuery(const std::string &strQuery);
+  bool ResultQuery(const std::string& strQuery) const;
 
   /*!
    * @brief Start a multiple execution queue. Any ExecuteQuery() function
@@ -205,7 +226,7 @@ public:
    * @param strQuery The query to queue.
    * @return True if the query was added successfully, false otherwise.
    */
-  bool QueueInsertQuery(const std::string &strQuery);
+  bool QueueInsertQuery(const std::string& strQuery);
 
   /*!
    * @brief Commit all queries in the queue.
@@ -217,7 +238,7 @@ public:
    * @brief Get the number of INSERT queries in the queue.
    * @return The number of queries.
    */
-  size_t GetInsertQueriesCount();
+  size_t GetInsertQueriesCount() const;
 
   /*!
    * @brief Put a DELETE query in the queue.
@@ -236,18 +257,101 @@ public:
    * @brief Get the number of DELETE queries in the queue.
    * @return The number of queries.
    */
-  size_t GetDeleteQueriesCount();
+  size_t GetDeleteQueriesCount() const;
 
-  virtual bool GetFilter(CDbUrl &dbUrl, Filter &filter, SortDescription &sorting) { return true; }
-  virtual bool BuildSQL(const std::string &strBaseDir, const std::string &strQuery, Filter &filter, std::string &strSQL, CDbUrl &dbUrl);
-  virtual bool BuildSQL(const std::string &strBaseDir, const std::string &strQuery, Filter &filter, std::string &strSQL, CDbUrl &dbUrl, SortDescription &sorting);
+  virtual bool GetFilter(CDbUrl& dbUrl, Filter& filter, SortDescription& sorting) { return true; }
+  virtual bool BuildSQL(const std::string& strBaseDir,
+                        const std::string& strQuery,
+                        Filter& filter,
+                        std::string& strSQL,
+                        CDbUrl& dbUrl);
+  virtual bool BuildSQL(const std::string& strBaseDir,
+                        const std::string& strQuery,
+                        Filter& filter,
+                        std::string& strSQL,
+                        CDbUrl& dbUrl,
+                        SortDescription& sorting);
 
-  bool Connect(const std::string &dbName, const DatabaseSettings &db, bool create);
+  enum class ConnectionState
+  {
+    STATE_ERROR,
+    STATE_DATABASE_NOT_FOUND,
+    STATE_CONNECTED,
+  };
+
+  ConnectionState Connect(const std::string& dbName, const DatabaseSettings& db, bool create);
+
+  /*! \brief Sets art for a library item.
+   \param mediaId the id in the item's table.
+   \param mediaType the type of the item, which corresponds to the table it resides in.
+   \param artType the type of art to set, e.g. "thumb"; a type of a parent's art, such as
+   "tvshow.poster", is not stored.
+   \param url the url to the art (the original url, not a cached url).
+   \return false on a database error
+   */
+  bool SetArtForItem(int mediaId,
+                     const std::string& mediaType,
+                     const std::string& artType,
+                     const std::string& url);
+
+  /*! \brief Sets each piece of \p art, a map of art type to url, for a library item.
+   \return false once a piece cannot be set, leaving the rest unset
+   */
+  virtual bool SetArtForItem(int mediaId,
+                             const std::string& mediaType,
+                             const KODI::ART::Artwork& art);
+
+  /*! \brief Adds the art a library item has to \p art, a map of art type to url.
+   \return false on a database error
+   */
+  virtual bool GetArtForItem(int mediaId, const std::string& mediaType, KODI::ART::Artwork& art);
+
+  //! \brief The url of one type of art for a library item, empty if it has none.
+  std::string GetArtForItem(int mediaId, const std::string& mediaType, const std::string& artType);
+
+  bool RemoveArtForItem(int mediaId, const std::string& mediaType, const std::string& artType);
+  bool RemoveArtForItem(int mediaId,
+                        const std::string& mediaType,
+                        const std::set<std::string, std::less<>>& artTypes);
+
+  /*! \brief Adds the distinct types of art held for a type of item to \p artTypes.
+   \return false on a database error
+   */
+  bool GetArtTypes(const std::string& mediaType, std::vector<std::string>& artTypes);
+
+  //! \brief The art functions above, for an item whose table is a media type.
+  bool SetArtForItem(int mediaId,
+                     KODI::MEDIA::TYPE mediaType,
+                     const std::string& artType,
+                     const std::string& url)
+  {
+    return SetArtForItem(mediaId, KODI::MEDIA::NameOf(mediaType), artType, url);
+  }
+  bool SetArtForItem(int mediaId, KODI::MEDIA::TYPE mediaType, const KODI::ART::Artwork& art)
+  {
+    return SetArtForItem(mediaId, KODI::MEDIA::NameOf(mediaType), art);
+  }
+  bool GetArtForItem(int mediaId, KODI::MEDIA::TYPE mediaType, KODI::ART::Artwork& art)
+  {
+    return GetArtForItem(mediaId, KODI::MEDIA::NameOf(mediaType), art);
+  }
+  std::string GetArtForItem(int mediaId, KODI::MEDIA::TYPE mediaType, const std::string& artType)
+  {
+    return GetArtForItem(mediaId, KODI::MEDIA::NameOf(mediaType), artType);
+  }
+  bool RemoveArtForItem(int mediaId,
+                        KODI::MEDIA::TYPE mediaType,
+                        const std::set<std::string, std::less<>>& artTypes)
+  {
+    return RemoveArtForItem(mediaId, KODI::MEDIA::NameOf(mediaType), artTypes);
+  }
 
 protected:
   friend class CDatabaseManager;
 
-  void Split(const std::string& strFileNameAndPath, std::string& strPath, std::string& strFileName);
+  void Split(const std::string& strFileNameAndPath,
+             std::string& strPath,
+             std::string& strFileName) const;
 
   virtual bool Open();
 
@@ -259,12 +363,12 @@ protected:
   /* \brief Create tables for the current database schema.
    Will be called on database creation.
    */
-  virtual void CreateTables()=0;
+  virtual void CreateTables() = 0;
 
   /* \brief Create views, indices and triggers for the current database schema.
    Will be called on database creation and database update.
    */
-  virtual void CreateAnalytics()=0;
+  virtual void CreateAnalytics() = 0;
 
   /* \brief Update database tables to the current version.
    Note that analytics (views, indices, triggers) are not present during this
@@ -272,39 +376,48 @@ protected:
    */
   virtual void UpdateTables(int version) {}
 
+  /*! \brief Rebuild a table so that its integer primary key never hands out a deleted row's id.
+   For UpdateTables() only: the analytics must be dropped. MySQL already declares every integer
+   primary key auto_increment, so there it does nothing.
+   */
+  void AddAutoIncrement(const std::string& table);
+
   /* \brief The minimum schema version that we support updating from.
    */
   virtual int GetMinSchemaVersion() const { return 0; }
 
   /* \brief The current schema version.
    */
-  virtual int GetSchemaVersion() const=0;
-  virtual const char *GetBaseDBName() const=0;
+  virtual int GetSchemaVersion() const = 0;
+  virtual const char* GetBaseDBName() const = 0;
 
   int GetDBVersion();
 
-  bool BuildSQL(const std::string &strQuery, const Filter &filter, std::string &strSQL);
+  bool BuildSQL(std::string_view strQuery, const Filter& filter, std::string& strSQL) const;
 
-  bool m_sqlite; ///< \brief whether we use sqlite (defaults to true)
+  bool m_sqlite{true}; ///< \brief whether we use sqlite (defaults to true)
 
   std::unique_ptr<dbiplus::Database> m_pDB;
   std::unique_ptr<dbiplus::Dataset> m_pDS;
   std::unique_ptr<dbiplus::Dataset> m_pDS2;
 
-protected:
   // Construction parameters
-  const CProfileManager &m_profileManager;
+  const CProfileManager& m_profileManager;
 
 private:
-  void InitSettings(DatabaseSettings &dbSettings);
+  CDatabase() = delete;
+
+  void InitSettings(DatabaseSettings& dbSettings);
   void UpdateVersionNumber();
 
-  bool m_bMultiInsert =
-      false; /*!< True if there are any queries in the insert queue, false otherwise */
-  bool m_bMultiDelete =
-      false; /*!< True if there are any queries in the delete queue, false otherwise */
-  unsigned int m_openCount;
+  const std::string m_type;
 
-  bool m_multipleExecute;
+  bool m_bMultiInsert{
+      false}; /*!< True if there are any queries in the insert queue, false otherwise */
+  bool m_bMultiDelete{
+      false}; /*!< True if there are any queries in the delete queue, false otherwise */
+  unsigned int m_openCount{0};
+
+  bool m_multipleExecute{false};
   std::vector<std::string> m_multipleQueries;
 };

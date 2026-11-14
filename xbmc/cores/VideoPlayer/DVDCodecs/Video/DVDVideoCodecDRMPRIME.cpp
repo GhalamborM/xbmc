@@ -11,6 +11,7 @@
 #include "ServiceBroker.h"
 #include "cores/VideoPlayer/Buffers/VideoBufferDMA.h"
 #include "cores/VideoPlayer/Buffers/VideoBufferDRMPRIME.h"
+#include "cores/VideoPlayer/Buffers/VideoBufferPoolDMA.h"
 #include "cores/VideoPlayer/DVDCodecs/DVDCodecs.h"
 #include "cores/VideoPlayer/DVDCodecs/DVDFactoryCodec.h"
 #include "settings/Settings.h"
@@ -18,6 +19,7 @@
 #include "settings/lib/Setting.h"
 #include "threads/SingleLock.h"
 #include "utils/CPUInfo.h"
+#include "utils/StringUtils.h"
 #include "utils/log.h"
 
 #if defined(HAVE_GBM)
@@ -71,13 +73,25 @@ static void AlignedSize(AVCodecContext* avctx, int& width, int& height)
   height = h;
 }
 
+bool SupportsDRM()
+{
+  AVHWDeviceType type = AV_HWDEVICE_TYPE_NONE;
+  while ((type = av_hwdevice_iterate_types(type)) != AV_HWDEVICE_TYPE_NONE)
+  {
+    if (type == AV_HWDEVICE_TYPE_DRM)
+      return true;
+  }
+
+  return false;
+}
+
 } // namespace
 
 CDVDVideoCodecDRMPRIME::CDVDVideoCodecDRMPRIME(CProcessInfo& processInfo)
   : CDVDVideoCodec(processInfo)
 {
   m_pFrame = av_frame_alloc();
-  m_videoBufferPool = std::make_shared<CVideoBufferPoolDRMPRIMEFFmpeg>();
+  m_hwVideoBufferPool = std::make_shared<CVideoBufferPoolDRMPRIMEFFmpeg>();
 }
 
 CDVDVideoCodecDRMPRIME::~CDVDVideoCodecDRMPRIME()
@@ -97,6 +111,12 @@ std::unique_ptr<CDVDVideoCodec> CDVDVideoCodecDRMPRIME::Create(CProcessInfo& pro
 
 void CDVDVideoCodecDRMPRIME::Register()
 {
+  if (!SupportsDRM())
+  {
+    CLog::Log(LOGINFO, "CDVDVideoCodecDRMPRIME: FFMPEG has no libdrm support");
+    return;
+  }
+
   auto settingsComponent = CServiceBroker::GetSettingsComponent();
   if (!settingsComponent)
     return;
@@ -137,7 +157,8 @@ static bool IsSupportedHwFormat(const enum AVPixelFormat fmt)
 
 static bool IsSupportedSwFormat(const enum AVPixelFormat fmt)
 {
-  return fmt == AV_PIX_FMT_YUV420P || fmt == AV_PIX_FMT_YUVJ420P;
+  return fmt == AV_PIX_FMT_YUV420P || fmt == AV_PIX_FMT_YUVJ420P || fmt == AV_PIX_FMT_YUV422P ||
+         fmt == AV_PIX_FMT_YUVJ422P || fmt == AV_PIX_FMT_YUV444P || fmt == AV_PIX_FMT_YUVJ444P;
 }
 
 static const AVCodecHWConfig* FindHWConfig(const AVCodec* codec)
@@ -152,11 +173,8 @@ static const AVCodecHWConfig* FindHWConfig(const AVCodec* codec)
     if (!IsSupportedHwFormat(config->pix_fmt))
       continue;
 
-    if ((config->methods & AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX) &&
-        config->device_type == AV_HWDEVICE_TYPE_DRM)
-      return config;
-
-    if ((config->methods & AV_CODEC_HW_CONFIG_METHOD_INTERNAL))
+    if ((config->methods & AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX) ||
+        (config->methods & AV_CODEC_HW_CONFIG_METHOD_INTERNAL))
       return config;
   }
 
@@ -201,7 +219,14 @@ enum AVPixelFormat CDVDVideoCodecDRMPRIME::GetFormat(struct AVCodecContext* avct
     }
   }
 
-  CLog::Log(LOGERROR, "CDVDVideoCodecDRMPRIME::{} - unsupported pixel format", __FUNCTION__);
+  std::vector<std::string> formats;
+  for (int n = 0; fmt[n] != AV_PIX_FMT_NONE; n++)
+  {
+    formats.emplace_back(av_get_pix_fmt_name(fmt[n]));
+  }
+  CLog::Log(LOGERROR, "CDVDVideoCodecDRMPRIME::{} - no supported pixel formats: {}", __FUNCTION__,
+            StringUtils::Join(formats, ", "));
+
   return AV_PIX_FMT_NONE;
 }
 
@@ -221,13 +246,31 @@ int CDVDVideoCodecDRMPRIME::GetBuffer(struct AVCodecContext* avctx, AVFrame* fra
       case AV_PIX_FMT_YUVJ420P:
         size = width * height * 3 / 2;
         break;
+      case AV_PIX_FMT_YUV422P:
+      case AV_PIX_FMT_YUVJ422P:
+        size = width * height * 2;
+        break;
+      case AV_PIX_FMT_YUV444P:
+      case AV_PIX_FMT_YUVJ444P:
+        size = width * height * 3;
+        break;
       default:
         return -1;
     }
 
     CDVDVideoCodecDRMPRIME* ctx = static_cast<CDVDVideoCodecDRMPRIME*>(avctx->opaque);
-    auto buffer = dynamic_cast<CVideoBufferDMA*>(
-        ctx->m_processInfo.GetVideoBufferManager().Get(avctx->pix_fmt, size, nullptr));
+    // no lock: ffmpeg serializes get_buffer2 even with frame threading, and the codec's
+    // own accesses are safe because avcodec flush/free join the frame threads first
+    if (!ctx->m_swVideoBufferPool || !ctx->m_swVideoBufferPool->IsCompatible(avctx->pix_fmt, size))
+    {
+      ctx->m_swVideoBufferPool = std::make_shared<CVideoBufferPoolDMA>();
+      ctx->m_swVideoBufferPool->Configure(avctx->pix_fmt, size);
+    }
+
+    if (!ctx->m_swVideoBufferPool->IsConfigured())
+      return -1;
+
+    CVideoBufferDMA* buffer = ctx->m_swVideoBufferPool->Get();
     if (!buffer)
       return -1;
 
@@ -264,47 +307,53 @@ bool CDVDVideoCodecDRMPRIME::Open(CDVDStreamInfo& hints, CDVDCodecOptions& optio
   m_hints = hints;
 
   const AVCodecHWConfig* pConfig = FindHWConfig(pCodec);
-  if (pConfig && (pConfig->methods & AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX) &&
-      pConfig->device_type == AV_HWDEVICE_TYPE_DRM)
+  if (pConfig && (pConfig->methods & AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX))
   {
+    const char* type = av_hwdevice_get_type_name(pConfig->device_type);
     const char* device = nullptr;
 
-    if (getenv("KODI_RENDER_NODE"))
-      device = getenv("KODI_RENDER_NODE");
+    if (pConfig->device_type == AV_HWDEVICE_TYPE_DRM)
+    {
+      if (getenv("KODI_RENDER_NODE"))
+        device = getenv("KODI_RENDER_NODE");
 
 #if defined(HAVE_GBM)
-    auto winSystem = dynamic_cast<KODI::WINDOWING::GBM::CWinSystemGbm*>(CServiceBroker::GetWinSystem());
+      auto winSystem =
+          dynamic_cast<KODI::WINDOWING::GBM::CWinSystemGbm*>(CServiceBroker::GetWinSystem());
 
-    if (winSystem)
-    {
-      auto drm = winSystem->GetDrm();
+      if (winSystem)
+      {
+        auto drm = winSystem->GetDrm();
 
-      if (!drm)
-        return false;
+        if (!drm)
+          return false;
 
-      if (!device)
-        device = drm->GetRenderDevicePath();
-    }
+        if (!device)
+          device = drm->GetRenderDevicePath();
+      }
 #endif
 
-    //! @todo: fix with proper device when dma-hints wayland protocol works
-    if (!device)
-      device = "/dev/dri/renderD128";
+      //! @todo: fix with proper device when dma-hints wayland protocol works
+      if (!device)
+        device = "/dev/dri/renderD128";
+    }
 
-    CLog::Log(LOGDEBUG, "CDVDVideoCodecDRMPRIME::{} - using drm device for av_hwdevice_ctx: {}", __FUNCTION__, device);
+    CLog::Log(LOGDEBUG,
+              "CDVDVideoCodecDRMPRIME::{} - creating {} hwdevice context using device: {}",
+              __FUNCTION__, type ? type : "unknown", device ? device : "(null)");
 
     if (av_hwdevice_ctx_create(&m_pCodecContext->hw_device_ctx, pConfig->device_type,
                                device, nullptr, 0) < 0)
     {
-      CLog::Log(LOGERROR,
-                "CDVDVideoCodecDRMPRIME::{} - unable to create hwdevice context using device: {}",
-                __FUNCTION__, device);
+      CLog::Log(
+          LOGERROR,
+          "CDVDVideoCodecDRMPRIME::{} - unable to create {} hwdevice context using device: {}",
+          __FUNCTION__, type ? type : "unknown", device ? device : "(null)");
       avcodec_free_context(&m_pCodecContext);
       return false;
     }
   }
 
-  m_pCodecContext->pix_fmt = AV_PIX_FMT_DRM_PRIME;
   m_pCodecContext->opaque = static_cast<void*>(this);
   m_pCodecContext->get_format = GetFormat;
   m_pCodecContext->get_buffer2 = GetBuffer;
@@ -316,12 +365,15 @@ bool CDVDVideoCodecDRMPRIME::Open(CDVDStreamInfo& hints, CDVDCodecOptions& optio
   m_pCodecContext->time_base.den = DVD_TIME_BASE;
   m_pCodecContext->thread_count = CServiceBroker::GetCPUInfo()->GetCPUCount();
 
-  if (hints.extradata && hints.extrasize > 0)
+  if (hints.extradata)
   {
-    m_pCodecContext->extradata_size = hints.extrasize;
     m_pCodecContext->extradata =
-        static_cast<uint8_t*>(av_mallocz(hints.extrasize + AV_INPUT_BUFFER_PADDING_SIZE));
-    memcpy(m_pCodecContext->extradata, hints.extradata, hints.extrasize);
+        static_cast<uint8_t*>(av_mallocz(hints.extradata.GetSize() + AV_INPUT_BUFFER_PADDING_SIZE));
+    if (m_pCodecContext->extradata)
+    {
+      m_pCodecContext->extradata_size = hints.extradata.GetSize();
+      memcpy(m_pCodecContext->extradata, hints.extradata.GetData(), hints.extradata.GetSize());
+    }
   }
 
   for (auto&& option : options.m_keys)
@@ -350,7 +402,6 @@ void CDVDVideoCodecDRMPRIME::UpdateProcessInfo(struct AVCodecContext* avctx,
 {
   const char* pixFmtName = av_get_pix_fmt_name(pix_fmt);
   m_processInfo.SetVideoPixelFormat(pixFmtName ? pixFmtName : "");
-  m_processInfo.SetVideoDimensions(avctx->coded_width, avctx->coded_height);
 
   if (avctx->codec && avctx->codec->name)
     m_name = std::string("ff-") + avctx->codec->name;
@@ -483,19 +534,18 @@ void CDVDVideoCodecDRMPRIME::SetPictureParams(VideoPicture* pVideoPicture)
     m_processInfo.SetVideoDAR(static_cast<float>(m_DAR));
   }
 
-  pVideoPicture->iDisplayWidth =
-      (static_cast<int>(lrint(pVideoPicture->iHeight * aspect_ratio))) & -3;
+  pVideoPicture->iDisplayWidth = static_cast<int>(lrint(pVideoPicture->iHeight * aspect_ratio));
   pVideoPicture->iDisplayHeight = pVideoPicture->iHeight;
   if (pVideoPicture->iDisplayWidth > pVideoPicture->iWidth)
   {
     pVideoPicture->iDisplayWidth = pVideoPicture->iWidth;
-    pVideoPicture->iDisplayHeight =
-        (static_cast<int>(lrint(pVideoPicture->iWidth / aspect_ratio))) & -3;
+    pVideoPicture->iDisplayHeight = static_cast<int>(lrint(pVideoPicture->iWidth / aspect_ratio));
   }
 
-  pVideoPicture->color_range = m_pFrame->color_range == AVCOL_RANGE_JPEG ||
-                               m_pFrame->format == AV_PIX_FMT_YUVJ420P ||
-                               m_hints.colorRange == AVCOL_RANGE_JPEG;
+  pVideoPicture->color_range =
+      m_pFrame->color_range == AVCOL_RANGE_JPEG || m_pFrame->format == AV_PIX_FMT_YUVJ420P ||
+      m_pFrame->format == AV_PIX_FMT_YUVJ422P || m_pFrame->format == AV_PIX_FMT_YUVJ444P ||
+      m_hints.colorRange == AVCOL_RANGE_JPEG;
   pVideoPicture->color_primaries = m_pFrame->color_primaries == AVCOL_PRI_UNSPECIFIED
                                        ? m_hints.colorPrimaries
                                        : m_pFrame->color_primaries;
@@ -508,12 +558,28 @@ void CDVDVideoCodecDRMPRIME::SetPictureParams(VideoPicture* pVideoPicture)
 
   pVideoPicture->colorBits = 8;
   if (m_pCodecContext->codec_id == AV_CODEC_ID_HEVC &&
-      m_pCodecContext->profile == FF_PROFILE_HEVC_MAIN_10)
+      m_pCodecContext->profile == AV_PROFILE_HEVC_MAIN_10)
     pVideoPicture->colorBits = 10;
   else if (m_pCodecContext->codec_id == AV_CODEC_ID_H264 &&
-           (m_pCodecContext->profile == FF_PROFILE_H264_HIGH_10 ||
-            m_pCodecContext->profile == FF_PROFILE_H264_HIGH_10_INTRA))
+           (m_pCodecContext->profile == AV_PROFILE_H264_HIGH_10 ||
+            m_pCodecContext->profile == AV_PROFILE_H264_HIGH_10_INTRA))
     pVideoPicture->colorBits = 10;
+
+  pVideoPicture->hdrType = m_hints.hdrType;
+  pVideoPicture->hdrTypeAlt = StreamHdrType::HDR_TYPE_NONE;
+
+  if (pVideoPicture->hdrType == StreamHdrType::HDR_TYPE_HDR10 ||
+      pVideoPicture->hdrType == StreamHdrType::HDR_TYPE_DOLBYVISION)
+  {
+    AVFrameSideData* sd = av_frame_get_side_data(m_pFrame, AV_FRAME_DATA_DYNAMIC_HDR_PLUS);
+    if (sd)
+    {
+      if (pVideoPicture->hdrType == StreamHdrType::HDR_TYPE_HDR10)
+        pVideoPicture->hdrType = StreamHdrType::HDR_TYPE_HDR10PLUS;
+      else
+        pVideoPicture->hdrTypeAlt = StreamHdrType::HDR_TYPE_HDR10PLUS;
+    }
+  }
 
   pVideoPicture->hasDisplayMetadata = false;
   AVFrameSideData* sd = av_frame_get_side_data(m_pFrame, AV_FRAME_DATA_MASTERING_DISPLAY_METADATA);
@@ -543,8 +609,9 @@ void CDVDVideoCodecDRMPRIME::SetPictureParams(VideoPicture* pVideoPicture)
 
   pVideoPicture->iRepeatPicture = 0;
   pVideoPicture->iFlags = 0;
-  pVideoPicture->iFlags |= m_pFrame->interlaced_frame ? DVP_FLAG_INTERLACED : 0;
-  pVideoPicture->iFlags |= m_pFrame->top_field_first ? DVP_FLAG_TOP_FIELD_FIRST : 0;
+  pVideoPicture->iFlags |= m_pFrame->flags & AV_FRAME_FLAG_INTERLACED ? DVP_FLAG_INTERLACED : 0;
+  pVideoPicture->iFlags |=
+      m_pFrame->flags & AV_FRAME_FLAG_TOP_FIELD_FIRST ? DVP_FLAG_TOP_FIELD_FIRST : 0;
   pVideoPicture->iFlags |= m_pFrame->data[0] ? 0 : DVP_FLAG_DROPPED;
 
   if (m_codecControlFlags & DVD_CODEC_CTRL_DROP)
@@ -563,12 +630,6 @@ CDVDVideoCodec::VCReturn CDVDVideoCodecDRMPRIME::GetPicture(VideoPicture* pVideo
 {
   if (m_codecControlFlags & DVD_CODEC_CTRL_DRAIN)
     Drain();
-
-  if (pVideoPicture->videoBuffer)
-  {
-    pVideoPicture->videoBuffer->Release();
-    pVideoPicture->videoBuffer = nullptr;
-  }
 
   int ret = avcodec_receive_frame(m_pCodecContext, m_pFrame);
   if (ret == AVERROR(EAGAIN))
@@ -592,12 +653,23 @@ CDVDVideoCodec::VCReturn CDVDVideoCodecDRMPRIME::GetPicture(VideoPicture* pVideo
     return VC_ERROR;
   }
 
+  // ffmpeg's v4l2m2m resizes without re-invoking our GetFormat callback; republish from the frames
+  int piWidth, piHeight;
+  m_processInfo.GetVideoDimensions(piWidth, piHeight);
+  if (m_pFrame->width != piWidth || m_pFrame->height != piHeight)
+    m_processInfo.SetVideoDimensions(m_pFrame->width, m_pFrame->height);
+
   SetPictureParams(pVideoPicture);
+
+  if (pVideoPicture->videoBuffer)
+  {
+    pVideoPicture->videoBuffer->Release();
+    pVideoPicture->videoBuffer = nullptr;
+  }
 
   if (IsSupportedHwFormat(static_cast<AVPixelFormat>(m_pFrame->format)))
   {
-    CVideoBufferDRMPRIMEFFmpeg* buffer =
-        dynamic_cast<CVideoBufferDRMPRIMEFFmpeg*>(m_videoBufferPool->Get());
+    CVideoBufferDRMPRIMEFFmpeg* buffer = m_hwVideoBufferPool->Get();
     buffer->SetPictureParams(*pVideoPicture);
     buffer->SetRef(m_pFrame);
     pVideoPicture->videoBuffer = buffer;

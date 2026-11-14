@@ -11,19 +11,23 @@
 #include "Episode.h"
 #include "VideoInfoTag.h"
 #include "addons/Scraper.h"
-#include "filesystem/CurlFile.h"
 #include "threads/Thread.h"
 
+#include <atomic>
+#include <memory>
 #include <string>
 #include <vector>
 
 // forward declarations
-class CXBMCTinyXML;
 class CGUIDialogProgress;
 
 namespace ADDON
 {
 class CScraperError;
+}
+namespace XFILE
+{
+class IHttpClient;
 }
 
 typedef std::vector<CScraperUrl> MOVIELIST;
@@ -51,9 +55,14 @@ public:
    */
   bool GetArtwork(CVideoInfoTag &details);
 
-  bool GetDetails(const CScraperUrl& url, CVideoInfoTag &movieDetails, CGUIDialogProgress *pProgress = NULL);
+  bool GetDetails(const ADDON::CScraper::UniqueIDs& uniqueIDs,
+                  const CScraperUrl& url,
+                  CVideoInfoTag& movieDetails,
+                  CGUIDialogProgress* pProgress = NULL);
   bool GetEpisodeDetails(const CScraperUrl& url, CVideoInfoTag &movieDetails, CGUIDialogProgress *pProgress = NULL);
-  bool GetEpisodeList(const CScraperUrl& url, VIDEO::EPISODELIST& details, CGUIDialogProgress *pProgress = NULL);
+  bool GetEpisodeList(const CScraperUrl& url,
+                      KODI::VIDEO::EPISODELIST& details,
+                      CGUIDialogProgress* pProgress = NULL);
 
   static void ShowErrorDialog(const ADDON::CScraperError &sce);
 
@@ -64,15 +73,17 @@ protected:
                       GET_EPISODE_LIST = 3,
                       GET_EPISODE_DETAILS = 4 };
 
-  XFILE::CCurlFile*   m_http;
+  std::unique_ptr<XFILE::IHttpClient> m_http;
   std::string         m_movieTitle;
   int                 m_movieYear;
+  ADDON::CScraper::UniqueIDs m_uniqueIDs;
   MOVIELIST           m_movieList;
   CVideoInfoTag       m_movieDetails;
   CScraperUrl         m_url;
-  VIDEO::EPISODELIST  m_episode;
-  LOOKUP_STATE        m_state;
-  int                 m_found;
+  KODI::VIDEO::EPISODELIST m_episode;
+  std::atomic<LOOKUP_STATE> m_state{DO_NOTHING};
+  std::atomic<int> m_found{0};
+  std::atomic<bool> m_result{false};
   ADDON::ScraperPtr   m_info;
 
   // threaded stuff

@@ -12,6 +12,8 @@
 #include "utils/FileUtils.h"
 #include "utils/log.h"
 
+#include <memory>
+
 #include <androidjni/jutils-details.hpp>
 
 #define BUFFSIZE 8192
@@ -49,11 +51,14 @@ jboolean CJNIXBMCFile::_open(JNIEnv *env, jobject thiz, jstring path)
   if (find_instance(thiz))
     return false;
 
+  if (!CFileUtils::CheckFileAccessAllowed(strPath))
+    return false;
+
   if (!XFILE::CFile::Exists(strPath))
     return false;
 
   CJNIXBMCFile* file = new CJNIXBMCFile();
-  file->m_file.reset(new XFILE::CFile());
+  file->m_file = std::make_unique<XFILE::CFile>();
   bool ret = file->m_file->Open(strPath);
   if (!ret)
   {

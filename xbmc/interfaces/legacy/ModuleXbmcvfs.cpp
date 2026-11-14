@@ -8,6 +8,8 @@
 
 #include "ModuleXbmcvfs.h"
 
+#include "FileItem.h"
+#include "FileItemList.h"
 #include "LanguageHook.h"
 #include "URL.h"
 #include "Util.h"

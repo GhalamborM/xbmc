@@ -3,34 +3,30 @@
 # -----
 # Finds the GLX library
 #
-# This will define the following variables::
+# This will define the following target:
 #
-# GLX_FOUND - system has GLX
-# GLX_INCLUDE_DIRS - the GLX include directory
-# GLX_LIBRARIES - the GLX libraries
-# GLX_DEFINITIONS - the GLX definitions
-#
-# and the following imported targets::
-#
-#   GLX::GLX    - The GLX library
+#   ${APP_NAME_LC}::GLX    - The GLX library
 
-if(PKG_CONFIG_FOUND)
-  pkg_check_modules(PC_GLX glx QUIET)
+if(NOT TARGET ${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME})
+  include(cmake/scripts/common/ModuleHelpers.cmake)
+
+  set(${CMAKE_FIND_PACKAGE_NAME}_MODULE_LC glx)
+  set(${${CMAKE_FIND_PACKAGE_NAME}_MODULE_LC}_DISABLE_VERSION ON)
+
+  SETUP_BUILD_VARS()
+
+  SETUP_FIND_SPECS()
+
+  SEARCH_EXISTING_PACKAGES()
+
+  if(${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME}_FOUND)
+    add_library(${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME} ALIAS PkgConfig::${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME})
+
+    list(APPEND GL_INTERFACES_LIST glx)
+    set(GL_INTERFACES_LIST ${GL_INTERFACES_LIST} PARENT_SCOPE)
+
+    set(${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_COMPILE_DEFINITIONS HAS_GLX)
+
+    ADD_TARGET_COMPILE_DEFINITION()
+  endif()
 endif()
-
-find_path(GLX_INCLUDE_DIR NAMES GL/glx.h
-                          PATHS ${PC_GLX_INCLUDEDIR})
-find_library(GLX_LIBRARY NAMES GLX
-                         PATHS ${PC_GLX_LIBDIR})
-
-include(FindPackageHandleStandardArgs)
-find_package_handle_standard_args(GLX
-                                  REQUIRED_VARS GLX_LIBRARY GLX_INCLUDE_DIR)
-
-if(GLX_FOUND)
-  set(GLX_LIBRARIES ${GLX_LIBRARY})
-  set(GLX_INCLUDE_DIRS ${GLX_INCLUDE_DIR})
-  set(GLX_DEFINITIONS -DHAS_GLX=1)
-endif()
-
-mark_as_advanced(GLX_INCLUDE_DIR GLX_LIBRARY)

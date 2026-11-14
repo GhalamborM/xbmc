@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2005-2018 Team Kodi
+ *  Copyright (C) 2005-2024 Team Kodi
  *  This file is part of Kodi - https://kodi.tv
  *
  *  SPDX-License-Identifier: GPL-2.0-or-later
@@ -8,23 +8,32 @@
 
 #pragma once
 
-#include "XBDateTime.h"
+#include "games/controllers/ControllerTypes.h"
 #include "input/joysticks/interfaces/IInputProvider.h"
 #include "input/keyboard/interfaces/IKeyboardInputProvider.h"
 #include "input/mouse/interfaces/IMouseInputProvider.h"
 #include "peripherals/PeripheralTypes.h"
 
+#include <functional>
+#include <future>
 #include <map>
+#include <memory>
+#include <mutex>
+#include <queue>
 #include <set>
 #include <string>
 #include <vector>
 
-class TiXmlDocument;
+class CDateTime;
 class CSetting;
-class IKeymap;
 
 namespace KODI
 {
+namespace GAME
+{
+class CAgentController;
+}
+
 namespace JOYSTICK
 {
 class IButtonMapper;
@@ -36,12 +45,17 @@ class IInputHandler;
 namespace KEYBOARD
 {
 class IKeyboardDriverHandler;
-}
+} // namespace KEYBOARD
+
+namespace KEYMAP
+{
+class IKeymap;
+} // namespace KEYMAP
 
 namespace MOUSE
 {
 class IMouseDriverHandler;
-}
+} // namespace MOUSE
 } // namespace KODI
 
 namespace PERIPHERALS
@@ -51,6 +65,9 @@ class CGUIDialogPeripheralSettings;
 class CPeripheralBus;
 class CPeripherals;
 
+/*!
+ * \ingroup peripherals
+ */
 typedef enum
 {
   STATE_SWITCH_TOGGLE,
@@ -58,9 +75,13 @@ typedef enum
   STATE_STANDBY
 } CecStateChange;
 
+/*!
+ * \ingroup peripherals
+ */
 class CPeripheral : public KODI::JOYSTICK::IInputProvider,
                     public KODI::KEYBOARD::IKeyboardInputProvider,
-                    public KODI::MOUSE::IMouseInputProvider
+                    public KODI::MOUSE::IMouseInputProvider,
+                    public std::enable_shared_from_this<CPeripheral>
 {
   friend class CGUIDialogPeripheralSettings;
 
@@ -138,8 +159,17 @@ public:
 
   /*!
    * @brief Called when this device is removed, before calling the destructor.
+   *
+   * @note Overrides must call the base implementation, which releases the
+   *       agent controller to break the reference cycle that would otherwise
+   *       keep this peripheral alive after removal.
    */
-  virtual void OnDeviceRemoved(void) {}
+  virtual void OnDeviceRemoved(void);
+
+  /*!
+   * @brief Release the agent controller, which holds a reference to this peripheral.
+   */
+  void ReleaseControllerInput();
 
   /*!
    * @brief Get all subdevices if this device is multifunctional.
@@ -185,18 +215,32 @@ public:
    * @return The value or an empty string if it wasn't found.
    */
   virtual const std::string GetSettingString(const std::string& strKey) const;
-  virtual bool SetSetting(const std::string& strKey, const std::string& strValue);
+
+  /*!
+   * @brief Set the value of a setting.
+   * @param strKey The key of the setting.
+   * @param strValue The new value.
+   * @param bNotify True to notify the peripheral of the change when the settings are persisted,
+   *        false when the value originates from the peripheral itself and doesn't have to be
+   *        sent back to it.
+   * @return True when the value changed, false otherwise.
+   */
+  virtual bool SetSetting(const std::string& strKey,
+                          const std::string& strValue,
+                          bool bNotify = true);
   virtual void SetSettingVisible(const std::string& strKey, bool bSetTo);
   virtual bool IsSettingVisible(const std::string& strKey) const;
 
   virtual int GetSettingInt(const std::string& strKey) const;
-  virtual bool SetSetting(const std::string& strKey, int iValue);
+  virtual bool SetSetting(const std::string& strKey, int iValue, bool bNotify = true);
 
   virtual bool GetSettingBool(const std::string& strKey) const;
-  virtual bool SetSetting(const std::string& strKey, bool bValue);
+  virtual bool SetSetting(const std::string& strKey, bool bValue, bool bNotify = true);
 
   virtual float GetSettingFloat(const std::string& strKey) const;
-  virtual bool SetSetting(const std::string& strKey, float fValue);
+  virtual bool SetSetting(const std::string& strKey, float fValue, bool bNotify = true);
+
+  virtual void SetAddonSetting(const std::string& strKey, const std::string& addonId);
 
   virtual void PersistSettings(bool bExiting = false);
   virtual void LoadPersistedSettings(void);
@@ -230,11 +274,14 @@ public:
 
   // implementation of IKeyboardInputProvider
   void RegisterKeyboardHandler(KODI::KEYBOARD::IKeyboardInputHandler* handler,
-                               bool bPromiscuous) override;
+                               bool bPromiscuous,
+                               bool forceDefaultMap) override;
   void UnregisterKeyboardHandler(KODI::KEYBOARD::IKeyboardInputHandler* handler) override;
 
   // implementation of IMouseInputProvider
-  void RegisterMouseHandler(KODI::MOUSE::IMouseInputHandler* handler, bool bPromiscuous) override;
+  void RegisterMouseHandler(KODI::MOUSE::IMouseInputHandler* handler,
+                            bool bPromiscuous,
+                            bool forceDefaultMap) override;
   void UnregisterMouseHandler(KODI::MOUSE::IMouseInputHandler* handler) override;
 
   virtual void RegisterJoystickButtonMapper(KODI::JOYSTICK::IButtonMapper* mapper);
@@ -242,17 +289,52 @@ public:
 
   virtual KODI::JOYSTICK::IDriverReceiver* GetDriverReceiver() { return nullptr; }
 
-  virtual IKeymap* GetKeymap(const std::string& controllerId) { return nullptr; }
+  virtual KODI::KEYMAP::IKeymap* GetKeymap(const std::string& controllerId) { return nullptr; }
 
   /*!
    * \brief Return the last time this peripheral was active
    *
    * \return The time of last activation, or invalid if unknown/never active
    */
-  virtual CDateTime LastActive() { return CDateTime(); }
+  virtual CDateTime LastActive() const;
+
+  /*!
+   * \brief Set the last time this peripheral was active
+   *
+   * \param lastActive The time of last activation, or invalid if unknown/never active
+   */
+  virtual void SetLastActive(const CDateTime& lastActive);
+
+  /*!
+   * \brief Return the current activity level of the peripheral
+   *
+   * \return The activity level, on a scale of 0.0 to 1.0
+   */
+  virtual float GetActivation() const;
+
+  /*!
+   * \brief Get the controller profile that best represents this peripheral
+   *
+   * \return The controller profile, or empty if unknown
+   */
+  virtual KODI::GAME::ControllerPtr ControllerProfile() const { return m_controllerProfile; }
+
+  /*!
+   * \brief Set the controller profile for this peripheral
+   *
+   * \param controller The new controller profile
+   */
+  virtual void SetControllerProfile(const KODI::GAME::ControllerPtr& controller);
 
 protected:
   virtual void ClearSettings(void);
+
+  // Helper functions
+  void InstallController(
+      const std::string& controllerId,
+      const std::function<void(const KODI::GAME::ControllerPtr& installedController)>& callback);
+  KODI::GAME::ControllerPtr InstallAsync(const std::string& controllerId);
+  static bool InstallSync(const std::string& controllerId);
 
   CPeripherals& m_manager;
   PeripheralType m_type;
@@ -260,16 +342,19 @@ protected:
   PeripheralBusType m_mappedBusType;
   std::string m_strLocation;
   std::string m_strDeviceName;
-  std::string m_strSettingsFile;
+  std::string m_strSettingsFile; // settings file to write
+  std::string m_strSettingsFileLoad; // settings file to read
   std::string m_strFileLocation;
+  std::string m_strPhysicalLocation; // stable physical/topology location
+  std::string m_strMappedDeviceName; // generic name from the peripherals.xml mapping
   int m_iVendorId;
   std::string m_strVendorId;
   int m_iProductId;
   std::string m_strProductId;
   std::string m_strVersionInfo;
-  bool m_bInitialised;
-  bool m_bHidden;
-  bool m_bError;
+  bool m_bInitialised = false;
+  bool m_bHidden = false;
+  bool m_bError = false;
   std::vector<PeripheralFeature> m_features;
   PeripheralVector m_subDevices;
   std::map<std::string, PeripheralDeviceSetting> m_settings;
@@ -283,5 +368,10 @@ protected:
   std::map<KODI::MOUSE::IMouseInputHandler*, std::unique_ptr<KODI::MOUSE::IMouseDriverHandler>>
       m_mouseHandlers;
   std::map<KODI::JOYSTICK::IButtonMapper*, std::unique_ptr<CAddonButtonMapping>> m_buttonMappers;
+  KODI::GAME::ControllerPtr m_controllerProfile;
+  std::unique_ptr<KODI::GAME::CAgentController> m_controllerInput;
+  std::queue<std::string> m_controllersToInstall;
+  std::vector<std::future<void>> m_installTasks;
+  std::mutex m_controllerInstallMutex;
 };
 } // namespace PERIPHERALS

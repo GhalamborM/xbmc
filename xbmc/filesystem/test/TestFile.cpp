@@ -6,13 +6,56 @@
  *  See LICENSES/README.md for more information.
  */
 
+#include "URL.h"
 #include "filesystem/File.h"
 #include "test/TestUtils.h"
 
 #include <errno.h>
 #include <string>
+#include <string_view>
 
 #include <gtest/gtest.h>
+
+#ifdef TARGET_POSIX
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
+
+TEST(TestFile, OpenExplicitNativeColonFilename)
+{
+  struct ScopedDirectory
+  {
+    const std::filesystem::path previous{std::filesystem::current_path()};
+    std::filesystem::path temporary;
+    ~ScopedDirectory()
+    {
+      std::filesystem::current_path(previous);
+      if (!temporary.empty())
+      {
+        std::filesystem::remove(temporary / "notes:2026");
+        std::filesystem::remove(temporary);
+      }
+    }
+  } directory;
+  std::string path = (std::filesystem::temp_directory_path() / "kodi-native-XXXXXX").string();
+  ASSERT_NE(nullptr, mkdtemp(path.data()));
+  directory.temporary = path;
+  std::filesystem::current_path(directory.temporary);
+  {
+    std::ofstream output("notes:2026");
+    output << "native";
+    ASSERT_TRUE(output.good());
+  }
+
+  CURL native;
+  native.ParseNativePath("notes:2026");
+  XFILE::CFile file;
+  ASSERT_TRUE(file.Open(native, XFILE::READ_NO_CACHE));
+  char contents[6]{};
+  ASSERT_EQ(sizeof(contents), file.Read(contents, sizeof(contents)));
+  EXPECT_EQ("native", std::string(contents, sizeof(contents)));
+}
+#endif
 
 TEST(TestFile, Read)
 {
@@ -146,19 +189,20 @@ TEST(TestFile, Delete)
   EXPECT_TRUE(XFILE::CFile::Exists(path));
   EXPECT_TRUE(XFILE::CFile::Delete(path));
   EXPECT_FALSE(XFILE::CFile::Exists(path));
+  EXPECT_FALSE(XBMC_DELETETEMPFILE(file));
 }
 
 TEST(TestFile, Rename)
 {
-  XFILE::CFile *file;
+  XFILE::CFile *file1, *file2;
   std::string path1, path2;
 
-  ASSERT_NE(nullptr, file = XBMC_CREATETEMPFILE(""));
-  file->Close();
-  path1 = XBMC_TEMPFILEPATH(file);
-  ASSERT_NE(nullptr, file = XBMC_CREATETEMPFILE(""));
-  file->Close();
-  path2 = XBMC_TEMPFILEPATH(file);
+  ASSERT_NE(nullptr, file1 = XBMC_CREATETEMPFILE(""));
+  file1->Close();
+  path1 = XBMC_TEMPFILEPATH(file1);
+  ASSERT_NE(nullptr, file2 = XBMC_CREATETEMPFILE(""));
+  file2->Close();
+  path2 = XBMC_TEMPFILEPATH(file2);
   EXPECT_TRUE(XFILE::CFile::Delete(path1));
   EXPECT_FALSE(XFILE::CFile::Exists(path1));
   EXPECT_TRUE(XFILE::CFile::Exists(path2));
@@ -166,19 +210,21 @@ TEST(TestFile, Rename)
   EXPECT_TRUE(XFILE::CFile::Exists(path1));
   EXPECT_FALSE(XFILE::CFile::Exists(path2));
   EXPECT_TRUE(XFILE::CFile::Delete(path1));
+  EXPECT_FALSE(XBMC_DELETETEMPFILE(file1));
+  EXPECT_FALSE(XBMC_DELETETEMPFILE(file2));
 }
 
 TEST(TestFile, Copy)
 {
-  XFILE::CFile *file;
+  XFILE::CFile *file1, *file2;
   std::string path1, path2;
 
-  ASSERT_NE(nullptr, file = XBMC_CREATETEMPFILE(""));
-  file->Close();
-  path1 = XBMC_TEMPFILEPATH(file);
-  ASSERT_NE(nullptr, file = XBMC_CREATETEMPFILE(""));
-  file->Close();
-  path2 = XBMC_TEMPFILEPATH(file);
+  ASSERT_NE(nullptr, file1 = XBMC_CREATETEMPFILE(""));
+  file1->Close();
+  path1 = XBMC_TEMPFILEPATH(file1);
+  ASSERT_NE(nullptr, file2 = XBMC_CREATETEMPFILE(""));
+  file2->Close();
+  path2 = XBMC_TEMPFILEPATH(file2);
   EXPECT_TRUE(XFILE::CFile::Delete(path1));
   EXPECT_FALSE(XFILE::CFile::Exists(path1));
   EXPECT_TRUE(XFILE::CFile::Exists(path2));
@@ -187,6 +233,8 @@ TEST(TestFile, Copy)
   EXPECT_TRUE(XFILE::CFile::Exists(path2));
   EXPECT_TRUE(XFILE::CFile::Delete(path1));
   EXPECT_TRUE(XFILE::CFile::Delete(path2));
+  EXPECT_FALSE(XBMC_DELETETEMPFILE(file1));
+  EXPECT_FALSE(XBMC_DELETETEMPFILE(file2));
 }
 
 TEST(TestFile, SetHidden)
@@ -204,4 +252,73 @@ TEST(TestFile, SetHidden)
 #endif
   EXPECT_TRUE(XFILE::CFile::Exists(XBMC_TEMPFILEPATH(file)));
   EXPECT_TRUE(XBMC_DELETETEMPFILE(file));
+}
+
+TEST(TestFile, ReadLineRaw)
+{
+  // Note: The newline char on Windows is "\r", not "\r\n"!
+  // For Platform compatibility we therefor only match the prefix.
+
+  const auto newLineLen = CXBMCTestUtils::Instance().getNewLineCharacters().length();
+
+  XFILE::CFile file;
+  ASSERT_TRUE(file.Open(XBMC_REF_FILE_PATH("/xbmc/filesystem/test/reffile.txt")));
+  char buffer[1024];
+  // Read first line full
+  XFILE::CFile::ReadLineResult result = file.ReadLine(buffer, sizeof(buffer));
+  ASSERT_EQ(result.code, XFILE::CFile::ReadLineResult::OK);
+  ASSERT_EQ(result.length, 6);
+  ASSERT_TRUE(std::string_view(buffer).starts_with("About"));
+  // Read second line in parts
+  result = file.ReadLine(buffer, 2);
+  ASSERT_EQ(result.code, XFILE::CFile::ReadLineResult::TRUNCATED);
+  ASSERT_EQ(result.length, 1);
+  ASSERT_STREQ(buffer, "-");
+  result = file.ReadLine(buffer, 3);
+  ASSERT_EQ(result.code, XFILE::CFile::ReadLineResult::TRUNCATED);
+  ASSERT_EQ(result.length, 2);
+  ASSERT_STREQ(buffer, "--");
+  result = file.ReadLine(buffer, 3 + newLineLen);
+  ASSERT_EQ(result.code, XFILE::CFile::ReadLineResult::OK);
+  ASSERT_EQ(result.length, 3);
+  ASSERT_TRUE(std::string_view(buffer).starts_with("--"));
+  // Read third line until line break
+  result = file.ReadLine(buffer, 78);
+  ASSERT_EQ(result.code, XFILE::CFile::ReadLineResult::TRUNCATED);
+  ASSERT_EQ(result.length, 77);
+  // Read remaining line break
+  result = file.ReadLine(buffer, 1 + newLineLen);
+  ASSERT_EQ(result.code, XFILE::CFile::ReadLineResult::OK);
+  ASSERT_EQ(result.length, 1);
+  ASSERT_TRUE(std::string_view(buffer) == "\n" || std::string_view(buffer) == "\r");
+  // Read remaining 22 lines
+  for (int i = 0; i < 22; ++i)
+  {
+    result = file.ReadLine(buffer, sizeof(buffer));
+    ASSERT_EQ(result.code, XFILE::CFile::ReadLineResult::OK);
+  }
+  // Read after EOF
+  result = file.ReadLine(buffer, sizeof(buffer));
+  ASSERT_EQ(result.code, XFILE::CFile::ReadLineResult::FAILURE);
+}
+
+TEST(TestFile, ReadLine)
+{
+  // Note: The newline char on Windows is "\r", not "\r\n"!
+  // For Platform compatibility we therefor only match the prefix.
+
+  XFILE::CFile file;
+  ASSERT_TRUE(file.Open(XBMC_REF_FILE_PATH("/xbmc/filesystem/test/reffile.txt")));
+  std::string line;
+  ASSERT_TRUE(file.ReadLine(line));
+  ASSERT_TRUE(line.starts_with("About"));
+  ASSERT_TRUE(file.ReadLine(line));
+  ASSERT_TRUE(line.starts_with("-----"));
+  // Read remaining 23 lines
+  for (int i = 0; i < 23; ++i)
+  {
+    ASSERT_TRUE(file.ReadLine(line));
+  }
+  // Read after EOF
+  ASSERT_FALSE(file.ReadLine(line));
 }

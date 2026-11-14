@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2014-2020 Team Kodi
+ *  Copyright (C) 2014-2025 Team Kodi
  *  This file is part of Kodi - https://kodi.tv
  *
  *  SPDX-License-Identifier: GPL-2.0-or-later
@@ -12,12 +12,7 @@
 #include "../addon_base.h"
 
 #include <stddef.h> /* size_t */
-
-//==============================================================================
-/// @ingroup cpp_kodi_addon_game_Defs
-/// @brief **Port ID used when topology is unknown**
-#define DEFAULT_PORT_ID "1"
-//------------------------------------------------------------------------------
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C"
@@ -28,50 +23,53 @@ extern "C"
   /// @ingroup cpp_kodi_addon_game_Defs
   /// @brief **Game add-on error codes**
   ///
-  /// Used as return values on most Game related functions.
+  /// Used as return values from most game-related functions.
   ///
   typedef enum GAME_ERROR
   {
-    /// @brief no error occurred
+    /// @brief No error occurred
     GAME_ERROR_NO_ERROR,
 
-    /// @brief an unknown error occurred
+    /// @brief An unknown error occurred
     GAME_ERROR_UNKNOWN,
 
-    /// @brief the method that the frontend called is not implemented
+    /// @brief The method called by the frontend is not implemented
     GAME_ERROR_NOT_IMPLEMENTED,
 
-    /// @brief the command was rejected by the game client
+    /// @brief The command was rejected by the game client
     GAME_ERROR_REJECTED,
 
-    /// @brief the parameters of the method that was called are invalid for this operation
+    /// @brief The parameters of the called method are invalid for this operation
     GAME_ERROR_INVALID_PARAMETERS,
 
-    /// @brief the command failed
+    /// @brief The command failed
     GAME_ERROR_FAILED,
 
-    /// @brief no game is loaded
+    /// @brief No game is loaded
     GAME_ERROR_NOT_LOADED,
 
-    /// @brief game requires restricted resources
+    /// @brief Game requires restricted resources
     GAME_ERROR_RESTRICTED,
+
+    /// @brief The game client couldn't find files it needs, such as BIOS files
+    GAME_ERROR_MISSING_FILES,
   } GAME_ERROR;
   //----------------------------------------------------------------------------
 
   //--==----==----==----==----==----==----==----==----==----==----==----==----==--
   /// @defgroup cpp_kodi_addon_game_Defs_AudioStream 1. Audio stream
   /// @ingroup cpp_kodi_addon_game_Defs
-  /// @brief **The for Audio stream used data system**
+  /// @brief **Audio stream data system**
   ///
-  /// Used to give Addon currently used audio stream configuration on Kodi and
-  /// arrays to give related data to Kodi on callbacks.
+  /// Used to provide the add-on with the current audio stream configuration
+  /// from Kodi and arrays to pass related data back to Kodi during callbacks.
   ///
   ///@{
 
   //============================================================================
   /// @brief **Stream Format**
   ///
-  /// From Kodi requested specified audio sample format.
+  /// Audio sample format requested by Kodi.
   ///
   typedef enum GAME_PCM_FORMAT
   {
@@ -101,7 +99,7 @@ extern "C"
     /// @brief Channel front center
     GAME_CH_FC,
 
-    /// @brief Channel Low Frequency Effects / Subwoofer
+    /// @brief Channel low frequency effects / subwoofer
     GAME_CH_LFE,
 
     /// @brief Channel back left
@@ -146,7 +144,7 @@ extern "C"
     /// @brief Channel top back center
     GAME_CH_TBC,
 
-    /// @brief Channel bacl left over center
+    /// @brief Channel back left over center
     GAME_CH_BLOC,
 
     /// @brief Channel back right over center
@@ -157,7 +155,7 @@ extern "C"
   //============================================================================
   /// @brief **Game audio stream properties**
   ///
-  /// Used by Kodi to pass the currently required audio stream settings to the addon
+  /// Used by Kodi to pass the currently required audio stream settings to the add-on
   ///
   typedef struct game_stream_audio_properties
   {
@@ -173,10 +171,10 @@ extern "C"
   ///
   typedef struct game_stream_audio_packet
   {
-    /// @brief Pointer for audio stream data given to Kodi
+    /// @brief Pointer to the audio stream data given to Kodi
     const uint8_t* data;
 
-    /// @brief Size of data array
+    /// @brief Size of the data array
     size_t size;
   } ATTR_PACKED game_stream_audio_packet;
   //----------------------------------------------------------------------------
@@ -186,17 +184,17 @@ extern "C"
   //--==----==----==----==----==----==----==----==----==----==----==----==----==--
   /// @defgroup cpp_kodi_addon_game_Defs_VideoStream 2. Video stream
   /// @ingroup cpp_kodi_addon_game_Defs
-  /// @brief **The for Video stream used data system**
+  /// @brief **Video stream data system**
   ///
-  /// Used to give Addon currently used video stream configuration on Kodi and
-  /// arrays to give related data to Kodi on callbacks.
+  /// Used to provide the add-on with the current video stream configuration
+  /// from Kodi and arrays to pass related data back to Kodi during callbacks.
   ///
   ///@{
 
   //============================================================================
   /// @brief **Pixel format**
   ///
-  /// From Kodi requested specified video RGB color model format.
+  /// Video RGB color model format requested by Kodi.
   ///
   typedef enum GAME_PIXEL_FORMAT
   {
@@ -214,22 +212,22 @@ extern "C"
   //----------------------------------------------------------------------------
 
   //============================================================================
-  /// @brief **Video rotation position**
+  /// @brief **Video rotation orientation**
   ///
-  /// To define position how video becomes shown.
+  /// Defines how the video is rotated.
   ///
   typedef enum GAME_VIDEO_ROTATION
   {
-    /// @brief 0° and Without rotation
+    /// @brief 0° without rotation
     GAME_VIDEO_ROTATION_0,
 
-    /// @brief rotate 90° counterclockwise
+    /// @brief Rotate 90° counterclockwise
     GAME_VIDEO_ROTATION_90_CCW,
 
-    /// @brief rotate 180° counterclockwise
+    /// @brief Rotate 180° counterclockwise
     GAME_VIDEO_ROTATION_180_CCW,
 
-    /// @brief rotate 270° counterclockwise
+    /// @brief Rotate 270° counterclockwise
     GAME_VIDEO_ROTATION_270_CCW,
   } GAME_VIDEO_ROTATION;
   //----------------------------------------------------------------------------
@@ -237,29 +235,31 @@ extern "C"
   //============================================================================
   /// @brief **Game video stream properties**
   ///
-  /// Used by Kodi to pass the currently required video stream settings to the addon
+  /// Used by Kodi to pass the currently required video stream settings to the
+  /// add-on.
   ///
   typedef struct game_stream_video_properties
   {
     /// @brief The stream's pixel format
     GAME_PIXEL_FORMAT format;
 
-    /// @brief The nominal used width
+    /// @brief The nominal width, in pixels
     unsigned int nominal_width;
 
-    /// @brief The nominal used height
+    /// @brief The nominal height, in pixels
     unsigned int nominal_height;
 
-    /// @brief The maximal used width
+    /// @brief The nominal display aspect ratio (DAR) used to show the video frame
+    ///
+    /// An aspect ratio of 0.0 indicates square pixels, i.e. a DAR of W/H.
+    ///
+    float nominal_display_aspect_ratio;
+
+    /// @brief The maximum width, in pixels
     unsigned int max_width;
 
-    /// @brief The maximal used height
+    /// @brief The maximum height, in pixels
     unsigned int max_height;
-
-    /// @brief On video stream used aspect ration
-    ///
-    /// @note If aspect_ratio is <= 0.0, an aspect ratio of nominal_width / nominal_height is assumed
-    float aspect_ratio;
   } ATTR_PACKED game_stream_video_properties;
   //----------------------------------------------------------------------------
 
@@ -270,19 +270,25 @@ extern "C"
   ///
   typedef struct game_stream_video_packet
   {
-    /// @brief Video height
+    /// @brief Video width, in pixels
     unsigned int width;
 
-    /// @brief Video width
+    /// @brief Video height, in pixels
     unsigned int height;
 
-    /// @brief Width @ref GAME_VIDEO_ROTATION defined rotation angle.
+    /// @brief Display aspect ratio (DAR) to use when showing the video frame
+    ///
+    /// An aspect ratio of 0.0 indicates square pixels, i.e. a DAR of W/H.
+    ///
+    float display_aspect_ratio;
+
+    /// @brief Video rotation angle defined by @ref GAME_VIDEO_ROTATION
     GAME_VIDEO_ROTATION rotation;
 
-    /// @brief Pointer for video stream data given to Kodi
+    /// @brief Pointer to the video stream data given to Kodi
     const uint8_t* data;
 
-    /// @brief Size of data array
+    /// @brief Size of the data array
     size_t size;
   } ATTR_PACKED game_stream_video_packet;
   //----------------------------------------------------------------------------
@@ -301,16 +307,16 @@ extern "C"
   ///
   typedef enum GAME_HW_CONTEXT_TYPE
   {
-    /// @brief None context
+    /// @brief No context
     GAME_HW_CONTEXT_NONE,
 
-    /// @brief OpenGL 2.x. Driver can choose to use latest compatibility context
+    /// @brief OpenGL 2.x. The driver can choose to use the latest compatibility context
     GAME_HW_CONTEXT_OPENGL,
 
     /// @brief OpenGL ES 2.0
     GAME_HW_CONTEXT_OPENGLES2,
 
-    /// @brief Modern desktop core GL context. Use major/minor fields to set GL version
+    /// @brief Modern desktop core GL context. Use the major and minor fields to set the GL version
     GAME_HW_CONTEXT_OPENGL_CORE,
 
     /// @brief OpenGL ES 3.0
@@ -324,31 +330,35 @@ extern "C"
   } GAME_HW_CONTEXT_TYPE;
   //----------------------------------------------------------------------------
 
-  //============================================================================
-  /// @brief **Hardware framebuffer properties**
+  //==============================================================================
+  /// @brief **Hardware rendering properties**
   ///
-  typedef struct game_stream_hw_framebuffer_properties
+  /// These properties are needed early on, so instead of passing them when the
+  /// stream is opened, they are passed in EnableHardwareRendering(). As a
+  /// result, the struct passed to OpenStream() is empty.
+  ///
+  typedef struct game_hw_rendering_properties
   {
-    /// @brief The API to use.
+    /// @brief The API to use
     ///
     GAME_HW_CONTEXT_TYPE context_type;
 
-    /// @brief Set if render buffers should have depth component attached.
+    /// @brief Set to true if render buffers should have a depth component attached
     ///
     /// @todo: Obsolete
     ///
     bool depth;
 
-    /// @brief Set if stencil buffers should be attached.
+    /// @brief Set to true if stencil buffers should be attached
     ///
     /// If depth and stencil are true, a packed 24/8 buffer will be added.
     /// Only attaching stencil is invalid and will be ignored.
     ///
-    /// @todo: Obsolete.
+    /// @todo: Obsolete
     ///
     bool stencil;
 
-    /// @brief Use conventional bottom-left origin convention.
+    /// @brief Use the conventional bottom-left origin
     ///
     /// If false, standard top-left origin semantics are used.
     ///
@@ -356,27 +366,60 @@ extern "C"
     ///
     bool bottom_left_origin;
 
-    /// @brief Major version number for core GL context or GLES 3.1+.
+    /// @brief Major version number for the core GL context or GLES 3.1+
     unsigned int version_major;
 
-    /// @brief Minor version number for core GL context or GLES 3.1+.
+    /// @brief Minor version number for the core GL context or GLES 3.1+
     unsigned int version_minor;
 
-    /// @brief If this is true, the frontend will go very far to avoid resetting context
-    /// in scenarios like toggling fullscreen, etc.
+    /// @brief If true, the frontend will go to great lengths to avoid
+    /// resetting the context in scenarios like toggling fullscreen, etc.
     ///
     /// @todo: Obsolete? Maybe frontend should just always assume this...
     ///
-    /// The reset callback might still be called in extreme situations such as if
-    /// the context is lost beyond recovery.
+    /// The reset callback might still be called in extreme situations such as
+    /// if the context is lost beyond recovery.
     ///
-    /// For optimal stability, set this to false, and allow context to be reset at
-    /// any time.
+    /// For optimal stability, set this to false, and allow context to be reset
+    /// at any time.
     ///
     bool cache_context;
 
-    /// @brief Creates a debug context.
+    /// @brief Creates a debug context
     bool debug_context;
+
+  } ATTR_PACKED game_hw_rendering_properties;
+  //------------------------------------------------------------------------------
+
+  //==============================================================================
+  /// @brief **Hardware framebuffer properties**
+  ///
+  /// The remaining hardware rendering properties are passed earlier, via
+  /// EnableHardwareRendering(). Display geometry is carried here, because it
+  /// comes from the client's system AV info, which is not available that early.
+  ///
+  typedef struct game_stream_hw_framebuffer_properties
+  {
+    /// @brief The largest frame width the client will render, in pixels
+    ///
+    /// The frontend allocates its framebuffer at this size, so the client can
+    /// render any frame into it without it being reallocated mid-game.
+    ///
+    /// The framebuffer must exist before the stream is opened, because clients
+    /// typically ask for it from inside HwContextReset(), which the frontend
+    /// invokes as soon as the stream is open.
+    ///
+    unsigned int max_width;
+
+    /// @brief The largest frame height the client will render, in pixels
+    unsigned int max_height;
+
+    /// @brief The nominal display aspect ratio (DAR) used to show the video frame
+    ///
+    /// An aspect ratio of 0.0 indicates square pixels, i.e. a DAR of W/H.
+    ///
+    float nominal_display_aspect_ratio;
+
   } ATTR_PACKED game_stream_hw_framebuffer_properties;
   //----------------------------------------------------------------------------
 
@@ -397,6 +440,23 @@ extern "C"
   {
     /// @brief
     uintptr_t framebuffer;
+
+    /// @brief Size of the image the client just drew
+    ///
+    /// The framebuffer is allocated at the largest size the client said it
+    /// would ever need, and a frame usually fills only part of it. Without
+    /// these the rest of the framebuffer is shown along with the image.
+    unsigned int width;
+    unsigned int height;
+
+    /// @brief Display aspect ratio (DAR) to use when showing the video frame
+    ///
+    /// An aspect ratio of 0.0 indicates square pixels, i.e. a DAR of W/H.
+    ///
+    float display_aspect_ratio;
+
+    /// @brief Video rotation angle defined by @ref GAME_VIDEO_ROTATION
+    GAME_VIDEO_ROTATION rotation;
   } ATTR_PACKED game_stream_hw_framebuffer_packet;
   //----------------------------------------------------------------------------
 
@@ -416,15 +476,15 @@ extern "C"
   ///@{
 
   //============================================================================
-  /// @brief **Game video stream properties**
+  /// @brief **Game software framebuffer stream properties**
   ///
-  /// Used by Kodi to pass the currently required video stream settings to the addon
+  /// Used by Kodi to pass the currently required video stream settings to the add-on
   ///
   typedef game_stream_video_properties game_stream_sw_framebuffer_properties;
   //----------------------------------------------------------------------------
 
   //============================================================================
-  /// @brief **Hardware framebuffer type**
+  /// @brief **Software framebuffer type**
   ///
   typedef struct game_stream_sw_framebuffer_buffer
   {
@@ -435,7 +495,7 @@ extern "C"
   //----------------------------------------------------------------------------
 
   //============================================================================
-  /// @brief **Video stream packet**
+  /// @brief **Software framebuffer packet**
   ///
   /// This packet contains video stream data passed to Kodi.
   ///
@@ -481,20 +541,21 @@ extern "C"
   ///
   typedef struct game_stream_properties
   {
-    /// @brief
+    /// @brief The stream type
     GAME_STREAM_TYPE type;
+
     union
     {
-      /// @brief
+      /// @brief The audio stream properties
       game_stream_audio_properties audio;
 
-      /// @brief
+      /// @brief The video stream properties
       game_stream_video_properties video;
 
-      /// @brief
+      /// @brief The hardware framebuffer properties
       game_stream_hw_framebuffer_properties hw_framebuffer;
 
-      /// @brief
+      /// @brief The software framebuffer properties
       game_stream_sw_framebuffer_properties sw_framebuffer;
     };
   } ATTR_PACKED game_stream_properties;
@@ -505,14 +566,15 @@ extern "C"
   ///
   typedef struct game_stream_buffer
   {
-    /// @brief
+    /// @brief The stream type
     GAME_STREAM_TYPE type;
+
     union
     {
-      /// @brief
+      /// @brief The audio stream packet
       game_stream_hw_framebuffer_buffer hw_framebuffer;
 
-      /// @brief
+      /// @brief The video stream packet
       game_stream_sw_framebuffer_buffer sw_framebuffer;
     };
   } ATTR_PACKED game_stream_buffer;
@@ -527,20 +589,21 @@ extern "C"
   ///
   typedef struct game_stream_packet
   {
-    /// @brief
+    /// @brief The stream type
     GAME_STREAM_TYPE type;
+
     union
     {
-      /// @brief
+      /// @brief The audio stream packet
       game_stream_audio_packet audio;
 
-      /// @brief
+      /// @brief The video stream packet
       game_stream_video_packet video;
 
-      /// @brief
+      /// @brief The hardware framebuffer packet
       game_stream_hw_framebuffer_packet hw_framebuffer;
 
-      /// @brief
+      /// @brief The software framebuffer packet
       game_stream_sw_framebuffer_packet sw_framebuffer;
     };
   } ATTR_PACKED game_stream_packet;
@@ -556,7 +619,7 @@ extern "C"
   ///@{
 
   //============================================================================
-  /// @brief **Game reguin definition**
+  /// @brief **Game region definition**
   ///
   /// Returned from game_get_region()
   typedef enum GAME_REGION
@@ -695,70 +758,126 @@ extern "C"
   /// @ingroup cpp_kodi_addon_game_Defs
   /// @brief **Input types**
   ///
+  /// Input consists of two categories: Input events and input topology.
+  ///
+  /// The events are the changes in that state. For example, a button press is
+  /// an event.
+  ///
+  /// The topology is the tree that describes the entire hardware state of the
+  /// virtual game console. This includes all port connections and physical
+  /// properties of the devices.
+  ///
+  /// Ports can accept multiple devices and devices can have multiple ports, so
+  /// the topology of possible configurations is a tree structure of alternating
+  /// port and device nodes. The root of the controller tree is `/`.
+  ///
+  /// The port address combined with the controller ID identifies the controller
+  /// by its path in the controller tree. For example, a controller attached to
+  /// port `1` could be `/1/game.controller.default`.
+  ///
+  /// The keyboard and mouse are automatically assigned a port address and the
+  /// "id" parameter in the game add-on's topology.xml is ignored. The keyboard
+  /// is `/keyboard` and the mouse is `/mouse`.
+  ///
   ///@{
 
+  //==============================================================================
+  /// @brief **Root address of the controller tree
+#define ROOT_PORT_ADDRESS "/"
+  //------------------------------------------------------------------------------
+
+  //==============================================================================
+  /// @brief **Port ID used when topology is unknown**
+#define DEFAULT_PORT_ID "1"
+  //------------------------------------------------------------------------------
+
+  //==============================================================================
+  /// @brief **Port ID used for the keyboard input device
+#define KEYBOARD_PORT_ID "keyboard"
+  //------------------------------------------------------------------------------
+
+  //==============================================================================
+  /// @brief **Port ID used for the mouse input device
+#define MOUSE_PORT_ID "mouse"
+  //------------------------------------------------------------------------------
+
+  //==============================================================================
+  /// @brief **Port address used when topology is unknown**
+#define DEFAULT_PORT_ADDRESS "/1"
+  //------------------------------------------------------------------------------
+
+  //==============================================================================
+  /// @brief **Port address used for the keyboard input device
+#define KEYBOARD_PORT_ADDRESS "/keyboard"
+  //------------------------------------------------------------------------------
+
+  //==============================================================================
+  /// @brief **Port address used for the mouse input device
+#define MOUSE_PORT_ADDRESS "/mouse"
+  //------------------------------------------------------------------------------
+
   //============================================================================
-  /// @brief
+  /// @brief Type of input event
   typedef enum GAME_INPUT_EVENT_SOURCE
   {
-    /// @brief
+    /// @brief Digital button press or release
     GAME_INPUT_EVENT_DIGITAL_BUTTON,
 
-    /// @brief
+    /// @brief Analog button motion
     GAME_INPUT_EVENT_ANALOG_BUTTON,
 
-    /// @brief
+    /// @brief Axis motion
     GAME_INPUT_EVENT_AXIS,
 
-    /// @brief
+    /// @brief Analog stick motion
     GAME_INPUT_EVENT_ANALOG_STICK,
 
-    /// @brief
+    /// @brief Accelerometer motion
     GAME_INPUT_EVENT_ACCELEROMETER,
 
-    /// @brief
+    /// @brief Key press or release
     GAME_INPUT_EVENT_KEY,
 
-    /// @brief
+    /// @brief Relative pointer motion
     GAME_INPUT_EVENT_RELATIVE_POINTER,
 
-    /// @brief
+    /// @brief Absolute pointer motion
     GAME_INPUT_EVENT_ABSOLUTE_POINTER,
 
-    /// @brief
+    /// @brief Motor vibration
     GAME_INPUT_EVENT_MOTOR,
   } GAME_INPUT_EVENT_SOURCE;
   //----------------------------------------------------------------------------
 
   //============================================================================
-  /// @brief
+  /// @brief A modifier key pressed to give another key a special meaning
   typedef enum GAME_KEY_MOD
   {
-    /// @brief
+    /// @brief No modifier key
     GAME_KEY_MOD_NONE = 0x0000,
 
-    /// @brief
+    /// @brief Shift key
     GAME_KEY_MOD_SHIFT = 0x0001,
 
-    /// @brief
+    /// @brief Control key
     GAME_KEY_MOD_CTRL = 0x0002,
 
-    /// @brief
+    /// @brief Alt key
     GAME_KEY_MOD_ALT = 0x0004,
 
-    /// @brief
+    /// @brief Meta key
     GAME_KEY_MOD_META = 0x0008,
 
-    /// @brief
+    /// @brief Windows key
     GAME_KEY_MOD_SUPER = 0x0010,
 
-    /// @brief
+    /// @brief Num Lock key
     GAME_KEY_MOD_NUMLOCK = 0x0100,
 
-    /// @brief
+    /// @brief Caps Lock key
     GAME_KEY_MOD_CAPSLOCK = 0x0200,
 
-    /// @brief
+    /// @brief Scroll Lock key
     GAME_KEY_MOD_SCROLLOCK = 0x0400,
   } GAME_KEY_MOD;
   //----------------------------------------------------------------------------
@@ -781,11 +900,10 @@ extern "C"
   } GAME_PORT_TYPE;
   //----------------------------------------------------------------------------
 
-  /*! @cond PRIVATE */
   /*!
     * @brief "C" Game add-on controller layout.
     *
-    * Structure used to interface in "C" between Kodi and Addon.
+    * Structure used to interface in "C" between Kodi and the add-on.
     *
     * See @ref AddonGameControllerLayout for description of values.
     */
@@ -810,7 +928,6 @@ extern "C"
     char** motors;
     unsigned int motor_count;
   } ATTR_PACKED game_controller_layout;
-  /*! @endcond */
 
   struct game_input_port;
 
@@ -818,16 +935,16 @@ extern "C"
   /// @brief Device that can provide input
   typedef struct game_input_device
   {
-    /// @brief ID used in the Kodi controller API
+    /// @brief ID used in the Kodi controller API, e.g. `game.controller.default`
     const char* controller_id;
 
-    /// @brief
+    /// @brief The address of the port that the device is connected to
     const char* port_address;
 
-    /// @brief
+    /// @brief The list of ports that the device can be connected to
     struct game_input_port* available_ports;
 
-    /// @brief
+    /// @brief The number of ports in the available ports list
     unsigned int port_count;
   } ATTR_PACKED game_input_device;
   //----------------------------------------------------------------------------
@@ -835,13 +952,9 @@ extern "C"
   //============================================================================
   /// @brief Port that can provide input
   ///
-  /// Ports can accept multiple devices and devices can have multiple ports, so
-  /// the topology of possible configurations is a tree structure of alternating
-  /// port and device nodes.
-  ///
   typedef struct game_input_port
   {
-    /// @brief
+    /// @brief The type of port
     GAME_PORT_TYPE type;
 
     /// @brief Required for GAME_PORT_CONTROLLER type
@@ -854,10 +967,16 @@ extern "C"
     ///
     bool force_connected;
 
-    /// @brief
+    /// @brief Flag to auto-connect this port when a game session begins
+    ///
+    /// Set to false to start this port disconnected.
+    ///
+    bool autoconnect;
+
+    /// @brief The list of devices that can be connected to the port
     game_input_device* accepted_devices;
 
-    /// @brief
+    /// @brief The number of devices in the accepted devices list
     unsigned int device_count;
   } ATTR_PACKED game_input_port;
   //----------------------------------------------------------------------------
@@ -883,64 +1002,68 @@ extern "C"
   //----------------------------------------------------------------------------
 
   //============================================================================
-  /// @brief
+  /// @brief A digital button event, such as a button press or release
   typedef struct game_digital_button_event
   {
-    /// @brief
+    /// @brief True if the button is pressed, false if it is released
     bool pressed;
   } ATTR_PACKED game_digital_button_event;
   //----------------------------------------------------------------------------
 
   //============================================================================
-  /// @brief
+  /// @brief An analog button event, such as a trigger press or release
   typedef struct game_analog_button_event
   {
-    /// @brief
+    /// @brief The magnitude of the button press, from 0.0 to 1.0
     float magnitude;
   } ATTR_PACKED game_analog_button_event;
   //----------------------------------------------------------------------------
 
   //============================================================================
-  /// @brief
+  /// @brief An axis event, such as a joystick or accelerometer
   typedef struct game_axis_event
   {
-    /// @brief
+    /// @brief The position of the axis, from -1.0 to 1.0
     float position;
   } ATTR_PACKED game_axis_event;
   //----------------------------------------------------------------------------
 
   //============================================================================
-  /// @brief
+  /// @brief An analog stick event, such as a joystick's motion
+  ///
+  /// Uses a right-handed coordinate system where positive X is right
+  /// and positive Y is up.
+  ///
   typedef struct game_analog_stick_event
   {
-    /// @brief
+    /// @brief The position of the stick along the X axis, from -1.0 to 1.0
     float x;
 
-    /// @brief
+    /// @brief The position of the stick along the Y axis, from -1.0 to 1.0
     float y;
   } ATTR_PACKED game_analog_stick_event;
   //----------------------------------------------------------------------------
 
   //============================================================================
-  /// @brief
+  /// @brief An accelerometer event
   typedef struct game_accelerometer_event
   {
-    /// @brief
+    /// @brief The accelerometer X axis, from -1.0 to 1.0
     float x;
 
-    /// @brief
+    /// @brief The accelerometer Y axis, from -1.0 to 1.0
     float y;
 
-    /// @brief
+    /// @brief The accelerometer Z axis, from -1.0 to 1.0
     float z;
   } ATTR_PACKED game_accelerometer_event;
   //----------------------------------------------------------------------------
 
   //============================================================================
-  /// @brief
+  /// @brief A key event, such as a key press or release
   typedef struct game_key_event
   {
-    /// @brief
+    /// @brief True if the key is pressed, false if it is released
     bool pressed;
 
     /// @brief If the keypress generates a printing character
@@ -950,92 +1073,93 @@ extern "C"
     /// is zero.
     uint32_t unicode;
 
-    /// @brief
+    /// @brief Modifier keys pressed with the event key
     GAME_KEY_MOD modifiers;
   } ATTR_PACKED game_key_event;
   //----------------------------------------------------------------------------
 
   //============================================================================
-  /// @brief
+  /// @brief A relative pointer event, such as a mouse motion
   typedef struct game_rel_pointer_event
   {
-    /// @brief
+    /// @brief The relative X position of the pointer
     int x;
 
-    /// @brief
+    /// @brief The relative Y position of the pointer
     int y;
   } ATTR_PACKED game_rel_pointer_event;
   //----------------------------------------------------------------------------
 
   //============================================================================
-  /// @brief
+  /// @brief An absolute pointer event, such as a touchscreen or tablet motion
   typedef struct game_abs_pointer_event
   {
-    /// @brief
+    /// @brief True if the pointer is pressed, false if it is released
     bool pressed;
 
-    /// @brief
+    /// @brief The absolute X position of the pointer
     float x;
 
-    /// @brief
+    /// @brief The absolute Y position of the pointer
     float y;
   } ATTR_PACKED game_abs_pointer_event;
   //----------------------------------------------------------------------------
 
   //============================================================================
-  /// @brief
+  /// @brief A motor vibration event
   typedef struct game_motor_event
   {
-    /// @brief
+    /// @brief The magnitude of the vibration, from 0.0 to 1.0
     float magnitude;
   } ATTR_PACKED game_motor_event;
   //----------------------------------------------------------------------------
 
   //============================================================================
-  /// @brief
+  /// @brief An input event
   typedef struct game_input_event
   {
-    /// @brief
+    /// @brief The type of input event
     GAME_INPUT_EVENT_SOURCE type;
 
-    /// @brief
+    /// @brief The ID of the controller that generated the event
     const char* controller_id;
 
-    /// @brief
+    /// @brief The type of port that the controller is connected to
     GAME_PORT_TYPE port_type;
 
-    /// @brief
+    /// @brief The address of the port that the controller is connected to
     const char* port_address;
 
-    /// @brief
+    /// @brief The name of the feature that generated the event
     const char* feature_name;
+
     union
     {
-      /// @brief
+      /// @brief Digital button event
       struct game_digital_button_event digital_button;
 
-      /// @brief
+      /// @brief Analog button event
       struct game_analog_button_event analog_button;
 
-      /// @brief
+      /// @brief Axis event
       struct game_axis_event axis;
 
-      /// @brief
+      /// @brief Analog stick event
       struct game_analog_stick_event analog_stick;
 
-      /// @brief
+      /// @brief Accelerometer event
       struct game_accelerometer_event accelerometer;
 
-      /// @brief
+      /// @brief Key event
       struct game_key_event key;
 
-      /// @brief
+      /// @brief Relative pointer event
       struct game_rel_pointer_event rel_pointer;
 
-      /// @brief
+      /// @brief Absolute pointer event
       struct game_abs_pointer_event abs_pointer;
 
-      /// @brief
+      /// @brief Motor vibration event
       struct game_motor_event motor;
     };
   } ATTR_PACKED game_input_event;
@@ -1065,6 +1189,384 @@ extern "C"
 
   ///@}
 
+  //--==----==----==----==----==----==----==----==----==----==----==----==----==--
+  /// @defgroup cpp_kodi_addon_game_Defs_RetroAchievementsTypes 9. RetroAchievements types
+  /// @ingroup cpp_kodi_addon_game_Defs
+  /// @brief **RetroAchievements types**
+  ///
+  /// The add-on owns the RetroAchievements client and reports events to Kodi
+  /// through the `RCOn*()` callbacks of @ref AddonToKodiFuncTable_Game. Kodi is
+  /// responsible for presentation only; it performs no RetroAchievements
+  /// network I/O and holds no knowledge of the achievement runtime.
+  ///
+  /// @note All pointers handed to Kodi are owned by the add-on and are only
+  /// valid for the duration of the callback. Kodi copies everything it needs to
+  /// retain. Any `const char*` may be `NULL`, which Kodi treats as an empty
+  /// string. Any array pointer may be `NULL`, in which case its count must be
+  /// zero.
+  ///
+  ///@{
+
+  //============================================================================
+  /// @brief **Unlock state of an achievement**
+  ///
+  typedef enum GAME_RC_UNLOCK_STATE
+  {
+    /// @brief The achievement has not been earned by this player
+    GAME_RC_UNLOCK_STATE_LOCKED = 0,
+
+    /// @brief The achievement was earned outside of hardcore mode
+    GAME_RC_UNLOCK_STATE_SOFTCORE = 1,
+
+    /// @brief The achievement was earned in hardcore mode
+    GAME_RC_UNLOCK_STATE_HARDCORE = 2,
+  } GAME_RC_UNLOCK_STATE;
+  //----------------------------------------------------------------------------
+
+  //============================================================================
+  /// @brief **A single achievement belonging to the loaded game**
+  ///
+  typedef struct game_rc_achievement
+  {
+    /// @brief Unique RetroAchievements ID of the achievement
+    unsigned int id;
+
+    /// @brief Title of the achievement, or `NULL` if unknown
+    const char* title;
+
+    /// @brief Description of how the achievement is earned, or `NULL`
+    const char* description;
+
+    /// @brief URL of the unlocked (full colour) badge, or `NULL`
+    const char* badge_url;
+
+    /// @brief URL of the locked (greyscale) badge, or `NULL`
+    const char* badge_locked_url;
+
+    /// @brief Point value of the achievement
+    unsigned int points;
+
+    /// @brief Whether and how the player has earned this achievement
+    GAME_RC_UNLOCK_STATE unlock_state;
+
+    /// @brief Unix time the achievement was earned, or 0 if it was not
+    int64_t unlock_time;
+
+    /// @brief Percentage of players who earned this achievement, 0.0 if unknown
+    float rarity;
+
+    /// @brief Percentage of players who earned this in hardcore, 0.0 if unknown
+    float rarity_hardcore;
+  } ATTR_PACKED game_rc_achievement;
+  //----------------------------------------------------------------------------
+
+  //============================================================================
+  /// @brief **Payload of @ref AddonToKodiFuncTable_Game::RCOnGameLoaded**
+  ///
+  /// Sent once the add-on has identified the loaded game and resolved its
+  /// achievement set.
+  ///
+  typedef struct game_rc_game_loaded
+  {
+    /// @brief Unique RetroAchievements ID of the game
+    unsigned int game_id;
+
+    /// @brief Title of the game as known to RetroAchievements, or `NULL`
+    const char* title;
+
+    /// @brief URL of the game's icon, or `NULL`
+    const char* icon_url;
+
+    /// @brief Achievements of the game, or `NULL` if @ref achievement_count is 0
+    const game_rc_achievement* achievements;
+
+    /// @brief Number of elements in @ref achievements
+    unsigned int achievement_count;
+  } ATTR_PACKED game_rc_game_loaded;
+  //----------------------------------------------------------------------------
+
+  //============================================================================
+  /// @brief **Payload of @ref AddonToKodiFuncTable_Game::RCOnAchievementTriggered**
+  ///
+  typedef struct game_rc_achievement_triggered
+  {
+    /// @brief Unique RetroAchievements ID of the achievement
+    unsigned int id;
+
+    /// @brief Title of the achievement, or `NULL` if unknown
+    const char* title;
+
+    /// @brief Description of the achievement, or `NULL`
+    const char* description;
+
+    /// @brief URL of the unlocked badge, or `NULL`
+    const char* badge_url;
+
+    /// @brief Point value of the achievement
+    unsigned int points;
+
+    /// @brief True if the achievement was earned in hardcore mode
+    bool hardcore;
+  } ATTR_PACKED game_rc_achievement_triggered;
+  //----------------------------------------------------------------------------
+
+  //============================================================================
+  /// @brief **Payload of @ref AddonToKodiFuncTable_Game::RCOnLoginResult**
+  ///
+  typedef struct game_rc_login_result
+  {
+    /// @brief True if the player was logged in
+    bool success;
+
+    /// @brief Account name of the player, or `NULL`
+    const char* username;
+
+    /// @brief Display name of the player, or `NULL`
+    const char* display_name;
+
+    /// @brief URL of the player's avatar, or `NULL` if the add-on has none
+    const char* icon_url;
+
+    /// @brief Total points earned by the player
+    unsigned int points;
+
+    /// @brief Reason the login failed, or `NULL` if it succeeded
+    const char* error_message;
+
+    /// @brief True if the account or token was rejected, rather than the
+    /// attempt failing for some other reason
+    ///
+    /// Kodi drops the saved token only for this. A login that failed because
+    /// RetroAchievements could not be reached leaves it alone, so an outage
+    /// does not sign the player out and leave the add-on nothing to reconnect
+    /// with.
+    bool credentials_rejected;
+  } ATTR_PACKED game_rc_login_result;
+  //----------------------------------------------------------------------------
+
+  //============================================================================
+  /// @brief **Progress towards a single measured achievement**
+  ///
+  /// Only achievements whose trigger counts something ("Defeat 50 enemies")
+  /// have progress worth reporting. The add-on omits the rest, so this array
+  /// is usually much shorter than the game's achievement list.
+  ///
+  /// Sent separately from @ref game_rc_game_loaded because progress changes as
+  /// the game is played, whereas the achievement list is resolved once.
+  ///
+  typedef struct game_rc_achievement_progress
+  {
+    /// @brief Unique RetroAchievements ID of the achievement
+    unsigned int id;
+
+    /// @brief Progress towards the achievement, from 0.0 to 100.0
+    float measured_percent;
+
+    /// @brief Human-readable progress such as "45/100", or `NULL`
+    const char* measured_progress;
+  } ATTR_PACKED game_rc_achievement_progress;
+
+  //============================================================================
+  /// @brief **Payload of the leaderboard attempt callbacks**
+  ///
+  /// A leaderboard is a scored challenge within a game - fastest lap, highest
+  /// score on a level. The client watches memory for the conditions that start
+  /// one, and either submits a value or gives up when it ends.
+  ///
+  typedef struct game_rc_leaderboard
+  {
+    /// @brief Unique RetroAchievements ID of the leaderboard
+    unsigned int id;
+
+    /// @brief Title of the leaderboard, or `NULL` if unknown
+    const char* title;
+
+    /// @brief Description of what is being measured, or `NULL`
+    const char* description;
+
+    /// @brief The value as it stands, already formatted for display, or `NULL`
+    ///
+    /// Leaderboards are scored in different units - seconds, points, frames -
+    /// and the client formats the raw value accordingly, so this is shown as
+    /// given rather than interpreted.
+    const char* value;
+  } ATTR_PACKED game_rc_leaderboard;
+
+  //============================================================================
+  /// @brief **Payload of @ref AddonToKodiFuncTable_Game::RCOnLeaderboardScoreboard**
+  ///
+  /// Sent once the server has said where a submitted attempt placed. Separate
+  /// from the submitted callback because it arrives later, and may not arrive.
+  ///
+  typedef struct game_rc_leaderboard_scoreboard
+  {
+    /// @brief Unique RetroAchievements ID of the leaderboard
+    unsigned int id;
+
+    /// @brief The value that was submitted, formatted for display, or `NULL`
+    const char* submitted_score;
+
+    /// @brief The player's best value on this leaderboard, or `NULL`
+    ///
+    /// Not always the value just submitted: a worse attempt still gets a
+    /// scoreboard, and leaves the player's standing where it was.
+    const char* best_score;
+
+    /// @brief The player's rank after the submission, counting from one
+    unsigned int new_rank;
+
+    /// @brief How many entries the leaderboard holds
+    unsigned int num_entries;
+  } ATTR_PACKED game_rc_leaderboard_scoreboard;
+
+  //============================================================================
+  /// @brief **Payload of the leaderboard tracker callbacks**
+  ///
+  /// While an attempt runs the client publishes a live value to show on screen.
+  ///
+  typedef struct game_rc_leaderboard_tracker
+  {
+    /// @brief Identifies the tracker, not the leaderboard
+    ///
+    /// Two leaderboards measuring the same thing share one tracker, so this
+    /// cannot be used to look a leaderboard up.
+    unsigned int id;
+
+    /// @brief The value as it stands, formatted for display, or `NULL`
+    const char* display;
+  } ATTR_PACKED game_rc_leaderboard_tracker;
+
+  //============================================================================
+  /// @brief **What an achievement means for finishing the game**
+  ///
+  /// Since game API 8.5.0.
+  ///
+  typedef enum GAME_RC_ACHIEVEMENT_TYPE
+  {
+    /// @brief Neither needed to finish the game nor at risk of being missed
+    GAME_RC_ACHIEVEMENT_TYPE_STANDARD = 0,
+
+    /// @brief Can be missed for good if the player passes the point to earn it
+    GAME_RC_ACHIEVEMENT_TYPE_MISSABLE = 1,
+
+    /// @brief Needed to beat the game
+    GAME_RC_ACHIEVEMENT_TYPE_PROGRESSION = 2,
+
+    /// @brief Earned for beating the game, of which a game may have several
+    GAME_RC_ACHIEVEMENT_TYPE_WIN = 3,
+  } GAME_RC_ACHIEVEMENT_TYPE;
+
+  //============================================================================
+  /// @brief **One achievement set of the loaded game**
+  ///
+  /// The game's own set comes first, followed by any subsets such as bonus
+  /// sets. Since game API 8.5.0.
+  ///
+  typedef struct game_rc_achievement_set
+  {
+    /// @brief Unique RetroAchievements ID of the set
+    unsigned int id;
+
+    /// @brief Title of the set, or `NULL` if unknown
+    const char* title;
+
+    /// @brief URL of the set's badge, or `NULL`
+    const char* badge_url;
+  } ATTR_PACKED game_rc_achievement_set;
+
+  //============================================================================
+  /// @brief **The set and type of one achievement**
+  ///
+  /// Since game API 8.5.0.
+  ///
+  typedef struct game_rc_achievement_details
+  {
+    /// @brief Unique RetroAchievements ID of the achievement
+    unsigned int achievement_id;
+
+    /// @brief ID of the set the achievement belongs to
+    unsigned int set_id;
+
+    /// @brief What the achievement means for finishing the game
+    GAME_RC_ACHIEVEMENT_TYPE type;
+  } ATTR_PACKED game_rc_achievement_details;
+
+  //============================================================================
+  /// @brief **Payload of @ref AddonToKodiFuncTable_Game::RCOnAchievementSets**
+  ///
+  /// Kept apart from @ref game_rc_game_loaded so that its achievements keep the
+  /// layout older versions of Kodi read them with. Since game API 8.5.0.
+  ///
+  typedef struct game_rc_achievement_sets
+  {
+    /// @brief The game's sets, its own first
+    const game_rc_achievement_set* sets;
+
+    /// @brief Number of elements in @ref sets
+    unsigned int set_count;
+
+    /// @brief The set and type of each achievement
+    const game_rc_achievement_details* achievements;
+
+    /// @brief Number of elements in @ref achievements
+    unsigned int achievement_count;
+  } ATTR_PACKED game_rc_achievement_sets;
+
+  //============================================================================
+  /// @brief **Payload of @ref AddonToKodiFuncTable_Game::RCOnChallengeIndicator**
+  ///
+  /// Sent while an achievement's trigger is primed - the player is inside an
+  /// attempt at it. Shown so they know the attempt is live, and hidden when it
+  /// ends, whether or not it was earned.
+  ///
+  typedef struct game_rc_achievement_challenge
+  {
+    /// @brief Unique RetroAchievements ID of the achievement
+    unsigned int id;
+
+    /// @brief Title of the achievement, or `NULL` if unknown
+    const char* title;
+
+    /// @brief URL of the achievement's badge, or `NULL`
+    const char* badge_url;
+  } ATTR_PACKED game_rc_achievement_challenge;
+
+  //============================================================================
+  /// @brief **Payload of the achievement progress indicator callbacks**
+  ///
+  /// Some achievements are measured rather than simply locked or unlocked -
+  /// "collect 180 rings", "survive 120 seconds" - and the runtime reports how
+  /// far along one is while the player is working on it.
+  ///
+  /// Distinct from the challenge indicator, which says an attempt is live
+  /// without saying how far through it is.
+  ///
+  typedef struct game_rc_achievement_progress_indicator
+  {
+    /// @brief Unique RetroAchievements ID of the achievement
+    unsigned int id;
+
+    /// @brief Title of the achievement, or `NULL` if unknown
+    const char* title;
+
+    /// @brief URL of the achievement's badge, or `NULL`
+    const char* badge_url;
+
+    /// @brief How far along, already formatted - "13/180" - or `NULL`
+    ///
+    /// Formatted by the client because only it knows the units, so this is
+    /// shown as given rather than interpreted.
+    const char* measured_progress;
+
+    /// @brief How far along as a percentage, 0.0 to 100.0
+    ///
+    /// Sent alongside the text so a frontend can draw a bar without having to
+    /// parse "13/180" back into numbers.
+    float measured_percent;
+  } ATTR_PACKED game_rc_achievement_progress_indicator;
+  //----------------------------------------------------------------------------
+
+  ///@}
 
   //--==----==----==----==----==----==----==----==----==----==----==----==----==--
 
@@ -1076,58 +1578,70 @@ extern "C"
   typedef struct AddonProps_Game
   {
     /*!
-     * The path of the game client being loaded.
+     * @brief The path of the game client being loaded.
      */
     const char* game_client_dll_path;
 
     /*!
-     * Paths to proxy DLLs used to load the game client.
+     * @brief Paths to proxy DLLs used to load the game client.
      */
     const char** proxy_dll_paths;
 
     /*!
-     * Number of proxy DLL paths provided.
+     * @brief Number of proxy DLL paths provided.
      */
     unsigned int proxy_dll_count;
 
     /*!
-     * The "system" directories of the frontend. These directories can be used to
-     * store system-specific ROMs such as BIOSes, configuration data, etc.
+     * @brief The "system" directories of the frontend
+     *
+     * These directories can be used to store system-specific ROMs such as
+     * BIOSes, configuration data, etc.
      */
     const char** resource_directories;
 
     /*!
-     * Number of resource directories provided
+     * @brief Number of resource directories provided
      */
     unsigned int resource_directory_count;
 
     /*!
-     * The writable directory of the frontend. This directory can be used to store
-     * SRAM, memory cards, high scores, etc, if the game client cannot use the
-     * regular memory interface, GetMemoryData().
+     * @brief The writable directory of the frontend.
+     *
+     * This directory can be used to store SRAM, memory cards, high scores,
+     * etc.
      */
     const char* profile_directory;
 
     /*!
-     * The value of the <supports_vfs> property from addon.xml
+     * @brief The value of the <supports_vfs> property from addon.xml
      */
     bool supports_vfs;
 
     /*!
-     * The extensions in the <extensions> property from addon.xml
+     * @brief The extensions in the <extensions> property from addon.xml
      */
     const char** extensions;
 
     /*!
-     * Number of extensions provided
+     * @brief Number of extensions provided
      */
     unsigned int extension_count;
+
+    /*!
+     * @brief The <libretro_core> property from addon.xml, such as
+     * "fceumm_libretro", or empty if there is none
+     *
+     * Added in 8.2.1, so an older Kodi's properties end before it.
+     */
+    const char* libretro_core;
   } AddonProps_Game;
 
   typedef void* KODI_GAME_STREAM_HANDLE;
 
-  /*! Structure to transfer the methods from kodi_game_dll.h to Kodi */
-
+  /*!
+   * @brief Structure to transfer the methods from kodi_game_dll.h to Kodi
+   */
   struct AddonInstance_Game;
 
   /*!
@@ -1139,7 +1653,10 @@ extern "C"
   {
     KODI_HANDLE kodiInstance;
 
+    bool (*EnableHardwareRendering)(void*, const game_hw_rendering_properties*);
     void (*CloseGame)(KODI_HANDLE kodiInstance);
+    double (*GetPlaybackSpeed)(KODI_HANDLE kodiInstance);
+    void (*SetGameTiming)(KODI_HANDLE kodiInstance, const struct game_system_timing* timing_info);
     KODI_GAME_STREAM_HANDLE (*OpenStream)(KODI_HANDLE, const struct game_stream_properties*);
     bool (*GetStreamBuffer)(KODI_HANDLE,
                             KODI_GAME_STREAM_HANDLE,
@@ -1151,6 +1668,77 @@ extern "C"
     void (*CloseStream)(KODI_HANDLE, KODI_GAME_STREAM_HANDLE);
     game_proc_address_t (*HwGetProcAddress)(KODI_HANDLE kodiInstance, const char* symbol);
     bool (*InputEvent)(KODI_HANDLE kodiInstance, const struct game_input_event* event);
+    void (*RCOnGameLoaded)(KODI_HANDLE kodiInstance, const struct game_rc_game_loaded* data);
+    void (*RCOnAchievementTriggered)(KODI_HANDLE kodiInstance,
+                                     const struct game_rc_achievement_triggered* data);
+    void (*RCOnGameCompleted)(KODI_HANDLE kodiInstance, const char* title, bool hardcore);
+    void (*RCOnRichPresenceUpdated)(KODI_HANDLE kodiInstance, const char* evaluation);
+    void (*RCOnLoginResult)(KODI_HANDLE kodiInstance, const struct game_rc_login_result* data);
+
+    void (*RCOnAchievementProgress)(KODI_HANDLE kodiInstance,
+                                    const struct game_rc_achievement_progress* progress,
+                                    unsigned int count);
+    void (*RCOnServerError)(KODI_HANDLE kodiInstance, const char* message, const char* api);
+    void (*RCOnConnectionChanged)(KODI_HANDLE kodiInstance, bool connected);
+
+    void (*RCOnChallengeIndicator)(KODI_HANDLE kodiInstance,
+                                   const struct game_rc_achievement_challenge* data,
+                                   bool show);
+    void (*RCOnAchievementProgressShow)(KODI_HANDLE kodiInstance,
+                                        const struct game_rc_achievement_progress_indicator* data);
+    void (*RCOnAchievementProgressUpdate)(
+        KODI_HANDLE kodiInstance, const struct game_rc_achievement_progress_indicator* data);
+    void (*RCOnAchievementProgressHide)(KODI_HANDLE kodiInstance,
+                                        const struct game_rc_achievement_progress_indicator* data);
+    void (*RCOnLeaderboardStarted)(KODI_HANDLE kodiInstance,
+                                   const struct game_rc_leaderboard* data);
+    void (*RCOnLeaderboardFailed)(KODI_HANDLE kodiInstance, const struct game_rc_leaderboard* data);
+    void (*RCOnLeaderboardSubmitted)(KODI_HANDLE kodiInstance,
+                                     const struct game_rc_leaderboard* data);
+    void (*RCOnLeaderboardTrackerShow)(KODI_HANDLE kodiInstance,
+                                       const struct game_rc_leaderboard_tracker* data);
+    void (*RCOnLeaderboardTrackerUpdate)(KODI_HANDLE kodiInstance,
+                                         const struct game_rc_leaderboard_tracker* data);
+    void (*RCOnLeaderboardTrackerHide)(KODI_HANDLE kodiInstance,
+                                       const struct game_rc_leaderboard_tracker* data);
+    void (*RCOnLeaderboardScoreboard)(KODI_HANDLE kodiInstance,
+                                      const struct game_rc_leaderboard_scoreboard* data);
+    void (*RCOnReset)(KODI_HANDLE kodiInstance);
+    void (*RCOnSubsetCompleted)(KODI_HANDLE kodiInstance, const char* title);
+
+    /*!
+     * @brief Reset a prepared hardware stream after installing its returned handle.
+     *
+     * OpenStream creates the context and framebuffer without calling the add-on.
+     * Call StartStream after storing that handle, so HwContextReset can acquire
+     * a framebuffer. Repeated calls do not reset again. On failure, CloseStream
+     * must release the handle; Kodi calls HwContextDestroy before teardown.
+     */
+    bool (*StartStream)(KODI_HANDLE, KODI_GAME_STREAM_HANDLE);
+
+    /*!
+     * @brief Name a file the game client looked for and couldn't find.
+     *
+     * Call it before returning GAME_ERROR_MISSING_FILES. The path is relative
+     * to the client's system directory. Since game API 8.3.0.
+     */
+    void (*ReportMissingFile)(KODI_HANDLE kodiInstance, const char* path);
+
+    /*!
+     * @brief Ask Kodi to fast-forward, or to stop a fast-forward it asked for.
+     *
+     * A ratio above 1 is the speed asked for; anything else leaves it to Kodi.
+     * Since game API 8.4.0.
+     */
+    void (*SetFastForwarding)(KODI_HANDLE kodiInstance, bool fastForward, double ratio);
+
+    /*!
+     * @brief Tell Kodi the loaded game's achievement sets, and which set and
+     * type each of its achievements has.
+     *
+     * Call it after RCOnGameLoaded(). Since game API 8.5.0.
+     */
+    void (*RCOnAchievementSets)(KODI_HANDLE kodiInstance, const game_rc_achievement_sets* data);
   } AddonToKodiFuncTable_Game;
 
   /*!
@@ -1175,6 +1763,7 @@ extern "C"
     GAME_ERROR(__cdecl* Reset)(const struct AddonInstance_Game*);
     GAME_ERROR(__cdecl* HwContextReset)(const struct AddonInstance_Game*);
     GAME_ERROR(__cdecl* HwContextDestroy)(const struct AddonInstance_Game*);
+    GAME_ERROR(__cdecl* AudioAvailable)(const AddonInstance_Game*);
     bool(__cdecl* HasFeature)(const struct AddonInstance_Game*, const char*, const char*);
     game_input_topology*(__cdecl* GetTopology)(const struct AddonInstance_Game*);
     void(__cdecl* FreeTopology)(const struct AddonInstance_Game*, struct game_input_topology*);
@@ -1196,6 +1785,37 @@ extern "C"
     (const struct AddonInstance_Game*, enum GAME_MEMORY, uint8_t**, size_t*);
     GAME_ERROR(__cdecl* SetCheat)
     (const struct AddonInstance_Game*, unsigned int, bool, const char*);
+    bool(__cdecl* GetEjectState)(const AddonInstance_Game*);
+    GAME_ERROR(__cdecl* SetEjectState)(const AddonInstance_Game*, bool);
+    unsigned int(__cdecl* GetImageIndex)(const AddonInstance_Game*);
+    GAME_ERROR(__cdecl* SetImageIndex)(const AddonInstance_Game*, unsigned int);
+    unsigned int(__cdecl* GetImageCount)(const AddonInstance_Game*);
+    GAME_ERROR(__cdecl* AddImageIndex)(const AddonInstance_Game*);
+    GAME_ERROR(__cdecl* ReplaceImageIndex)(const AddonInstance_Game*, unsigned int, const char*);
+    GAME_ERROR(__cdecl* RemoveImageIndex)(const AddonInstance_Game*, unsigned int);
+    GAME_ERROR(__cdecl* SetInitialImage)(const AddonInstance_Game*, unsigned int, const char*);
+    char*(__cdecl* GetImagePath)(const AddonInstance_Game*, unsigned int);
+    char*(__cdecl* GetImageLabel)(const AddonInstance_Game*, unsigned int);
+    GAME_ERROR(__cdecl* SetRetroAchievementsCredentials)
+    (const AddonInstance_Game*, const char*, const char*);
+    GAME_ERROR(__cdecl* RCSetHardcoreEnabled)(const AddonInstance_Game*, bool);
+    GAME_ERROR(__cdecl* RCSetEncoreModeEnabled)(const AddonInstance_Game*, bool);
+    GAME_ERROR(__cdecl* ActivateAchievement)(const AddonInstance_Game*, unsigned int, const char*);
+    GAME_ERROR(__cdecl* GetCheevoUrlId)
+    (const AddonInstance_Game*,
+     void(__cdecl*)(const void*, const char*, unsigned int),
+     const void*);
+    size_t(__cdecl* AchievementStateSize)(const struct AddonInstance_Game*);
+    GAME_ERROR(__cdecl* SerializeAchievements)
+    (const struct AddonInstance_Game*, uint8_t*, size_t);
+    GAME_ERROR(__cdecl* DeserializeAchievements)
+    (const struct AddonInstance_Game*, const uint8_t*, size_t);
+    void(__cdecl* FreeString)(const AddonInstance_Game*, char*);
+    GAME_ERROR(__cdecl* RCSetAchievementSetEnabled)(const AddonInstance_Game*, unsigned int, bool);
+    GAME_ERROR(__cdecl* RunFrameSpeculative)(const struct AddonInstance_Game*);
+    GAME_ERROR(__cdecl* SerializeSpeculative)(const struct AddonInstance_Game*, uint8_t*, size_t);
+    GAME_ERROR(__cdecl* DeserializeSpeculative)
+    (const struct AddonInstance_Game*, const uint8_t*, size_t);
   } KodiToAddonFuncTable_Game;
 
   /*!

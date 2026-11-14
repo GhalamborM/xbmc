@@ -10,53 +10,21 @@
 
 #include "FileItem.h"
 #include "ThumbLoader.h"
-#include "utils/JobManager.h"
+#include "media/MediaType.h"
+#include "utils/Artwork.h"
 
 #include <map>
+#include <memory>
+#include <set>
 #include <vector>
 
 class CStreamDetails;
 class CVideoDatabase;
 class EmbeddedArt;
 
-using ArtMap = std::map<std::string, std::string>;
-using ArtCache = std::map<std::pair<MediaType, int>, ArtMap>;
+using ArtCache = std::map<std::pair<std::string, int>, KODI::ART::Artwork>;
 
-/*!
- \ingroup thumbs,jobs
- \brief Thumb extractor job class
-
- Used by the CVideoThumbLoader to perform asynchronous generation of thumbs
-
- \sa CVideoThumbLoader and CJob
- */
-class CThumbExtractor : public CJob
-{
-public:
-  CThumbExtractor(const CFileItem& item, const std::string& listpath, bool thumb, const std::string& strTarget="", int64_t pos = -1, bool fillStreamDetails = true);
-  ~CThumbExtractor() override;
-
-  /*!
-   \brief Work function that extracts thumb.
-   */
-  bool DoWork() override;
-
-  const char* GetType() const override
-  {
-    return kJobTypeMediaFlags;
-  }
-
-  bool operator==(const CJob* job) const override;
-
-  std::string m_target; ///< thumbpath
-  std::string m_listpath; ///< path used in fileitem list
-  CFileItem  m_item;
-  bool       m_thumb; ///< extract thumb?
-  int64_t    m_pos; ///< position to extract thumb from
-  bool m_fillStreamDetails; ///< fill in stream details?
-};
-
-class CVideoThumbLoader : public CThumbLoader, public CJobQueue
+class CVideoThumbLoader : public CThumbLoader
 {
 public:
   CVideoThumbLoader();
@@ -68,6 +36,9 @@ public:
   bool LoadItem(CFileItem* pItem) override;
   bool LoadItemCached(CFileItem* pItem) override;
   bool LoadItemLookup(CFileItem* pItem) override;
+
+  /*! \brief Prefetch art, stream details, ratings, tags and unique ids of a batch for LoadItem(). */
+  void Prefetch(const std::vector<CFileItem*>& items);
 
   /*! \brief Fill the thumb of a video item
    First uses a cached thumb from a previous run, then checks for a local thumb
@@ -91,6 +62,10 @@ public:
    \sa GetLocalArt
    */
   static std::vector<std::string> GetArtTypes(const std::string &type);
+  static std::vector<std::string> GetArtTypes(KODI::MEDIA::TYPE type)
+  {
+    return GetArtTypes(KODI::MEDIA::NameOf(type));
+  }
 
   static bool IsValidArtType(const std::string& potentialArtType);
 
@@ -102,24 +77,17 @@ public:
    */
   static std::string GetEmbeddedThumbURL(const CFileItem &item);
 
+  /*! \brief Whether a thumb can be extracted from the video GetEmbeddedThumbURL() names
+   \param item a video CFileItem.
+   \return true if a thumb can be extracted, false otherwise.
+   */
+  static bool CanExtractEmbeddedThumb(const CFileItem& item);
+
   /*! \brief helper function to fill the art for a video library item
    \param item a video CFileItem
    \return true if we fill art, false otherwise
    */
  bool FillLibraryArt(CFileItem &item) override;
-
-  /*!
-   \brief Callback from CThumbExtractor on completion of a generated image
-
-   Performs the callbacks and updates the GUI.
-
-   \sa CImageLoader, IJobCallback
-   */
-  void OnJobComplete(unsigned int jobID, bool success, CJob *job) override;
-
-  static bool GetEmbeddedThumb(const std::string& path,
-                               const std::string& type,
-                               EmbeddedArt& art);
 
 protected:
   CVideoDatabase *m_videoDatabase;
@@ -131,5 +99,21 @@ protected:
    */
   void DetectAndAddMissingItemData(CFileItem &item);
 
-  const ArtMap& GetArtFromCache(const std::string &mediaType, const int id);
+  const KODI::ART::Artwork& GetArtFromCache(const std::string& mediaType, const int id);
+
+private:
+  int SetDetailsForItem(CVideoInfoTag& details, const KODI::ART::Artwork& artwork);
+
+  /*! \brief Prefetch() the next list batch, unless the item is in one. */
+  void PrefetchFrom(const CFileItem& item);
+
+  /*! \brief Prefetch the art of ids by media type for FillLibraryArt(). */
+  void PrefetchArt(std::map<std::string, std::vector<int>> artIds);
+
+  /*! \brief Get an item's own art, taking it from the art cache when it holds it. */
+  bool GetItemArt(const CVideoInfoTag& tag, KODI::ART::Artwork& artwork);
+
+  size_t m_prefetchEnd{0};
+  std::set<const CFileItem*> m_batched;
+  std::map<const CFileItem*, std::unique_ptr<CVideoInfoTag>> m_prefetched;
 };

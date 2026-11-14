@@ -8,10 +8,12 @@
 
 #include "GUIDialogAxisDetection.h"
 
-#include "guilib/LocalizeStrings.h"
+#include "ServiceBroker.h"
 #include "input/joysticks/DriverPrimitive.h"
 #include "input/joysticks/JoystickTranslator.h"
 #include "input/joysticks/interfaces/IButtonMap.h"
+#include "resources/LocalizeStrings.h"
+#include "resources/ResourcesComponent.h"
 #include "utils/StringUtils.h"
 
 #include <algorithm>
@@ -22,7 +24,8 @@ using namespace GAME;
 std::string CGUIDialogAxisDetection::GetDialogText()
 {
   // "Press all analog buttons now to detect them:[CR][CR]%s"
-  const std::string& dialogText = g_localizeStrings.Get(35020);
+  const std::string& dialogText =
+      CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(35020);
 
   std::vector<std::string> primitives;
 
@@ -37,11 +40,12 @@ std::string CGUIDialogAxisDetection::GetDialogText()
 
 std::string CGUIDialogAxisDetection::GetDialogHeader()
 {
-  return g_localizeStrings.Get(35058); // "Controller Configuration"
+  return CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(
+      35058); // "Controller Configuration"
 }
 
 bool CGUIDialogAxisDetection::MapPrimitiveInternal(JOYSTICK::IButtonMap* buttonMap,
-                                                   IKeymap* keymap,
+                                                   KEYMAP::IKeymap* keymap,
                                                    const JOYSTICK::CDriverPrimitive& primitive)
 {
   if (primitive.Type() == JOYSTICK::PRIMITIVE_TYPE::SEMIAXIS)
@@ -72,9 +76,8 @@ void CGUIDialogAxisDetection::OnLateAxis(const JOYSTICK::IButtonMap* buttonMap,
 void CGUIDialogAxisDetection::AddAxis(const std::string& deviceLocation, unsigned int axisIndex)
 {
   auto it = std::find_if(m_detectedAxes.begin(), m_detectedAxes.end(),
-                         [&deviceLocation, axisIndex](const AxisEntry& axis) {
-                           return axis.first == deviceLocation && axis.second == axisIndex;
-                         });
+                         [&deviceLocation, axisIndex](const AxisEntry& axis)
+                         { return axis.first == deviceLocation && axis.second == axisIndex; });
 
   if (it == m_detectedAxes.end())
   {

@@ -8,23 +8,25 @@
 
 #include "PipewireNode.h"
 
-#include "cores/AudioEngine/Sinks/pipewire/Pipewire.h"
-#include "cores/AudioEngine/Sinks/pipewire/PipewireThreadLoop.h"
+#include "PipewireContext.h"
+#include "PipewireCore.h"
+#include "PipewireRegistry.h"
+#include "PipewireThreadLoop.h"
+#include "ServiceBroker.h"
+#include "cores/AudioEngine/Interfaces/AE.h"
+#include "utils/StringUtils.h"
 #include "utils/log.h"
 
 #include <spa/param/format.h>
 #include <spa/pod/iter.h>
 
-namespace AE
-{
-namespace SINK
-{
-namespace PIPEWIRE
-{
+using namespace KODI;
+using namespace PIPEWIRE;
 
-CPipewireNode::CPipewireNode(pw_registry* registry, uint32_t id, const char* type)
+CPipewireNode::CPipewireNode(CPipewireRegistry& registry, uint32_t id, const char* type)
   : CPipewireProxy(registry, id, type, PW_VERSION_NODE), m_nodeEvents(CreateNodeEvents())
 {
+  pw_proxy_add_object_listener(m_proxy.get(), &m_objectListener, &m_nodeEvents, this);
 }
 
 CPipewireNode::~CPipewireNode()
@@ -32,41 +34,36 @@ CPipewireNode::~CPipewireNode()
   spa_hook_remove(&m_objectListener);
 }
 
-void CPipewireNode::AddListener(void* userdata)
-{
-  m_pipewire = reinterpret_cast<CPipewire*>(userdata);
-
-  pw_proxy_add_object_listener(m_proxy.get(), &m_objectListener, &m_nodeEvents, this);
-
-  CPipewireProxy::AddListener(userdata);
-}
-
-void CPipewireNode::EnumerateFormats()
-{
-  if (!m_info)
-    return;
-
-  for (uint32_t param = 0; param < m_info->n_params; param++)
-  {
-    if (m_info->params[param].id == SPA_PARAM_EnumFormat)
-      pw_node_enum_params(m_proxy.get(), 0, m_info->params[param].id, 0, 0, NULL);
-  }
-}
-
 void CPipewireNode::Info(void* userdata, const struct pw_node_info* info)
 {
-  auto node = reinterpret_cast<CPipewireNode*>(userdata);
+  auto& node = *reinterpret_cast<CPipewireNode*>(userdata);
 
-  if (node->m_info)
+  if (node.m_info)
   {
     CLog::Log(LOGDEBUG, "CPipewireNode::{} - node {} changed", __FUNCTION__, info->id);
-    pw_node_info* m_info = node->m_info.get();
-    m_info = pw_node_info_update(m_info, info);
+    pw_node_info_update(node.m_info.get(), info);
   }
   else
   {
-    node->m_info.reset(pw_node_info_update(node->m_info.get(), info));
+    node.m_info.reset(pw_node_info_update(nullptr, info));
   }
+
+  // Check if the node parameters changed, if yes enumerate the available formats
+  if ((info->change_mask & PW_NODE_CHANGE_MASK_PARAMS) != 0)
+  {
+    for (auto param : std::span(info->params, info->n_params))
+    {
+      if (param.id == SPA_PARAM_EnumFormat && param.flags & SPA_PARAM_INFO_READ)
+        pw_node_enum_params(reinterpret_cast<pw_node*>(node.m_proxy.get()), 0, param.id, 0, 0,
+                            nullptr);
+    }
+  }
+}
+
+std::string CPipewireNode::Get(const std::string& key) const
+{
+  const char* value = spa_dict_lookup(m_info->props, key.c_str());
+  return value ? value : "";
 }
 
 template<typename T>
@@ -121,7 +118,7 @@ static std::set<T> ParseArray(uint32_t type, void* body, uint32_t size)
   }
 }
 
-void CPipewireNode::Parse(uint32_t type, void* body, uint32_t size)
+bool CPipewireNode::Parse(uint32_t type, void* body, uint32_t size)
 {
   switch (type)
   {
@@ -134,6 +131,7 @@ void CPipewireNode::Parse(uint32_t type, void* body, uint32_t size)
         case SPA_TYPE_OBJECT_Format:
         {
           spa_pod_prop* prop;
+          bool changed = false;
           SPA_POD_OBJECT_BODY_FOREACH(object, size, prop)
           {
             spa_format format = static_cast<spa_format>(prop->key);
@@ -142,20 +140,34 @@ void CPipewireNode::Parse(uint32_t type, void* body, uint32_t size)
             {
               case SPA_FORMAT_AUDIO_format:
               {
+                auto formatsOld = std::move(m_formats);
                 m_formats = ParseArray<spa_audio_format>(
                     prop->value.type, SPA_POD_CONTENTS(spa_pod_prop, prop), prop->value.size);
+                changed |= m_formats != formatsOld;
                 break;
               }
               case SPA_FORMAT_AUDIO_rate:
               {
+                auto ratesOld = std::move(m_rates);
                 m_rates = ParseArray<uint32_t>(
                     prop->value.type, SPA_POD_CONTENTS(spa_pod_prop, prop), prop->value.size);
+                changed |= m_rates != ratesOld;
                 break;
               }
               case SPA_FORMAT_AUDIO_position:
               {
+                auto channelsOld = std::move(m_channels);
                 m_channels = ParseArray<spa_audio_channel>(
                     prop->value.type, SPA_POD_CONTENTS(spa_pod_prop, prop), prop->value.size);
+                changed |= m_channels != channelsOld;
+                break;
+              }
+              case SPA_FORMAT_AUDIO_iec958Codec:
+              {
+                auto iec958CodecsOld = std::move(m_iec958Codecs);
+                m_iec958Codecs = ParseArray<spa_audio_iec958_codec>(
+                    prop->value.type, SPA_POD_CONTENTS(spa_pod_prop, prop), prop->value.size);
+                changed |= m_iec958Codecs != iec958CodecsOld;
                 break;
               }
               default:
@@ -163,16 +175,16 @@ void CPipewireNode::Parse(uint32_t type, void* body, uint32_t size)
             }
           }
 
-          break;
+          return changed;
         }
         default:
-          return;
+          return false;
       }
 
       break;
     }
     default:
-      return;
+      return false;
   }
 }
 
@@ -183,13 +195,13 @@ void CPipewireNode::Param(void* userdata,
                           uint32_t next,
                           const struct spa_pod* param)
 {
-  auto node = reinterpret_cast<CPipewireNode*>(userdata);
-  auto pipewire = node->GetPipewire();
-  auto loop = pipewire->GetThreadLoop();
+  auto& node = *reinterpret_cast<CPipewireNode*>(userdata);
 
-  node->Parse(SPA_POD_TYPE(param), SPA_POD_BODY(param), SPA_POD_BODY_SIZE(param));
-
-  loop->Signal(false);
+  if (node.Parse(SPA_POD_TYPE(param), SPA_POD_BODY(param), SPA_POD_BODY_SIZE(param)))
+  {
+    if (IAE* ae = CServiceBroker::GetActiveAE(); ae)
+      ae->DeviceChange();
+  }
 }
 
 pw_node_events CPipewireNode::CreateNodeEvents()
@@ -201,7 +213,3 @@ pw_node_events CPipewireNode::CreateNodeEvents()
 
   return nodeEvents;
 }
-
-} // namespace PIPEWIRE
-} // namespace SINK
-} // namespace AE

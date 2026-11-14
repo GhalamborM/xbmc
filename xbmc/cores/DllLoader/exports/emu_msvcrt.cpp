@@ -6,10 +6,11 @@
  *  See LICENSES/README.md for more information.
  */
 
-#include <stdlib.h>
-#include <stdio.h>
-#include <stdarg.h>
 #include <math.h>
+#include <mutex>
+#include <stdarg.h>
+#include <stdio.h>
+#include <stdlib.h>
 #ifndef TARGET_POSIX
 #include <io.h>
 #include <direct.h>
@@ -25,15 +26,15 @@
 #if !defined(TARGET_FREEBSD) && (!defined(TARGET_ANDROID) && defined(__LP64__))
 #include <sys/timeb.h>
 #endif
-#ifdef HAS_DVD_DRIVE
-  #ifdef TARGET_POSIX
-    #include <sys/ioctl.h>
-    #if defined(TARGET_DARWIN)
-      #include <IOKit/storage/IODVDMediaBSDClient.h>
-    #elif !defined(TARGET_FREEBSD)
-      #include <linux/cdrom.h>
-    #endif
-  #endif
+#ifdef HAS_OPTICAL_DRIVE
+#ifdef TARGET_POSIX
+#include <sys/ioctl.h>
+#if defined(TARGET_DARWIN)
+#include <IOKit/storage/IODVDMediaBSDClient.h>
+#elif !defined(TARGET_FREEBSD)
+#include <linux/cdrom.h>
+#endif
+#endif
 #endif
 #include <fcntl.h>
 #include <time.h>
@@ -43,6 +44,7 @@
 #endif
 #include "CompileInfo.h"
 #include "FileItem.h"
+#include "FileItemList.h"
 #include "ServiceBroker.h"
 #include "URL.h"
 #include "Util.h"
@@ -53,7 +55,6 @@
 #include "filesystem/SpecialProtocol.h"
 #include "settings/Settings.h"
 #include "settings/SettingsComponent.h"
-#include "threads/SingleLock.h"
 #include "util/EmuFileWrapper.h"
 #include "utils/log.h"
 #ifndef TARGET_POSIX
@@ -69,6 +70,15 @@
 
 #if defined(TARGET_WINDOWS)
 #include "platform/win32/CharsetConverter.h"
+#endif
+
+#ifdef TARGET_LINUX
+#ifndef _PATH_MOUNTED
+#define _PATH_MOUNTED "/proc/mounts"
+#endif
+#ifndef _PATH_MNTTAB
+#define _PATH_MNTTAB "/etc/fstab"
+#endif
 #endif
 
 using namespace XFILE;
@@ -134,21 +144,23 @@ extern "C" void __stdcall init_emu_environ()
   {
     // using external python, it's build looking for xxx/lib/python(VERSIONMAJOR.MINOR)
     // so point it to frameworks which is where python is located
-    dll_putenv(("PYTHONPATH=" +
-      CSpecialProtocol::TranslatePath("special://frameworks")).c_str());
-    dll_putenv(("PYTHONHOME=" +
-      CSpecialProtocol::TranslatePath("special://frameworks")).c_str());
-    dll_putenv(("PATH=.;" +
-      CSpecialProtocol::TranslatePath("special://xbmc") + ";" +
-      CSpecialProtocol::TranslatePath("special://frameworks")).c_str());
+    const auto pythonRootPath = CSpecialProtocol::TranslatePath("special://frameworks");
+    dll_putenv(("PYTHONPATH=" + pythonRootPath).c_str());
+    dll_putenv(("PYTHONHOME=" + pythonRootPath).c_str());
+    dll_putenv(
+        ("PATH=.;" + CSpecialProtocol::TranslatePath("special://xbmc") + ";" + pythonRootPath)
+            .c_str());
   }
   else
   {
+    // default PYTHONPATH/PYTHONHOME are correct for darwin_embedded
+#if !defined(TARGET_DARWIN_EMBEDDED)
     dll_putenv(("PYTHONPATH=" +
       CSpecialProtocol::TranslatePath("special://xbmc/system/python/DLLs") + ";" +
       CSpecialProtocol::TranslatePath("special://xbmc/system/python/Lib")).c_str());
     dll_putenv(("PYTHONHOME=" +
       CSpecialProtocol::TranslatePath("special://xbmc/system/python")).c_str());
+#endif
     dll_putenv(("PATH=.;" + CSpecialProtocol::TranslatePath("special://xbmc") + ";" +
       CSpecialProtocol::TranslatePath("special://xbmc/system/python")).c_str());
   }
@@ -276,7 +288,7 @@ static void to_wfinddata64i32(_finddata64i32_t *data, _wfinddata64i32_t *wdata)
 
 extern "C"
 {
-  void dll_sleep(unsigned long imSec) { KODI::TIME::Sleep(imSec); }
+  void dll_sleep(unsigned long imSec) { KODI::TIME::Sleep(std::chrono::milliseconds(imSec)); }
 
   // FIXME, XXX, !!!!!!
   void dllReleaseAll( )
@@ -836,7 +848,7 @@ extern "C"
       strncpy(data->name,vecDirsOpen[iDirSlot].items[0]->GetLabel().c_str(), size);
       if (size)
         data->name[size - 1] = '\0';
-      data->size = static_cast<_fsize_t>(vecDirsOpen[iDirSlot].items[0]->m_dwSize);
+      data->size = static_cast<_fsize_t>(vecDirsOpen[iDirSlot].items[0]->GetSize());
       data->time_write = 0;
       data->time_access = 0;
       vecDirsOpen[iDirSlot].curr_index = 0;
@@ -893,7 +905,7 @@ extern "C"
       strncpy(data->name,vecDirsOpen[found].items[iItem+1]->GetLabel().c_str(), size);
       if (size)
         data->name[size - 1] = '\0';
-      data->size = static_cast<_fsize_t>(vecDirsOpen[found].items[iItem+1]->m_dwSize);
+      data->size = static_cast<_fsize_t>(vecDirsOpen[found].items[iItem + 1]->GetSize());
       vecDirsOpen[found].curr_index++;
       return 0;
     }
@@ -934,7 +946,7 @@ extern "C"
     CURL url(CSpecialProtocol::TranslatePath(file));
     if (url.IsLocal())
     { // Make sure the slashes are correct & translate the path
-      return opendir(CUtil::ValidatePath(url.Get().c_str()).c_str());
+      return opendir(CUtil::ValidatePath(url.Get()).c_str());
     }
 
     // locate next free directory
@@ -989,8 +1001,8 @@ extern "C"
         strncpy(entry->d_name, "..\0", 3);
       else
       {
-        strncpy(entry->d_name, dirData->items[dirData->curr_index - 2]->GetLabel().c_str(), sizeof(entry->d_name));
-        entry->d_name[sizeof(entry->d_name)-1] = '\0'; // null-terminate any truncated paths
+        snprintf(entry->d_name, sizeof(entry->d_name), "%s",
+                 dirData->items[dirData->curr_index - 2]->GetLabel().c_str());
       }
       dirData->last_entry = entry;
       dirData->curr_index++;
@@ -1056,8 +1068,8 @@ extern "C"
     {
       if (pFile->GetPosition() < pFile->GetLength())
       {
-        bool bRead = pFile->ReadString(pszString, num);
-        if (bRead)
+        auto result = pFile->ReadLine(pszString, num);
+        if (result.code != CFile::ReadLineResult::FAILURE)
         {
           return pszString;
         }
@@ -1484,8 +1496,11 @@ extern "C"
     int ret;
 
     ret = dll_fgetpos64(stream, &tmpPos);
-#if !defined(TARGET_POSIX) || defined(TARGET_DARWIN) || defined(TARGET_FREEBSD) || defined(TARGET_ANDROID)
+#if !defined(TARGET_POSIX) || defined(TARGET_DARWIN) || defined(TARGET_FREEBSD) || \
+    defined(TARGET_ANDROID)
     *pos = (fpos_t)tmpPos;
+#elif defined(TARGET_WASM)
+    *pos = tmpPos;
 #else
     pos->__pos = (off_t)tmpPos.__pos;
 #endif
@@ -1497,8 +1512,11 @@ extern "C"
     CFile* pFile = g_emuFileWrapper.GetFileXbmcByStream(stream);
     if (pFile != NULL)
     {
-#if !defined(TARGET_POSIX) || defined(TARGET_DARWIN) || defined(TARGET_FREEBSD) || defined(TARGET_ANDROID)
+#if !defined(TARGET_POSIX) || defined(TARGET_DARWIN) || defined(TARGET_FREEBSD) || \
+    defined(TARGET_ANDROID)
       *pos = pFile->GetPosition();
+#elif defined(TARGET_WASM)
+      pos->__lldata = static_cast<long long>(pFile->GetPosition());
 #else
       pos->__pos = pFile->GetPosition();
 #endif
@@ -1513,8 +1531,11 @@ extern "C"
     int fd = g_emuFileWrapper.GetDescriptorByStream(stream);
     if (fd >= 0)
     {
-#if !defined(TARGET_POSIX) || defined(TARGET_DARWIN) || defined(TARGET_FREEBSD) || defined(TARGET_ANDROID)
+#if !defined(TARGET_POSIX) || defined(TARGET_DARWIN) || defined(TARGET_FREEBSD) || \
+    defined(TARGET_ANDROID)
       if (dll_lseeki64(fd, *pos, SEEK_SET) >= 0)
+#elif defined(TARGET_WASM)
+      if (dll_lseeki64(fd, static_cast<__off64_t>(pos->__lldata), SEEK_SET) >= 0)
 #else
       if (dll_lseeki64(fd, (__off64_t)pos->__pos, SEEK_SET) >= 0)
 #endif
@@ -1536,8 +1557,11 @@ extern "C"
     if (fd >= 0)
     {
       fpos64_t tmpPos;
-#if !defined(TARGET_POSIX) || defined(TARGET_DARWIN) || defined(TARGET_FREEBSD) || defined(TARGET_ANDROID)
+#if !defined(TARGET_POSIX) || defined(TARGET_DARWIN) || defined(TARGET_FREEBSD) || \
+    defined(TARGET_ANDROID)
       tmpPos= *pos;
+#elif defined(TARGET_WASM)
+      tmpPos = *pos;
 #else
       tmpPos.__pos = (off64_t)(pos->__pos);
 #endif
@@ -1591,7 +1615,7 @@ extern "C"
 
   //Critical Section has been fixed in EMUkernel32.cpp
 
-  int dll_initterm(PFV * start, PFV * end)        //pncrt.dll
+  int dll_initterm(PFV* start, const PFV* end) //pncrt.dll
   {
     PFV * temp;
     for (temp = start; temp < end; temp ++)
@@ -1783,7 +1807,7 @@ extern "C"
   char* dllstrerror(int iErr)
   {
     static char szError[32];
-    sprintf(szError, "err:%i", iErr);
+    snprintf(szError, sizeof(szError), "err:%i", iErr);
     return (char*)szError;
   }
 
@@ -1818,16 +1842,23 @@ extern "C"
 
       if (value_start != NULL)
       {
-        char var[64];
+        const size_t varSize = value_start - envstring;
+        char* var = static_cast<char*>(std::malloc(varSize + 1));
+        if (!var)
+          return -1;
+
         int size = strlen(envstring) + 1;
         char *value = (char*)malloc(size);
 
         if (!value)
+        {
+          std::free(var);
           return -1;
+        }
         value[0] = 0;
 
         memcpy(var, envstring, value_start - envstring);
-        var[value_start - envstring] = 0;
+        var[varSize] = 0;
         char* temp = var;
         while (*temp)
         {
@@ -1840,7 +1871,7 @@ extern "C"
           value[size - 1] = '\0';
 
         {
-          CSingleLock lock(dll_cs_environ);
+          std::unique_lock lock(dll_cs_environ);
 
           char** free_position = NULL;
           for (int i = 0; i < EMU_MAX_ENVIRONMENT_ITEMS && free_position == NULL; i++)
@@ -1864,22 +1895,18 @@ extern "C"
 
           if (free_position != NULL)
           {
-            // free position, copy value
             size = strlen(var) + strlen(value) + 2;
-            *free_position = (char*)malloc(size); // for '=' and 0 termination
-            if ((*free_position))
+            *free_position = static_cast<char*>(malloc(size));
+            if (*free_position)
             {
-              strncpy(*free_position, var, size);
-              (*free_position)[size - 1] = '\0';
-              strncat(*free_position, "=", size - strlen(*free_position));
-              strncat(*free_position, value, size - strlen(*free_position));
+              snprintf(*free_position, size, "%s=%s", var, value);
               added = true;
             }
           }
-
         }
 
         free(value);
+        std::free(var);
       }
     }
 
@@ -1891,7 +1918,7 @@ extern "C"
     char* value = NULL;
 
     {
-      CSingleLock lock(dll_cs_environ);
+      std::unique_lock lock(dll_cs_environ);
 
       update_emu_environ();//apply any changes
 
@@ -1992,7 +2019,7 @@ extern "C"
      if (!pFile)
        return -1;
 
-#if defined(HAS_DVD_DRIVE) && !defined(TARGET_FREEBSD)
+#if defined(HAS_OPTICAL_DRIVE) && !defined(TARGET_FREEBSD)
 #if !defined(TARGET_DARWIN)
     if(request == DVD_READ_STRUCT || request == DVD_AUTH)
 #else
@@ -2003,7 +2030,7 @@ extern "C"
       SNativeIoControl d;
       d.request = request;
       d.param   = p1;
-      ret = pFile->IoControl(IOCTRL_NATIVE, &d);
+      ret = pFile->IoControl(IOControl::NATIVE, &d);
       if(ret<0)
         CLog::Log(LOGWARNING, "{} - {} request failed with error [{}] {}", __FUNCTION__, request,
                   errno, strerror(errno));
@@ -2026,22 +2053,38 @@ extern "C"
 
   struct mntent *dll_getmntent(FILE *fp)
   {
-    if (fp == NULL)
-      return NULL;
+    if (!fp)
+      return nullptr;
 
+#if defined(TARGET_LINUX) && !defined(TARGET_ANDROID)
+    struct mntent* mountPoint = getmntent(fp);
+    if (mountPoint)
+      return mountPoint;
+
+    // warn if this is a kodi vfs file not associated with a mountpoint
     CFile* pFile = g_emuFileWrapper.GetFileXbmcByStream(fp);
     if (pFile)
     {
-      CLog::Log(LOGERROR, "{} - getmntent is not implemented for our virtual filesystem",
-                __FUNCTION__);
-      return NULL;
+      CLog::LogF(LOGWARNING, "getmntent is not implemented for our virtual filesystem");
     }
-#if defined(TARGET_LINUX)
-    return getmntent(fp);
+    return nullptr;
 #else
-    CLog::Log(LOGWARNING, "{} - unimplemented function called", __FUNCTION__);
-    return NULL;
+    CLog::LogF(LOGWARNING, "Unimplemented function called");
+    return nullptr;
 #endif
+  }
+
+  struct mntent* dll_getmntent_r(FILE* fp, struct mntent* result, char* buffer, int bufsize)
+  {
+    if (!fp || !result || !buffer)
+      return nullptr;
+
+#if defined(TARGET_LINUX) && !defined(TARGET_ANDROID)
+    struct mntent* mountPoint = getmntent_r(fp, result, buffer, bufsize);
+    if (mountPoint)
+      return mountPoint;
+#endif
+    return nullptr;
   }
 
   // this needs to be wrapped, since dll's have their own file

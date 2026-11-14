@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2005-2018 Team Kodi
+ *  Copyright (C) 2005-2026 Team Kodi
  *  This file is part of Kodi - https://kodi.tv
  *
  *  SPDX-License-Identifier: GPL-2.0-or-later
@@ -8,16 +8,13 @@
 
 #pragma once
 
+#include "EdlEdit.h"
 #include "threads/CriticalSection.h"
 
 #include <atomic>
+#include <chrono>
 #include <string>
 #include <vector>
-
-namespace EDL
-{
-struct Edit;
-}
 
 class CDataCacheCore
 {
@@ -26,6 +23,7 @@ public:
   virtual ~CDataCacheCore();
   static CDataCacheCore& GetInstance();
   void Reset();
+  void ResetAudioCache();
   bool HasAVInfoChanges();
   void SignalVideoInfoChange();
   void SignalAudioInfoChange();
@@ -48,6 +46,24 @@ public:
   float GetVideoFps();
   void SetVideoDAR(float dar);
   float GetVideoDAR();
+  void SetVideoLiveBitRate(int bitRate);
+  int GetVideoLiveBitRate();
+  void SetVideoQueueLevel(int level);
+  int GetVideoQueueLevel();
+  void SetVideoQueueDataLevel(int level);
+  int GetVideoQueueDataLevel();
+
+  /*!
+   * @brief Set if the video is interlaced in cache.
+   * @param isInterlaced Set true when the video is interlaced
+   */
+  void SetVideoInterlaced(bool isInterlaced);
+
+  /*!
+   * @brief Check if the video is interlaced from cache
+   * @return True if interlaced, otherwise false
+   */
+  bool IsVideoInterlaced();
 
   // player audio info
   void SetAudioDecoderName(std::string name);
@@ -58,31 +74,102 @@ public:
   int GetAudioSampleRate();
   void SetAudioBitsPerSample(int bitsPerSample);
   int GetAudioBitsPerSample();
+  void SetAudioLiveBitRate(int bitRate);
+  int GetAudioLiveBitRate();
+  void SetAudioQueueLevel(int level);
+  int GetAudioQueueLevel();
+  void SetAudioQueueDataLevel(int level);
+  int GetAudioQueueDataLevel();
+
+  // player subtitle info
+  void SetSubtitleDecoderName(std::string name);
+  std::string GetSubtitleDecoderName();
 
   // content info
 
   /*!
-   * @brief Set the EDL edit list.
+   * @brief Set the EDL edit list to cache.
    * @param editList The vector of edits to fill.
    */
   void SetEditList(const std::vector<EDL::Edit>& editList);
 
   /*!
-   * @brief Get the EDL edit list.
+   * @brief Get the EDL edit list in cache.
    * @return The EDL edits or an empty vector if no edits exist.
    */
-  std::vector<EDL::Edit> GetEditList() const;
+  const std::vector<EDL::Edit>& GetEditList() const;
+
+  /*!
+   * @brief Set the list of cut markers in cache.
+   * @return The list of cuts or an empty list if no cuts exist
+   */
+  void SetCuts(const std::vector<std::chrono::milliseconds>& cuts);
+
+  /*!
+   * @brief Get the list of cut markers from cache.
+   * @return The list of cut markers or an empty vector if no cuts exist.
+   */
+  const std::vector<std::chrono::milliseconds>& GetCuts() const;
+
+  /*!
+   * @brief Set the list of scene markers in cache.
+   * @return The list of scene markers or an empty list if no scene markers exist
+   */
+  void SetSceneMarkers(const std::vector<std::chrono::milliseconds>& sceneMarkers);
+
+  /*!
+   * @brief Get the list of scene markers markers from cache.
+   * @return The list of scene markers or an empty vector if no scene exist.
+   */
+  const std::vector<std::chrono::milliseconds>& GetSceneMarkers() const;
 
   void SetChapters(const std::vector<std::pair<std::string, int64_t>>& chapters);
-  std::vector<std::pair<std::string, int64_t>> GetChapters() const;
+
+  /*!
+   * @brief Get the chapter list in cache.
+   * @return The list of chapters or an empty vector if no chapters exist.
+   */
+  const std::vector<std::pair<std::string, int64_t>>& GetChapters() const;
+
+  /*!
+   * \brief Set the list of bookmarks in cache.
+   * \return The list of bookmarks or an empty list if no bookmarks exist
+   */
+  void SetBookmarks(const std::vector<std::chrono::milliseconds>& bookmarks);
+
+  /*!
+   * \brief Get the list of bookmarks from cache.
+   * \return The list of bookmarks or an empty vector if no scene exist.
+   */
+  const std::vector<std::chrono::milliseconds>& GetBookmarks() const;
 
   // render info
   void SetRenderClockSync(bool enabled);
   bool IsRenderClockSync();
 
   // player states
+  /*!
+   * @brief Notifies the cache core that a seek operation has finished
+   * @param offset - the seek offset
+  */
+  void SeekFinished(int64_t offset);
+
   void SetStateSeeking(bool active);
   bool IsSeeking();
+
+  /*!
+   * @brief Checks if a seek has been performed in the last provided seconds interval
+   * @param lastSecondInterval - the last elapsed second interval to check for a seek operation
+   * @return true if a seek was performed in the lastSecondInterval, false otherwise
+  */
+  bool HasPerformedSeek(int64_t lastSecondInterval) const;
+
+  /*!
+   * @brief Gets the last seek offset
+   * @return the last seek offset
+  */
+  int64_t GetSeekOffSet() const;
+
   void SetSpeed(float tempo, float speed);
   float GetSpeed();
   float GetTempo();
@@ -138,7 +225,7 @@ public:
   int64_t GetMaxTime();
 
 protected:
-  std::atomic_bool m_hasAVInfoChanges;
+  std::atomic_bool m_hasAVInfoChanges = false;
 
   CCriticalSection m_videoPlayerSection;
   struct SPlayerVideoInfo
@@ -152,6 +239,10 @@ protected:
     int height;
     float fps;
     float dar;
+    bool m_isInterlaced;
+    int liveBitRate;
+    int queueLevel;
+    int queueDataLevel;
   } m_playerVideoInfo;
 
   CCriticalSection m_audioPlayerSection;
@@ -161,31 +252,136 @@ protected:
     std::string channels;
     int sampleRate;
     int bitsPerSample;
+    int liveBitRate;
+    int queueLevel;
+    int queueDataLevel;
   } m_playerAudioInfo;
+
+  CCriticalSection m_subtitlePlayerSection;
+  struct SPlayerSubtitleInfo
+  {
+    std::string m_decoderName;
+  } m_playerSubtitleInfo;
 
   mutable CCriticalSection m_contentSection;
   struct SContentInfo
   {
+  public:
+    /*!
+      * @brief Set the EDL edit list in cache.
+      * @param editList the list of edits to store in cache
+      */
+    void SetEditList(const std::vector<EDL::Edit>& editList) { m_editList = editList; }
+
+    /*!
+      * @brief Get the EDL edit list in cache.
+      * @return the list of edits in cache
+      */
+    const std::vector<EDL::Edit>& GetEditList() const { return m_editList; }
+
+    /*!
+      * @brief Save the list of cut markers in cache.
+      * @param cuts the list of cut markers to store in cache
+      */
+    void SetCuts(const std::vector<std::chrono::milliseconds>& cuts) { m_cuts = cuts; }
+
+    /*!
+      * @brief Get the list of cut markers in cache.
+      * @return the list of cut markers in cache
+      */
+    const std::vector<std::chrono::milliseconds>& GetCuts() const { return m_cuts; }
+
+    /*!
+      * @brief Save the list of scene markers in cache.
+      * @param sceneMarkers the list of scene markers to store in cache
+      */
+    void SetSceneMarkers(const std::vector<std::chrono::milliseconds>& sceneMarkers)
+    {
+      m_sceneMarkers = sceneMarkers;
+    }
+
+    /*!
+      * @brief Get the list of scene markers in cache.
+      * @return the list of scene markers in cache
+      */
+    const std::vector<std::chrono::milliseconds>& GetSceneMarkers() const { return m_sceneMarkers; }
+
+    /*!
+      * @brief Save the chapter list in cache.
+      * @param chapters the list of chapters to store in cache
+      */
+    void SetChapters(const std::vector<std::pair<std::string, int64_t>>& chapters)
+    {
+      m_chapters = chapters;
+    }
+
+    /*!
+      * @brief Get the list of chapters in cache.
+      * @return the list of chapters in cache
+      */
+    const std::vector<std::pair<std::string, int64_t>>& GetChapters() const { return m_chapters; }
+
+    /*!
+      * @brief Save the list of bookmarks in cache.
+      * @param sceneMarkers the list of bookmarks to store in cache
+      */
+    void SetBookmarks(const std::vector<std::chrono::milliseconds>& bookmarks)
+    {
+      m_bookmarks = bookmarks;
+    }
+
+    /*!
+      * \brief Get the list of bookmarks in cache.
+      * \return the list of bookmarks in cache
+      */
+    const std::vector<std::chrono::milliseconds>& GetBookmarks() const { return m_bookmarks; }
+
+    /*!
+      * @brief Reset the content cache to the original values (all empty)
+      */
+    void Reset()
+    {
+      m_editList.clear();
+      m_chapters.clear();
+      m_cuts.clear();
+      m_sceneMarkers.clear();
+      m_bookmarks.clear();
+    }
+
+  private:
+    /*!< list of EDL edits */
     std::vector<EDL::Edit> m_editList;
-    std::vector<std::pair<std::string, int64_t>> m_chapters; // name and position for chapters
+    /*!< name and position for chapters */
+    std::vector<std::pair<std::string, int64_t>> m_chapters;
+    /*!< position for EDL cuts */
+    std::vector<std::chrono::milliseconds> m_cuts;
+    /*!< position for EDL scene markers */
+    std::vector<std::chrono::milliseconds> m_sceneMarkers;
+    /*!< position for bookmarks */
+    std::vector<std::chrono::milliseconds> m_bookmarks;
   } m_contentInfo;
 
   CCriticalSection m_renderSection;
   struct SRenderInfo
   {
     bool m_isClockSync;
-  } m_renderInfo;
+  } m_renderInfo{};
 
-  CCriticalSection m_stateSection;
+  mutable CCriticalSection m_stateSection;
   bool m_playerStateChanged = false;
   struct SStateInfo
   {
-    bool m_stateSeeking;
-    bool m_renderGuiLayer;
-    bool m_renderVideoLayer;
-    float m_tempo;
-    float m_speed;
-    bool m_frameAdvance;
+    bool m_stateSeeking{false};
+    bool m_renderGuiLayer{false};
+    bool m_renderVideoLayer{false};
+    float m_tempo{1.0f};
+    float m_speed{1.0f};
+    bool m_frameAdvance{false};
+    /*! Time point of the last seek operation */
+    std::chrono::time_point<std::chrono::system_clock> m_lastSeekTime{
+        std::chrono::time_point<std::chrono::system_clock>{}};
+    /*! Last seek offset */
+    int64_t m_lastSeekOffset{0};
   } m_stateInfo;
 
   struct STimeInfo

@@ -13,10 +13,13 @@
 #include "interfaces/legacy/Exception.h"
 #include "settings/AdvancedSettings.h"
 #include "settings/SettingsComponent.h"
+#include "utils/LangCodeExpander.h"
 #include "utils/StringUtils.h"
 #include "utils/log.h"
 
 #include <utility>
+
+using KODI::MEDIA::MediaTypeFromName;
 
 namespace XBMCAddon
 {
@@ -51,14 +54,18 @@ namespace XBMCAddon
                                          int duration /* = 0 */,
                                          const String& codec /* = emptyString */,
                                          const String& stereoMode /* = emptyString */,
-                                         const String& language /* = emptyString */)
+                                         const String& language /* = emptyString */,
+                                         const String& hdrType /* = emptyString */,
+                                         const String& hdrDetail /* = emptyString */)
       : m_width(width),
         m_height(height),
         m_aspect(aspect),
         m_duration(duration),
         m_codec(codec),
         m_stereoMode(stereoMode),
-        m_language(language)
+        m_language(language),
+        m_hdrType(hdrType),
+        m_hdrDetail(hdrDetail)
     {
     }
 
@@ -71,7 +78,9 @@ namespace XBMCAddon
       streamDetail->m_iDuration = m_duration;
       streamDetail->m_strCodec = m_codec;
       streamDetail->m_strStereoMode = m_stereoMode;
-      streamDetail->m_strLanguage = m_language;
+      streamDetail->m_strLanguage = CLangCodeExpander::AsISO6392B(m_language);
+      streamDetail->m_strHdrType = m_hdrType;
+      streamDetail->m_strHdrDetail = m_hdrDetail;
 
       return streamDetail;
     }
@@ -88,7 +97,7 @@ namespace XBMCAddon
       auto streamDetail = new CStreamDetailAudio();
       streamDetail->m_iChannels = m_channels;
       streamDetail->m_strCodec = m_codec;
-      streamDetail->m_strLanguage = m_language;
+      streamDetail->m_strLanguage = CLangCodeExpander::AsISO6392B(m_language);
 
       return streamDetail;
     }
@@ -101,9 +110,31 @@ namespace XBMCAddon
     CStreamDetailSubtitle* SubtitleStreamDetail::ToStreamDetailSubtitle() const
     {
       auto streamDetail = new CStreamDetailSubtitle();
-      streamDetail->m_strLanguage = m_language;
+      streamDetail->m_strLanguage = CLangCodeExpander::AsISO6392B(m_language);
 
       return streamDetail;
+    }
+
+    ContentGeometrySection::ContentGeometrySection(
+        const KODI::VIDEO::GEOMETRY::GeometrySection& section)
+      : m_section(section)
+    {
+    }
+
+    ContentGeometry::ContentGeometry(const KODI::VIDEO::GEOMETRY::EffectiveGeometry& geometry)
+      : m_geometry(geometry)
+    {
+    }
+
+    std::vector<ContentGeometrySection*> ContentGeometry::getSections() const
+    {
+      std::vector<ContentGeometrySection*> sections;
+      sections.reserve(m_geometry.sections.size());
+
+      for (const KODI::VIDEO::GEOMETRY::GeometrySection& section : m_geometry.sections)
+        sections.push_back(new ContentGeometrySection(section));
+
+      return sections;
     }
 
     InfoTagVideo::InfoTagVideo(bool offscreen /* = false */)
@@ -216,7 +247,7 @@ namespace XBMCAddon
 
     String InfoTagVideo::getCast()
     {
-      return infoTag->GetCast(true);
+      return infoTag->GetCast("\n", true);
     }
 
     std::vector<Actor*> InfoTagVideo::getActors()
@@ -228,6 +259,11 @@ namespace XBMCAddon
         actors.push_back(new Actor(cast.strName, cast.strRole, cast.order, cast.thumbUrl.GetFirstUrlByType().m_url));
 
       return actors;
+    }
+
+    ContentGeometry* InfoTagVideo::getContentGeometry()
+    {
+      return new ContentGeometry(infoTag->ResolveContentGeometry());
     }
 
     String InfoTagVideo::getFile()
@@ -296,6 +332,11 @@ namespace XBMCAddon
     String InfoTagVideo::getOriginalTitle()
     {
       return infoTag->m_strOriginalTitle;
+    }
+
+    String InfoTagVideo::getOriginalLanguage()
+    {
+      return infoTag->GetOriginalLanguage();
     }
 
     String InfoTagVideo::getPremiered()
@@ -372,7 +413,7 @@ namespace XBMCAddon
       setUniqueIDRaw(infoTag, uniqueID, type, isDefault);
     }
 
-    void InfoTagVideo::setUniqueIDs(const std::map<String, String>& uniqueIDs,
+    void InfoTagVideo::setUniqueIDs(const std::map<String, String, std::less<>>& uniqueIDs,
                                     const String& defaultUniqueID /* = "" */)
     {
       XBMCAddonUtils::GuiLock lock(languageHook, offscreen);
@@ -497,6 +538,12 @@ namespace XBMCAddon
       setOriginalTitleRaw(infoTag, originalTitle);
     }
 
+    bool InfoTagVideo::setOriginalLanguage(const String& language)
+    {
+      XBMCAddonUtils::GuiLock lock(languageHook, offscreen);
+      return setOriginalLanguageRaw(infoTag, language);
+    }
+
     void InfoTagVideo::setSortTitle(const String& sortTitle)
     {
       XBMCAddonUtils::GuiLock lock(languageHook, offscreen);
@@ -579,6 +626,11 @@ namespace XBMCAddon
     {
       XBMCAddonUtils::GuiLock lock(languageHook, offscreen);
       setTagsRaw(infoTag, std::move(tags));
+    }
+
+    void InfoTagVideo::setVideoAssetTitle(const String& videoAssetTitle)
+    {
+      setVideoAssetTitleRaw(infoTag, videoAssetTitle);
     }
 
     void InfoTagVideo::setProductionCode(const String& productionCode)
@@ -677,16 +729,18 @@ namespace XBMCAddon
       setResumePointRaw(infoTag, time, totalTime);
     }
 
-    void InfoTagVideo::addSeason(int number, std::string name /* = "" */)
+    void InfoTagVideo::addSeason(int number,
+                                 std::string name /* = "" */,
+                                 std::string plot /* = "" */)
     {
       XBMCAddonUtils::GuiLock lock(languageHook, offscreen);
-      addSeasonRaw(infoTag, number, std::move(name));
+      addSeasonRaw(infoTag, number, std::move(name), std::move(plot));
     }
 
-    void InfoTagVideo::addSeasons(const std::vector<Tuple<int, std::string>>& namedSeasons)
+    void InfoTagVideo::addSeasons(const std::vector<Tuple<int, std::string, std::string>>& seasons)
     {
       XBMCAddonUtils::GuiLock lock(languageHook, offscreen);
-      addSeasonsRaw(infoTag, namedSeasons);
+      addSeasonsRaw(infoTag, seasons);
     }
 
     void InfoTagVideo::addVideoStream(const VideoStreamDetail* stream)
@@ -698,6 +752,7 @@ namespace XBMCAddon
       {
         XBMCAddonUtils::GuiLock lock(languageHook, offscreen);
         addStreamRaw(infoTag, streamDetail);
+        finalizeStreamsRaw(infoTag);
       }
     }
 
@@ -710,6 +765,7 @@ namespace XBMCAddon
       {
         XBMCAddonUtils::GuiLock lock(languageHook, offscreen);
         addStreamRaw(infoTag, streamDetail);
+        finalizeStreamsRaw(infoTag);
       }
     }
 
@@ -722,6 +778,7 @@ namespace XBMCAddon
       {
         XBMCAddonUtils::GuiLock lock(languageHook, offscreen);
         addStreamRaw(infoTag, streamDetail);
+        finalizeStreamsRaw(infoTag);
       }
     }
 
@@ -738,6 +795,12 @@ namespace XBMCAddon
       addAvailableArtworkRaw(infoTag, url, art_type, preview, referrer, cache, post, isgz, season);
     }
 
+    void InfoTagVideo::setAvailableFanart(const std::vector<Properties>& images)
+    {
+      XBMCAddonUtils::GuiLock lock(languageHook, offscreen);
+      setAvailableFanartRaw(infoTag, images);
+    }
+
     void InfoTagVideo::setDbIdRaw(CVideoInfoTag* infoTag, int dbId)
     {
       infoTag->m_iDbId = dbId;
@@ -752,7 +815,7 @@ namespace XBMCAddon
     }
 
     void InfoTagVideo::setUniqueIDsRaw(CVideoInfoTag* infoTag,
-                                       std::map<String, String> uniqueIDs,
+                                       std::map<String, String, std::less<>> uniqueIDs,
                                        const String& defaultUniqueID /* = "" */)
     {
       infoTag->SetUniqueIDs(uniqueIDs);
@@ -798,7 +861,7 @@ namespace XBMCAddon
 
     void InfoTagVideo::setSetIdRaw(CVideoInfoTag* infoTag, int setId)
     {
-      infoTag->m_set.id = setId;
+      infoTag->m_set.SetID(setId);
     }
 
     void InfoTagVideo::setTrackNumberRaw(CVideoInfoTag* infoTag, int trackNumber)
@@ -859,6 +922,17 @@ namespace XBMCAddon
     void InfoTagVideo::setOriginalTitleRaw(CVideoInfoTag* infoTag, const String& originalTitle)
     {
       infoTag->SetOriginalTitle(originalTitle);
+    }
+
+    bool InfoTagVideo::setOriginalLanguageRaw(CVideoInfoTag* infoTag, const String& language)
+    {
+      if (!infoTag->SetOriginalLanguage(language,
+                                        CVideoInfoTag::LanguageTagSource::SOURCE_EXTERNAL))
+      {
+        CLog::LogF(LOGWARNING, "the language {} is not recognized", language);
+        return false;
+      }
+      return true;
     }
 
     void InfoTagVideo::setSortTitleRaw(CVideoInfoTag* infoTag, const String& sortTitle)
@@ -933,6 +1007,11 @@ namespace XBMCAddon
       infoTag->SetTags(std::move(tags));
     }
 
+    void InfoTagVideo::setVideoAssetTitleRaw(CVideoInfoTag* infoTag, const String& videoAssetTitle)
+    {
+      infoTag->GetAssetInfo().SetTitle(videoAssetTitle);
+    }
+
     void InfoTagVideo::setProductionCodeRaw(CVideoInfoTag* infoTag, const String& productionCode)
     {
       infoTag->SetProductionCode(productionCode);
@@ -991,7 +1070,7 @@ namespace XBMCAddon
 
     void InfoTagVideo::setMediaTypeRaw(CVideoInfoTag* infoTag, const String& mediaType)
     {
-      if (CMediaTypes::IsValidMediaType(mediaType))
+      if (MediaTypeFromName(mediaType) != KODI::MEDIA::TYPE::NONE)
         infoTag->m_type = mediaType;
     }
 
@@ -1021,20 +1100,25 @@ namespace XBMCAddon
       infoTag->SetResumePoint(resumePoint);
     }
 
-    void InfoTagVideo::addSeasonRaw(CVideoInfoTag* infoTag, int number, std::string name /* = "" */)
+    void InfoTagVideo::addSeasonRaw(CVideoInfoTag* infoTag,
+                                    int number,
+                                    std::string name /* = "" */,
+                                    std::string plot /* = "" */)
     {
-      infoTag->m_namedSeasons[number] = std::move(name);
+      infoTag->m_seasons[number].m_name = std::move(name);
+      infoTag->m_seasons[number].m_plot = std::move(plot);
     }
 
-    void InfoTagVideo::addSeasonsRaw(CVideoInfoTag* infoTag,
-                                     const std::vector<Tuple<int, std::string>>& namedSeasons)
+    void InfoTagVideo::addSeasonsRaw(
+        CVideoInfoTag* infoTag, const std::vector<Tuple<int, std::string, std::string>>& seasons)
     {
-      for (const auto& season : namedSeasons)
-        addSeasonRaw(infoTag, season.first(), season.second());
+      for (const auto& season : seasons)
+        addSeasonRaw(infoTag, season.first(), season.second(), season.third());
     }
 
     void InfoTagVideo::addStreamRaw(CVideoInfoTag* infoTag, CStreamDetail* stream)
     {
+      stream->SetSource(CStreamDetail::EXTERNAL);
       infoTag->m_streamDetails.AddStream(stream);
     }
 
@@ -1055,6 +1139,31 @@ namespace XBMCAddon
     {
       infoTag->m_strPictureURL.AddParsedUrl(url, art_type, preview, referrer, cache, post, isgz,
                                             season);
+    }
+
+    void InfoTagVideo::setAvailableFanartRaw(CVideoInfoTag* infoTag,
+                                             const std::vector<Properties>& images)
+    {
+      infoTag->m_fanart.Clear();
+      for (const auto& dictionary : images)
+      {
+        auto getValue = [&](std::string_view str) -> const std::string&
+        {
+          const auto iter = dictionary.find(str);
+          if (iter != dictionary.end())
+            return iter->second;
+          else
+            return StringUtils::Empty;
+        };
+
+        if (const std::string& image = getValue("image"); !image.empty())
+        {
+          const std::string& preview = getValue("preview");
+          const std::string& colors = getValue("colors");
+          infoTag->m_fanart.AddFanart(image, preview, colors);
+        }
+      }
+      infoTag->m_fanart.Pack();
     }
   }
 }

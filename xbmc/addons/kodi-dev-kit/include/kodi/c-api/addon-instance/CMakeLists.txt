@@ -5,11 +5,12 @@ set(HEADERS
   audiodecoder.h
   audioencoder.h
   game.h
-  image_decoder.h
+  imagedecoder.h
   inputstream.h
   peripheral.h
   pvr.h
   screensaver.h
+  shaderpreset.h
   vfs.h
   video_codec.h
   visualization.h

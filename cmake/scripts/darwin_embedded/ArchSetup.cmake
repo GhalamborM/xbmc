@@ -26,12 +26,11 @@ endif()
 if(NOT APP_RENDER_SYSTEM OR APP_RENDER_SYSTEM STREQUAL "gles")
   set(PLATFORM_REQUIRED_DEPS OpenGLES)
   set(APP_RENDER_SYSTEM gles)
-  list(APPEND SYSTEM_DEFINES -DGL_DO_NOT_WARN_IF_MULTI_GL_VERSION_HEADERS_INCLUDED)
+  list(APPEND SYSTEM_DEFINES -DGL_DO_NOT_WARN_IF_MULTI_GL_VERSION_HEADERS_INCLUDED
+                             -DGLES_SILENCE_DEPRECATION)
 else()
   message(SEND_ERROR "Currently only OpenGLES rendering is supported. Please set APP_RENDER_SYSTEM to \"gles\"")
 endif()
-
-list(APPEND CMAKE_SYSTEM_PREFIX_PATH ${NATIVEPREFIX})
 
 list(APPEND DEPLIBS "-framework CoreFoundation" "-framework CoreVideo"
                     "-framework CoreAudio" "-framework AudioToolbox"
@@ -42,10 +41,34 @@ list(APPEND DEPLIBS "-framework CoreFoundation" "-framework CoreVideo"
                     "-framework VideoToolbox" "-lresolv" "-ObjC"
                     "-framework AVKit" "-framework GameController")
 
+if(CORE_PLATFORM_NAME_LC STREQUAL tvos)
+  list(APPEND DEPLIBS "-framework CoreImage")
+endif()
+
+# Speech not available on tvOS
+if(NOT CORE_PLATFORM_NAME_LC STREQUAL tvos)
+  list(APPEND DEPLIBS "-framework Speech")
+endif()
+
 set(ENABLE_OPTICAL OFF CACHE BOOL "" FORCE)
 set(CMAKE_XCODE_ATTRIBUTE_INLINES_ARE_PRIVATE_EXTERN OFF)
 set(CMAKE_XCODE_ATTRIBUTE_GCC_SYMBOLS_PRIVATE_EXTERN OFF)
 set(CMAKE_XCODE_ATTRIBUTE_COPY_PHASE_STRIP OFF)
+
+# Xcode sets a deployment target for every Apple platform it knows about, not just the one
+# being built for, and exports them all into Run Script build phases. clang rejects an
+# invocation that sees more than one, which breaks internal dependencies that configure or
+# build through a shell. See cmake/scripts/osx/ArchSetup.cmake.
+set(CMAKE_XCODE_ATTRIBUTE_DRIVERKIT_DEPLOYMENT_TARGET "")
+set(CMAKE_XCODE_ATTRIBUTE_WATCHOS_DEPLOYMENT_TARGET "")
+set(CMAKE_XCODE_ATTRIBUTE_XROS_DEPLOYMENT_TARGET "")
+set(CMAKE_XCODE_ATTRIBUTE_MACOSX_DEPLOYMENT_TARGET "")
+
+if(CORE_PLATFORM_NAME_LC STREQUAL tvos)
+  set(CMAKE_XCODE_ATTRIBUTE_IPHONEOS_DEPLOYMENT_TARGET "")
+else()
+  set(CMAKE_XCODE_ATTRIBUTE_TVOS_DEPLOYMENT_TARGET "")
+endif()
 
 include(cmake/scripts/darwin/Macros.cmake)
 enable_arc()

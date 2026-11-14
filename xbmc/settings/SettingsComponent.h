@@ -10,10 +10,14 @@
 
 #include <memory>
 
-class CAppParamParser;
 class CAdvancedSettings;
 class CProfileManager;
 class CSettings;
+
+namespace KODI::SUBTITLES
+{
+class CSubtitlesSettings;
+} // namespace KODI::SUBTITLES
 
 class CSettingsComponent
 {
@@ -23,9 +27,8 @@ public:
 
   /*!
    * @brief Initialize all subcomponents with system default values (loaded from code, system settings files, ...).
-   * @param params The command line params passed to the app.
    */
-  void Init(const CAppParamParser &params);
+  void Initialize();
 
   /*!
    * @brief Initialize all subcomponents with user values (loaded from user settings files, according to active profile).
@@ -36,32 +39,33 @@ public:
   /*!
    * @brief Deinitialize all subcomponents.
    */
-  void Deinit();
+  void Deinitialize();
 
   /*!
    * @brief Get access to the settings subcomponent.
    * @return the settings subcomponent.
    */
-  std::shared_ptr<CSettings> GetSettings();
+  std::shared_ptr<CSettings> GetSettings() const;
 
   /*!
    * @brief Get access to the advanced settings subcomponent.
    * @return the advanced settings subcomponent.
    */
-  std::shared_ptr<CAdvancedSettings> GetAdvancedSettings();
+  std::shared_ptr<CAdvancedSettings> GetAdvancedSettings() const;
+
+  /*!
+   * @brief Get access to the subtitles settings subcomponent.
+   * @return the subtiltles settings subcomponent.
+   */
+  std::shared_ptr<KODI::SUBTITLES::CSubtitlesSettings> GetSubtitlesSettings() const;
 
   /*!
    * @brief Get access to the profiles manager subcomponent.
    * @return the profiles manager subcomponent.
    */
-  std::shared_ptr<CProfileManager> GetProfileManager();
+  std::shared_ptr<CProfileManager> GetProfileManager() const;
 
 private:
-  bool InitDirectoriesLinux(bool bPlatformDirectories);
-  bool InitDirectoriesOSX(bool bPlatformDirectories);
-  bool InitDirectoriesWin32(bool bPlatformDirectories);
-  void CreateUserDirs() const;
-
   enum class State
   {
     DEINITED,
@@ -72,5 +76,6 @@ private:
 
   std::shared_ptr<CSettings> m_settings;
   std::shared_ptr<CAdvancedSettings> m_advancedSettings;
+  std::shared_ptr<KODI::SUBTITLES::CSubtitlesSettings> m_subtitlesSettings;
   std::shared_ptr<CProfileManager> m_profileManager;
 };

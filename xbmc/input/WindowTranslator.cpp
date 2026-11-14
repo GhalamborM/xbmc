@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2017-2018 Team Kodi
+ *  Copyright (C) 2017-2024 Team Kodi
  *  This file is part of Kodi - https://kodi.tv
  *
  *  SPDX-License-Identifier: GPL-2.0-or-later
@@ -8,11 +8,14 @@
 
 #include "WindowTranslator.h"
 
-#include "Application.h"
+#include "FileItem.h"
 #include "ServiceBroker.h"
+#include "application/Application.h"
+#include "application/ApplicationComponents.h"
+#include "application/ApplicationPlayer.h"
 #include "guilib/WindowIDs.h"
 #include "pvr/PVRManager.h"
-#include "pvr/guilib/PVRGUIActions.h"
+#include "pvr/guilib/PVRGUIActionsChannels.h"
 #include "utils/StringUtils.h"
 #include "utils/log.h"
 
@@ -33,11 +36,13 @@ const CWindowTranslator::WindowMapByName CWindowTranslator::WindowMappingByName 
     {"tvguide", WINDOW_TV_GUIDE},
     {"tvtimers", WINDOW_TV_TIMERS},
     {"tvsearch", WINDOW_TV_SEARCH},
+    {"tvproviders", WINDOW_TV_PROVIDERS},
     {"radiochannels", WINDOW_RADIO_CHANNELS},
     {"radiorecordings", WINDOW_RADIO_RECORDINGS},
     {"radioguide", WINDOW_RADIO_GUIDE},
     {"radiotimers", WINDOW_RADIO_TIMERS},
     {"radiosearch", WINDOW_RADIO_SEARCH},
+    {"radioproviders", WINDOW_RADIO_PROVIDERS},
     {"gamecontrollers", WINDOW_DIALOG_GAME_CONTROLLERS},
     {"gameports", WINDOW_DIALOG_GAME_PORTS},
     {"games", WINDOW_GAMES},
@@ -57,6 +62,7 @@ const CWindowTranslator::WindowMapByName CWindowTranslator::WindowMappingByName 
     {"pvrosdteletext", WINDOW_DIALOG_OSD_TELETEXT},
     {"systeminfo", WINDOW_SYSTEM_INFORMATION},
     {"screencalibration", WINDOW_SCREEN_CALIBRATION},
+    {"screenalignment", WINDOW_SCREEN_ALIGNMENT},
     {"systemsettings", WINDOW_SETTINGS_SYSTEM},
     {"servicesettings", WINDOW_SETTINGS_SERVICE},
     {"pvrsettings", WINDOW_SETTINGS_MYPVR},
@@ -75,7 +81,6 @@ const CWindowTranslator::WindowMapByName CWindowTranslator::WindowMappingByName 
     {"virtualkeyboard", WINDOW_DIALOG_KEYBOARD},
     {"volumebar", WINDOW_DIALOG_VOLUME_BAR},
     {"submenu", WINDOW_DIALOG_SUB_MENU},
-    {"favourites", WINDOW_DIALOG_FAVOURITES},
     {"contextmenu", WINDOW_DIALOG_CONTEXT_MENU},
     {"notification", WINDOW_DIALOG_KAI_TOAST},
     {"numericinput", WINDOW_DIALOG_NUMERIC},
@@ -117,6 +122,8 @@ const CWindowTranslator::WindowMapByName CWindowTranslator::WindowMappingByName 
     {"musicinformation", WINDOW_DIALOG_MUSIC_INFO},
     {"okdialog", WINDOW_DIALOG_OK},
     {"movieinformation", WINDOW_DIALOG_VIDEO_INFO},
+    {"managevideoversions", WINDOW_DIALOG_MANAGE_VIDEO_VERSIONS},
+    {"managevideoextras", WINDOW_DIALOG_MANAGE_VIDEO_EXTRAS},
     {"textviewer", WINDOW_DIALOG_TEXT_VIEWER},
     {"fullscreenvideo", WINDOW_FULLSCREEN_VIDEO},
     {"dialogcolorpicker", WINDOW_DIALOG_COLOR_PICKER},
@@ -151,11 +158,13 @@ const CWindowTranslator::WindowMapByName CWindowTranslator::WindowMappingByName 
     {"splash", WINDOW_SPLASH},
     {"startwindow", WINDOW_START},
     {"startup", WINDOW_STARTUP_ANIM},
+    {"peripherals", WINDOW_DIALOG_PERIPHERALS},
     {"peripheralsettings", WINDOW_DIALOG_PERIPHERAL_SETTINGS},
     {"extendedprogressdialog", WINDOW_DIALOG_EXT_PROGRESS},
     {"mediafilter", WINDOW_DIALOG_MEDIA_FILTER},
     {"addon", WINDOW_ADDON_START},
     {"eventlog", WINDOW_EVENT_LOG},
+    {"favouritesbrowser", WINDOW_FAVOURITES},
     {"tvtimerrules", WINDOW_TV_TIMER_RULES},
     {"radiotimerrules", WINDOW_RADIO_TIMER_RULES},
     {"gameosd", WINDOW_DIALOG_GAME_OSD},
@@ -164,6 +173,18 @@ const CWindowTranslator::WindowMapByName CWindowTranslator::WindowMappingByName 
     {"gamevolume", WINDOW_DIALOG_GAME_VOLUME},
     {"gameadvancedsettings", WINDOW_DIALOG_GAME_ADVANCED_SETTINGS},
     {"gamevideorotation", WINDOW_DIALOG_GAME_VIDEO_ROTATION},
+    {"ingamesaves", WINDOW_DIALOG_IN_GAME_SAVES},
+    {"gamesaves", WINDOW_DIALOG_GAME_SAVES},
+    {"gameagents", WINDOW_DIALOG_GAME_AGENTS},
+    {"gamediscmanager", WINDOW_DIALOG_GAME_DISC_MANAGER},
+    {"gameachievements", WINDOW_DIALOG_GAME_ACHIEVEMENTS},
+    {"gameindicators", WINDOW_DIALOG_GAME_INDICATORS},
+    {"gameleaderboards", WINDOW_DIALOG_GAME_LEADERBOARDS},
+    {"gameleaderboardentries", WINDOW_DIALOG_GAME_LEADERBOARD_ENTRIES},
+    {"gamecheats", WINDOW_DIALOG_GAME_CHEATS},
+    {"dialogselectvideo", WINDOW_DIALOG_SELECT_VIDEO_STREAM},
+    {"dialogselectaudio", WINDOW_DIALOG_SELECT_AUDIO_STREAM},
+    {"dialogselectsubtitle", WINDOW_DIALOG_SELECT_SUBTITLE_STREAM},
 };
 
 namespace
@@ -183,7 +204,6 @@ static const std::vector<FallbackWindowMapping> FallbackWindows = {
     {WINDOW_FULLSCREEN_RADIO_PREVIEW, WINDOW_FULLSCREEN_RADIO},
 };
 } // anonymous namespace
-
 
 bool CWindowTranslator::WindowNameCompare::operator()(const WindowMapItem& lhs,
                                                       const WindowMapItem& rhs) const
@@ -215,7 +235,7 @@ int CWindowTranslator::TranslateWindow(const std::string& window)
 
   // Eliminate .xml
   if (StringUtils::EndsWith(strWindow, ".xml"))
-    strWindow = strWindow.substr(0, strWindow.size() - 4);
+    strWindow.resize(strWindow.size() - 4);
 
   // window12345, for custom window to be keymapped
   if (strWindow.length() > 6 && StringUtils::StartsWith(strWindow, "window"))
@@ -260,9 +280,9 @@ std::string CWindowTranslator::TranslateWindow(int windowId)
 
 int CWindowTranslator::GetFallbackWindow(int windowId)
 {
-  auto it = std::find_if(
-      FallbackWindows.begin(), FallbackWindows.end(),
-      [windowId](const FallbackWindowMapping& mapping) { return mapping.origin == windowId; });
+  auto it = std::find_if(FallbackWindows.begin(), FallbackWindows.end(),
+                         [windowId](const FallbackWindowMapping& mapping)
+                         { return mapping.origin == windowId; });
 
   if (it != FallbackWindows.end())
     return it->target;
@@ -287,44 +307,62 @@ int CWindowTranslator::GetVirtualWindow(int windowId)
 {
   if (windowId == WINDOW_FULLSCREEN_VIDEO)
   {
-    // check if we're in a DVD menu
-    if (g_application.GetAppPlayer().IsInMenu())
-      return WINDOW_VIDEO_MENU;
-    // special casing for Live TV
-    else if (g_application.CurrentFileItem().HasPVRChannelInfoTag())
+    if (g_application.CurrentFileItem().HasPVRChannelInfoTag())
     {
+      // special casing for Live TV
       if (CServiceBroker::GetPVRManager()
-              .GUIActions()
-              ->GetChannelNumberInputHandler()
+              .Get<PVR::GUI::Channels>()
+              .GetChannelNumberInputHandler()
               .HasChannelNumber())
         return WINDOW_FULLSCREEN_LIVETV_INPUT;
-      else if (CServiceBroker::GetPVRManager().GUIActions()->GetChannelNavigator().IsPreview())
+      else if (CServiceBroker::GetPVRManager()
+                   .Get<PVR::GUI::Channels>()
+                   .GetChannelNavigator()
+                   .IsPreview())
         return WINDOW_FULLSCREEN_LIVETV_PREVIEW;
       else
         return WINDOW_FULLSCREEN_LIVETV;
     }
-    // special casing for numeric seek
-    else if (g_application.GetAppPlayer().GetSeekHandler().HasTimeCode())
-      return WINDOW_VIDEO_TIME_SEEK;
+    else
+    {
+      const auto& components = CServiceBroker::GetAppComponents();
+      const auto appPlayer = components.GetComponent<CApplicationPlayer>();
+
+      // check if we're in a DVD menu
+      if (appPlayer->IsInMenu())
+        return WINDOW_VIDEO_MENU;
+      // special casing for numeric seek
+      else if (appPlayer->GetSeekHandler().HasTimeCode())
+        return WINDOW_VIDEO_TIME_SEEK;
+    }
   }
   else if (windowId == WINDOW_VISUALISATION)
   {
-    // special casing for PVR radio
     if (g_application.CurrentFileItem().HasPVRChannelInfoTag())
     {
+      // special casing for PVR radio
       if (CServiceBroker::GetPVRManager()
-              .GUIActions()
-              ->GetChannelNumberInputHandler()
+              .Get<PVR::GUI::Channels>()
+              .GetChannelNumberInputHandler()
               .HasChannelNumber())
         return WINDOW_FULLSCREEN_RADIO_INPUT;
-      else if (CServiceBroker::GetPVRManager().GUIActions()->GetChannelNavigator().IsPreview())
+      else if (CServiceBroker::GetPVRManager()
+                   .Get<PVR::GUI::Channels>()
+                   .GetChannelNavigator()
+                   .IsPreview())
         return WINDOW_FULLSCREEN_RADIO_PREVIEW;
       else
         return WINDOW_FULLSCREEN_RADIO;
     }
-    // special casing for numeric seek
-    else if (g_application.GetAppPlayer().GetSeekHandler().HasTimeCode())
-      return WINDOW_VIDEO_TIME_SEEK;
+    else
+    {
+      const auto& components = CServiceBroker::GetAppComponents();
+      const auto appPlayer = components.GetComponent<CApplicationPlayer>();
+
+      // special casing for numeric seek
+      if (appPlayer->GetSeekHandler().HasTimeCode())
+        return WINDOW_VIDEO_TIME_SEEK;
+    }
   }
 
   return windowId;

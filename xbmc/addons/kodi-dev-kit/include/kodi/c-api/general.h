@@ -86,10 +86,7 @@ extern "C"
   } AddonKeyboardKeyTable;
   typedef struct AddonToKodiFuncTable_kodi
   {
-    char* (*get_addon_info)(void* kodiBase, const char* id);
-    bool (*open_settings_dialog)(void* kodiBase);
     char* (*unknown_to_utf8)(void* kodiBase, const char* source, bool* ret, bool failOnBadChar);
-    char* (*get_localized_string)(void* kodiBase, long label_id);
     char* (*get_language)(void* kodiBase, int format, bool region);
     bool (*queue_notification)(void* kodiBase,
                                int type,
@@ -100,11 +97,10 @@ extern "C"
                                bool withSound,
                                unsigned int messageTime);
     void (*get_md5)(void* kodiBase, const char* text, char* md5);
-    char* (*get_temp_path)(void* kodiBase);
     char* (*get_region)(void* kodiBase, const char* id);
     void (*get_free_mem)(void* kodiBase, long* free, long* total, bool as_bytes);
     int (*get_global_idle_time)(void* kodiBase);
-    bool (*is_addon_avilable)(void* kodiBase, const char* id, char** version, bool* enabled);
+    bool (*is_addon_available)(void* kodiBase, const char* id, char** version, bool* enabled);
     void (*kodi_version)(void* kodiBase,
                          char** compile_name,
                          int* major,
@@ -119,7 +115,6 @@ extern "C"
                                 struct AddonKeyboardKeyTable* layout);
     bool (*change_keyboard_layout)(void* kodiBase, char** layout_name);
   } AddonToKodiFuncTable_kodi;
-
 
 #ifdef __cplusplus
 } /* extern "C" */

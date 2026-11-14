@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2012-2018 Team Kodi
+ *  Copyright (C) 2012-2024 Team Kodi
  *  This file is part of Kodi - https://kodi.tv
  *
  *  SPDX-License-Identifier: GPL-2.0-or-later
@@ -11,11 +11,11 @@
 #include "input/touch/generic/GenericTouchPinchDetector.h"
 #include "input/touch/generic/GenericTouchRotateDetector.h"
 #include "input/touch/generic/GenericTouchSwipeDetector.h"
-#include "threads/SingleLock.h"
 #include "utils/log.h"
 
 #include <algorithm>
 #include <cmath>
+#include <mutex>
 
 using namespace std::chrono_literals;
 
@@ -46,7 +46,6 @@ float CGenericTouchInputHandler::AdjustPointerSize(float size)
     return m_dpi / 8.0f;
 }
 
-
 bool CGenericTouchInputHandler::HandleTouchInput(TouchInput event,
                                                  float x,
                                                  float y,
@@ -57,7 +56,7 @@ bool CGenericTouchInputHandler::HandleTouchInput(TouchInput event,
   if (time < 0 || pointer < 0 || pointer >= MAX_POINTERS)
     return false;
 
-  CSingleLock lock(m_critical);
+  std::unique_lock lock(m_critical);
 
   bool result = true;
 
@@ -114,7 +113,11 @@ bool CGenericTouchInputHandler::HandleTouchInput(TouchInput event,
             m_gestureState == TouchGestureMultiTouchDone)
         {
           result = OnMultiTouchDown(x, y, pointer);
+
+          // OnTimeout() takes m_critical
+          lock.unlock();
           m_holdTimer->Stop(true);
+          lock.lock();
 
           if (m_gestureState == TouchGestureSingleTouch ||
               m_gestureState == TouchGestureSingleTouchHold)
@@ -214,8 +217,8 @@ bool CGenericTouchInputHandler::HandleTouchInput(TouchInput event,
           m_gestureState == TouchGestureMultiTouchDone)
         break;
 
-      bool moving = std::any_of(m_pointers.cbegin(), m_pointers.cend(),
-                                [](Pointer const& p) { return p.valid() && p.moving; });
+      const bool moving =
+          std::ranges::any_of(m_pointers, [](Pointer const& p) { return p.valid() && p.moving; });
 
       if (moving)
       {
@@ -292,7 +295,7 @@ bool CGenericTouchInputHandler::UpdateTouchPointer(
   if (pointer < 0 || pointer >= MAX_POINTERS)
     return false;
 
-  CSingleLock lock(m_critical);
+  std::unique_lock lock(m_critical);
 
   m_pointers[pointer].last.copy(m_pointers[pointer].current);
 
@@ -326,11 +329,15 @@ void CGenericTouchInputHandler::saveLastTouch()
 
 void CGenericTouchInputHandler::OnTimeout()
 {
-  CSingleLock lock(m_critical);
+  std::unique_lock lock(m_critical);
 
   switch (m_gestureState)
   {
     case TouchGestureSingleTouch:
+      // A second pointer went down while HandleTouchInput() waited for this callback
+      if (m_pointers[1].valid())
+        break;
+
       setGestureState(TouchGestureSingleTouchHold);
 
       OnSingleTouchHold(m_pointers[0].down.x, m_pointers[0].down.y);

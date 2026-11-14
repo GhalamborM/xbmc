@@ -8,7 +8,7 @@
 
 #import "DarwinEmbedKeyboardView.h"
 
-#include "Application.h"
+#include "application/Application.h"
 #include "guilib/GUIKeyboardFactory.h"
 #include "threads/Event.h"
 #include "utils/log.h"
@@ -39,13 +39,18 @@ static CEvent keyboardFinishedEvent;
   m_deactivated = NO;
   m_keyboardVisible = false;
 
+  auto textColor = UIColor.blackColor;
+  if (@available(iOS 13.0, tvOS 13.0, *))
+    textColor = UIColor.labelColor;
+
   auto textField = [UITextField new];
   textField.translatesAutoresizingMaskIntoConstraints = NO;
   textField.clearButtonMode = UITextFieldViewModeAlways;
   textField.borderStyle = UITextBorderStyleNone;
   textField.returnKeyType = UIReturnKeyDone;
   textField.autocapitalizationType = UITextAutocapitalizationTypeNone;
-  textField.backgroundColor = UIColor.whiteColor;
+  textField.backgroundColor = UIColor.clearColor;
+  textField.textColor = textColor;
   textField.delegate = self;
   [self addSubview:textField];
   m_inputTextField = textField;

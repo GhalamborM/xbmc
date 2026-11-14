@@ -1,11 +1,7 @@
-include ../../Makefile.include
-DEPS= ../../Makefile.include Makefile
-
-# lib name, version
-LIBNAME=gmp
-VERSION=6.2.1
-SOURCE=$(LIBNAME)-$(VERSION)
-ARCHIVE=$(SOURCE).tar.xz
+include ../../Makefile.include GMP-VERSION ../../download-files.include
+DEPS = ../../Makefile.include Makefile GMP-VERSION ../../download-files.include \
+                                       0001-acinclude.m4-for-C23.patch \
+                                       0002-lshift-com-C23.patch
 
 # ABI selection
 ifeq ($(OS),linux)
@@ -23,9 +19,6 @@ CONFIGURE_FLAGS=--disable-assembly
 endif
 ifeq ($(OS),osx)
 CONFIGURE_FLAGS=--with-pic
-ifeq ($(CPU),arm64)
-CONFIGURE_FLAGS+= --disable-assembly
-endif
 endif
 ifeq ($(OS), android)
 CONFIGURE_FLAGS=--with-pic
@@ -43,12 +36,13 @@ LIBDYLIB=$(PLATFORM)/.libs/lib$(LIBNAME).a
 
 all: .installed-$(PLATFORM)
 
-$(TARBALLS_LOCATION)/$(ARCHIVE):
-	cd $(TARBALLS_LOCATION); $(RETRIEVE_TOOL) $(RETRIEVE_TOOL_FLAGS) $(BASE_URL)/$(ARCHIVE)
 
-$(PLATFORM)/config.status: $(TARBALLS_LOCATION)/$(ARCHIVE) $(DEPS)
+$(PLATFORM)/config.status: $(DEPS) | $(TARBALLS_LOCATION)/$(ARCHIVE).$(HASH_TYPE)
 	rm -rf $(PLATFORM)/*; mkdir -p $(PLATFORM)
 	cd $(PLATFORM); $(ARCHIVE_TOOL) $(ARCHIVE_TOOL_FLAGS) $(TARBALLS_LOCATION)/$(ARCHIVE)
+	cd $(PLATFORM); patch -p1 -i ../0001-acinclude.m4-for-C23.patch
+	cd $(PLATFORM); patch -p1 -i ../0002-lshift-com-C23.patch
+	cd $(PLATFORM); $(AUTORECONF) -vif
 	cd $(PLATFORM); $(CONFIGURE)
 
 $(LIBDYLIB): $(PLATFORM)/config.status

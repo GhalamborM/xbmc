@@ -9,11 +9,15 @@
 #pragma once
 
 #include "FileItemHandler.h"
-#include "pvr/channels/PVRChannelGroup.h"
 
 #include <memory>
 
 class CVariant;
+
+namespace PVR
+{
+class CPVRChannelGroup;
+}
 
 namespace JSONRPC
 {
@@ -37,6 +41,11 @@ namespace JSONRPC
                                                  IClient* client,
                                                  const CVariant& parameterObject,
                                                  CVariant& result);
+    static JSONRPC_STATUS GetPlayableBroadcasts(const std::string& method,
+                                                ITransportLayer* transport,
+                                                IClient* client,
+                                                const CVariant& parameterObject,
+                                                CVariant& result);
     static JSONRPC_STATUS GetTimers(const std::string &method, ITransportLayer *transport, IClient *client, const CVariant &parameterObject, CVariant &result);
     static JSONRPC_STATUS GetTimerDetails(const std::string &method, ITransportLayer *transport, IClient *client, const CVariant &parameterObject, CVariant &result);
     static JSONRPC_STATUS GetRecordings(const std::string &method, ITransportLayer *transport, IClient *client, const CVariant &parameterObject, CVariant &result);
@@ -49,8 +58,14 @@ namespace JSONRPC
     static JSONRPC_STATUS Record(const std::string &method, ITransportLayer *transport, IClient *client, const CVariant &parameterObject, CVariant &result);
     static JSONRPC_STATUS Scan(const std::string &method, ITransportLayer *transport, IClient *client, const CVariant &parameterObject, CVariant &result);
 
+    static std::shared_ptr<CFileItem> GetRecordingFileItem(int recordingId);
+
   private:
     static JSONRPC_STATUS GetPropertyValue(const std::string &property, CVariant &result);
-    static void FillChannelGroupDetails(const std::shared_ptr<PVR::CPVRChannelGroup> &channelGroup, const CVariant &parameterObject, CVariant &result, bool append = false);
+    static void FillChannelGroupDetails(
+        const std::shared_ptr<const PVR::CPVRChannelGroup>& channelGroup,
+        const CVariant& parameterObject,
+        CVariant& result,
+        bool append = false);
   };
 }

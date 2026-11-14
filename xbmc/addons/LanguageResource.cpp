@@ -7,34 +7,42 @@
  */
 #include "LanguageResource.h"
 
-#include "LangInfo.h"
 #include "ServiceBroker.h"
-#include "Skin.h"
 #include "addons/AddonManager.h"
+#include "addons/addoninfo/AddonType.h"
+#include "guilib/GUIComponent.h"
 #include "guilib/GUIWindowManager.h"
+#include "language/LangInfo.h"
 #include "messaging/helpers/DialogHelper.h"
 #include "settings/Settings.h"
 #include "settings/SettingsComponent.h"
 #include "utils/StringUtils.h"
 #include "utils/Variant.h"
 
+#include <array>
+#include <string_view>
+
 using namespace KODI::MESSAGING;
 
 using KODI::MESSAGING::HELPERS::DialogResponse;
 
-#define LANGUAGE_ADDON_PREFIX   "resource.language."
+namespace
+{
+constexpr const char* LANGUAGE_ADDON_PREFIX = "resource.language.";
+}
 
 namespace ADDON
 {
 
 CLanguageResource::CLanguageResource(const AddonInfoPtr& addonInfo)
-  : CResource(addonInfo, ADDON_RESOURCE_LANGUAGE)
+  : CResource(addonInfo, AddonType::RESOURCE_LANGUAGE),
+    // parse <extension> attributes
+    m_locale(
+        CLocale::FromString(Type(AddonType::RESOURCE_LANGUAGE)->GetValue("@locale").asString()))
 {
-  // parse <extension> attributes
-  m_locale = CLocale::FromString(Type(ADDON_RESOURCE_LANGUAGE)->GetValue("@locale").asString());
-
   // parse <charsets>
-  const CAddonExtensions* charsetsElement = Type(ADDON_RESOURCE_LANGUAGE)->GetElement("charsets");
+  const CAddonExtensions* charsetsElement =
+      Type(AddonType::RESOURCE_LANGUAGE)->GetElement("charsets");
   if (charsetsElement != nullptr)
   {
     m_charsetGui = charsetsElement->GetValue("gui").asString();
@@ -43,7 +51,7 @@ CLanguageResource::CLanguageResource(const AddonInfoPtr& addonInfo)
   }
 
   // parse <dvd>
-  const CAddonExtensions* dvdElement = Type(ADDON_RESOURCE_LANGUAGE)->GetElement("dvd");
+  const CAddonExtensions* dvdElement = Type(AddonType::RESOURCE_LANGUAGE)->GetElement("dvd");
   if (dvdElement != nullptr)
   {
     m_dvdLanguageMenu = dvdElement->GetValue("menu").asString();
@@ -59,7 +67,8 @@ CLanguageResource::CLanguageResource(const AddonInfoPtr& addonInfo)
     m_dvdLanguageSubtitle = m_locale.GetLanguageCode();
 
   // parse <sorttokens>
-  const CAddonExtensions* sorttokensElement = Type(ADDON_RESOURCE_LANGUAGE)->GetElement("sorttokens");
+  const CAddonExtensions* sorttokensElement =
+      Type(AddonType::RESOURCE_LANGUAGE)->GetElement("sorttokens");
   if (sorttokensElement != nullptr)
   {
     /* First loop goes around rows e.g.
@@ -67,16 +76,16 @@ CLanguageResource::CLanguageResource(const AddonInfoPtr& addonInfo)
      *   <token>Le</token>
      *   ...
      */
-    for (const auto& values : sorttokensElement->GetValues())
+    for (const auto& [_, addonExtensions] : sorttokensElement->GetValues())
     {
       /* Second loop goes around the row parts, e.g.
        *   separators = "'"
        *   token = Le
        */
-      std::string token = values.second.GetValue("token").asString();
-      std::string separators = values.second.GetValue("token@separators").asString();
+      const std::string token = addonExtensions.GetValue("token").asString();
       if (!token.empty())
       {
+        std::string separators = addonExtensions.GetValue("token@separators").asString();
         if (separators.empty())
           separators = " ._";
 
@@ -94,12 +103,12 @@ bool CLanguageResource::IsInUse() const
 
 void CLanguageResource::OnPostInstall(bool update, bool modal)
 {
-  if (!g_SkinInfo)
+  if (!CServiceBroker::GetGUI())
     return;
 
-  if (IsInUse() ||
-     (!update && !modal &&
-       (HELPERS::ShowYesNoDialogText(CVariant{Name()}, CVariant{24132}) == DialogResponse::YES)))
+  if (IsInUse() || (!update && !modal &&
+                    (HELPERS::ShowYesNoDialogText(CVariant{Name()}, CVariant{24132}) ==
+                     DialogResponse::CHOICE_YES)))
   {
     if (IsInUse())
       g_langInfo.SetLanguage(ID());
@@ -108,11 +117,10 @@ void CLanguageResource::OnPostInstall(bool update, bool modal)
   }
 }
 
-bool CLanguageResource::IsAllowed(const std::string &file) const
+CResource::Published CLanguageResource::PublishedFiles() const
 {
-  return file.empty() ||
-         StringUtils::EqualsNoCase(file.c_str(), "langinfo.xml") ||
-         StringUtils::EqualsNoCase(file.c_str(), "strings.po");
+  static constexpr std::array<std::string_view, 2> names{"langinfo.xml", "strings.po"};
+  return {.names = names};
 }
 
 std::string CLanguageResource::GetAddonId(const std::string& locale)
@@ -127,21 +135,4 @@ std::string CLanguageResource::GetAddonId(const std::string& locale)
   StringUtils::ToLower(addonId);
   return addonId;
 }
-
-bool CLanguageResource::FindLegacyLanguage(const std::string &locale, std::string &legacyLanguage)
-{
-  if (locale.empty())
-    return false;
-
-  std::string addonId = GetAddonId(locale);
-
-  AddonPtr addon;
-  if (!CServiceBroker::GetAddonMgr().GetAddon(addonId, addon, ADDON_RESOURCE_LANGUAGE,
-                                              OnlyEnabled::YES))
-    return false;
-
-  legacyLanguage = addon->Name();
-  return true;
-}
-
 }

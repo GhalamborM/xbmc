@@ -8,8 +8,7 @@
 
 #pragma once
 
-#include <assert.h>
-#include <atomic>
+#include <memory>
 #include <stdexcept>
 #include <vector>
 
@@ -23,7 +22,14 @@ enum DVDOverlayType
   DVDOVERLAY_TYPE_GROUP   = 5,
 };
 
-class CDVDOverlay
+enum class DVDOverlayStereoView
+{
+  BOTH,
+  LEFT,
+  RIGHT,
+};
+
+class CDVDOverlay : public std::enable_shared_from_this<CDVDOverlay>
 {
 public:
   explicit CDVDOverlay(DVDOverlayType type)
@@ -34,68 +40,47 @@ public:
     iPTSStopTime = 0LL;
     bForced = false;
     replace = false;
-    m_references = 1;
     m_textureid = 0;
     m_enableTextAlign = false;
     m_overlayContainerFlushable = true;
     m_setForcedMargins = false;
+    m_discMenu = false;
+    m_stereoView = DVDOverlayStereoView::BOTH;
   }
 
-  CDVDOverlay(const CDVDOverlay& src)
+  CDVDOverlay(const CDVDOverlay& src) : std::enable_shared_from_this<CDVDOverlay>(src)
   {
     m_type        = src.m_type;
     iPTSStartTime = src.iPTSStartTime;
     iPTSStopTime  = src.iPTSStopTime;
     bForced       = src.bForced;
-    replace       = src.replace;
-    m_references  = 1;
+    replace = src.replace;
     m_textureid = 0;
     m_enableTextAlign = src.m_enableTextAlign;
     m_overlayContainerFlushable = src.m_overlayContainerFlushable;
     m_setForcedMargins = src.m_setForcedMargins;
+    m_discMenu = src.m_discMenu;
+    m_stereoView = src.m_stereoView;
   }
 
-  virtual ~CDVDOverlay()
+  virtual ~CDVDOverlay() = default;
+
+  bool operator==(const CDVDOverlay& other) const
   {
-    assert(m_references == 0);
+    constexpr double epsilon{0.1};
+    return std::abs(iPTSStartTime - other.iPTSStartTime) < epsilon &&
+           std::abs(iPTSStopTime - other.iPTSStopTime) < epsilon && bForced == other.bForced &&
+           replace == other.replace &&
+           m_overlayContainerFlushable == other.m_overlayContainerFlushable;
   }
 
-  /**
-  * increase the reference counter by one.
-  */
-  CDVDOverlay* Acquire()
-  {
-    m_references++;
-    return this;
-  }
-
-  /**
-  * decrease the reference counter by one.
-  */
-  int Release()
-  {
-    m_references--;
-    int ret = m_references;
-    if (m_references == 0)
-      delete this;
-    return ret;
-  }
-
-  /**
-   * static release function for use with shared ptr for example
-   */
-  static void Release(CDVDOverlay* ov)
-  {
-    ov->Release();
-  }
-
-  bool IsOverlayType(DVDOverlayType type) { return (m_type == type); }
+  bool IsOverlayType(DVDOverlayType type) const { return (m_type == type); }
 
   /**
    * return a copy to VideoPlayerSubtitle in order to have hw resources cleared
    * after rendering
    */
-  virtual CDVDOverlay* Clone() { return Acquire(); }
+  virtual std::shared_ptr<CDVDOverlay> Clone() { return shared_from_this(); }
 
   /*
    * \brief Enable the use of text alignment (left/center/right).
@@ -108,7 +93,7 @@ public:
   /*
    * \brief Return true if the text alignment (left/center/right) is enabled otherwise false.
    */
-  bool IsTextAlignEnabled() { return m_enableTextAlign; }
+  bool IsTextAlignEnabled() const { return m_enableTextAlign; }
 
   /*
    * \brief Allow/Disallow the overlay container to flush the overlay.
@@ -118,7 +103,7 @@ public:
   /*
    * \brief Return true when the overlay container can flush the overlay on flush events.
    */
-  bool IsOverlayContainerFlushable() { return m_overlayContainerFlushable; }
+  bool IsOverlayContainerFlushable() const { return m_overlayContainerFlushable; }
 
   /*
    * \brief Specify if the margins are handled by the subtitle codec/parser.
@@ -128,49 +113,45 @@ public:
   /*
    * \brief Return true if the margins are handled by the subtitle codec/parser.
    */
-  bool IsForcedMargins() { return m_setForcedMargins; }
+  bool IsForcedMargins() const { return m_setForcedMargins; }
+
+  /*
+   * \brief Mark the overlay as a disc menu drawn by the input stream rather than a subtitle.
+   */
+  void SetDiscMenu(bool discMenu) { m_discMenu = discMenu; }
+
+  /*
+   * \brief Return true if the overlay is a disc menu drawn by the input stream.
+   */
+  bool IsDiscMenu() const { return m_discMenu; }
 
   double iPTSStartTime;
   double iPTSStopTime;
   bool bForced; // display, no matter what
   bool replace; // replace by next nomatter what stoptime it has
   unsigned long m_textureid;
+  DVDOverlayStereoView m_stereoView;
 
 protected:
   DVDOverlayType m_type;
   bool m_enableTextAlign;
   bool m_overlayContainerFlushable;
   bool m_setForcedMargins;
-
-private:
-  std::atomic_int m_references;
+  bool m_discMenu;
 };
 
-typedef std::vector<CDVDOverlay*> VecOverlays;
-typedef std::vector<CDVDOverlay*>::iterator VecOverlaysIter;
-
+using VecOverlays = std::vector<std::shared_ptr<CDVDOverlay>>;
 
 class CDVDOverlayGroup : public CDVDOverlay
 {
-
 public:
-  ~CDVDOverlayGroup() override
-  {
-    for(VecOverlaysIter it = m_overlays.begin(); it != m_overlays.end(); ++it)
-      (*it)->Release();
-    m_overlays.clear();
-  }
+  ~CDVDOverlayGroup() override = default;
 
   CDVDOverlayGroup()
     : CDVDOverlay(DVDOVERLAY_TYPE_GROUP)
   {
   }
 
-  CDVDOverlayGroup(CDVDOverlayGroup& src)
-    : CDVDOverlay(src)
-  {
-    for(VecOverlaysIter it = src.m_overlays.begin(); it != src.m_overlays.end(); ++it)
-      m_overlays.push_back((*it)->Clone());
-  }
+  CDVDOverlayGroup(const CDVDOverlayGroup& src) : CDVDOverlay(src), m_overlays(src.m_overlays) {}
   VecOverlays m_overlays;
 };

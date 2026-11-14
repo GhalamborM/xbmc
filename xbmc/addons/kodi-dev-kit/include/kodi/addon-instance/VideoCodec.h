@@ -160,17 +160,17 @@ private:
 /// class CMyVideoCodec : public kodi::addon::CInstanceVideoCodec
 /// {
 /// public:
-///   CMyVideoCodec(KODI_HANDLE instance, CMyInputstream* inputstream);
+///   CMyVideoCodec(const kodi::addon::IInstanceInfo& instance,
+///                 CMyInputstream* inputstream);
 ///   ...
 ///
 /// private:
 ///   CMyInputstream* m_inputstream;
 /// };
 ///
-/// CMyVideoCodec::CMyVideoCodec(KODI_HANDLE instance,
-///                              const std::string& version,
+/// CMyVideoCodec::CMyVideoCodec(const kodi::addon::IInstanceInfo& instance,
 ///                              CMyInputstream* inputstream)
-///   : kodi::addon::CInstanceVideoCodec(instance, version),
+///   : kodi::addon::CInstanceVideoCodec(instance),
 ///     m_inputstream(inputstream)
 /// {
 ///   ...
@@ -184,11 +184,8 @@ private:
 /// public:
 ///   CMyInputstream(KODI_HANDLE instance, const std::string& kodiVersion);
 ///
-///   ADDON_STATUS CreateInstance(int instanceType,
-///                               std::string instanceID,
-///                               KODI_HANDLE instance,
-///                               const std::string& version,
-///                               KODI_HANDLE& addonInstance) override;
+///   ADDON_STATUS CreateInstance(const kodi::addon::IInstanceInfo& instance,
+///                               KODI_ADDON_INSTANCE_HDL& hdl) override;
 ///   ...
 /// };
 ///
@@ -198,15 +195,13 @@ private:
 ///   ...
 /// }
 ///
-/// ADDON_STATUS CMyInputstream::CreateInstance(int instanceType,
-///                                             std::string instanceID,
-///                                             KODI_HANDLE instance,
-///                                             const std::string& version,
-///                                             KODI_HANDLE& addonInstance)
+/// ADDON_STATUS CMyInputstream::CreateInstance(const kodi::addon::IInstanceInfo& instance,
+///                                             KODI_ADDON_INSTANCE_HDL& hdl)
 /// {
-///   if (instanceType == ADDON_INSTANCE_VIDEOCODEC)
+/// {
+///   if (instance.IsType(ADDON_INSTANCE_VIDEOCODEC))
 ///   {
-///     addonInstance = new CMyVideoCodec(instance, version, this);
+///     addonInstance = new CMyVideoCodec(instance, this);
 ///     return ADDON_STATUS_OK;
 ///   }
 ///   return ADDON_STATUS_NOT_IMPLEMENTED;
@@ -219,26 +214,20 @@ private:
 /// class CMyAddon : public kodi::addon::CAddonBase
 /// {
 /// public:
-///   CMyAddon() { }
-///   ADDON_STATUS CreateInstance(int instanceType,
-///                               std::string instanceID,
-///                               KODI_HANDLE instance,
-///                               const std::string& version,
-///                               KODI_HANDLE& addonInstance) override;
+///   CMyAddon() = default;
+///   ADDON_STATUS CreateInstance(const kodi::addon::IInstanceInfo& instance,
+///                               KODI_ADDON_INSTANCE_HDL& hdl) override;
 /// };
 ///
 /// // If you use only one instance in your add-on, can be instanceType and
 /// // instanceID ignored
-/// ADDON_STATUS CMyAddon::CreateInstance(int instanceType,
-///                                       std::string instanceID,
-///                                       KODI_HANDLE instance,
-///                                       const std::string& version,
-///                                       KODI_HANDLE& addonInstance)
+/// ADDON_STATUS CMyAddon::CreateInstance(const kodi::addon::IInstanceInfo& instance,
+///                                       KODI_ADDON_INSTANCE_HDL& hdl)
 /// {
-///   if (instanceType == ADDON_INSTANCE_INPUTSTREAM)
+///   if (instance.IsType(ADDON_INSTANCE_INPUTSTREAM))
 ///   {
 ///     kodi::Log(ADDON_LOG_NOTICE, "Creating my Inputstream");
-///     addonInstance = new CMyInputstream(instance, version);
+///     hdl = new CMyInputstream(instance);
 ///     return ADDON_STATUS_OK;
 ///   }
 ///   else if (...)
@@ -268,10 +257,7 @@ public:
   /// @param[in] kodiVersion [opt] Version used in Kodi for this instance, to
   ///                        allow compatibility to older Kodi versions.
   ///
-  explicit CInstanceVideoCodec(KODI_HANDLE instance, const std::string& kodiVersion = "")
-    : IAddonInstance(ADDON_INSTANCE_VIDEOCODEC,
-                     !kodiVersion.empty() ? kodiVersion
-                                          : GetKodiTypeVersion(ADDON_INSTANCE_VIDEOCODEC))
+  explicit CInstanceVideoCodec(const IInstanceInfo& instance) : IAddonInstance(instance)
   {
     if (CPrivateBase::m_interface->globalSingleInstance != nullptr)
       throw std::logic_error("kodi::addon::CInstanceVideoCodec: Creation of multiple together with "
@@ -341,6 +327,11 @@ public:
   /// @param[in,out] Structure which contains the necessary data
   /// @return The with @ref VIDEOCODEC_RETVAL return values
   ///
+  /// @note If this returns anything other than @ref VC_PICTURE while
+  /// picture.videoBufferHandle is set, Kodi releases that buffer. An addon
+  /// that releases a buffer itself must clear videoBufferHandle before
+  /// returning.
+  ///
   virtual VIDEOCODEC_RETVAL GetPicture(VIDEOCODEC_PICTURE& picture) { return VC_ERROR; }
   //----------------------------------------------------------------------------
 
@@ -374,7 +365,10 @@ public:
   /// @param[out] picture The buffer, or unmodified if false is returned
   /// @return In case buffer allocation fails, it return false.
   ///
-  /// @note If this returns true, buffer must be freed using @ref ReleaseFrameBuffer().
+  /// @note Ownership: the buffer belongs to the addon until it is either
+  /// handed back to Kodi inside a @ref VC_PICTURE result (as
+  /// @ref VIDEOCODEC_PICTURE::videoBufferHandle) or released with
+  /// @ref ReleaseFrameBuffer(). Buffers may be held across calls.
   ///
   /// @remarks Only called from addon itself
   ///
@@ -400,22 +394,51 @@ public:
   }
   //----------------------------------------------------------------------------
 
-private:
-  void SetAddonStruct(KODI_HANDLE instance)
+  //============================================================================
+  ///
+  /// @ingroup cpp_kodi_addon_videocodec
+  /// @brief Query the platform-native buffer handle for a buffer previously
+  /// obtained via @ref GetFrameBuffer().
+  ///
+  /// Allows the addon to render directly into the underlying GPU/hardware
+  /// buffer (for example via EGLImage import of a DMA-BUF on Linux), avoiding
+  /// CPU readback and copy.
+  ///
+  /// @param[in]  videoBufferHandle The opaque handle from
+  ///             @ref VIDEOCODEC_PICTURE::videoBufferHandle.
+  /// @param[out] platformBuffer Filled in on success. The `type` field
+  ///             indicates how to interpret `handle`.
+  /// @return     true if a native handle is available, false otherwise.
+  ///             Returns false on platforms where the buffer is plain CPU
+  ///             memory or when the API is unavailable; in that case the
+  ///             addon should fall back to the @ref VIDEOCODEC_PICTURE::decodedData
+  ///             CPU pointer.
+  ///
+  /// @remarks Only called from addon itself
+  ///
+  bool GetFrameBufferPlatformHandle(KODI_HANDLE videoBufferHandle,
+                                    VIDEOCODEC_PLATFORM_BUFFER& platformBuffer)
   {
-    if (instance == nullptr)
-      throw std::logic_error("kodi::addon::CInstanceVideoCodec: Creation with empty addon "
-                             "structure not allowed, table must be given from Kodi!");
+    if (!m_instanceData->toKodi->get_frame_buffer_platform_handle)
+      return false;
+    return m_instanceData->toKodi->get_frame_buffer_platform_handle(
+        m_instanceData->toKodi->kodiInstance, videoBufferHandle, &platformBuffer);
+  }
+  //----------------------------------------------------------------------------
 
-    m_instanceData = static_cast<AddonInstance_VideoCodec*>(instance);
+private:
+  void SetAddonStruct(KODI_ADDON_INSTANCE_STRUCT* instance)
+  {
+    instance->hdl = this;
+    instance->videocodec->toAddon->open = ADDON_Open;
+    instance->videocodec->toAddon->reconfigure = ADDON_Reconfigure;
+    instance->videocodec->toAddon->add_data = ADDON_AddData;
+    instance->videocodec->toAddon->get_picture = ADDON_GetPicture;
+    instance->videocodec->toAddon->get_name = ADDON_GetName;
+    instance->videocodec->toAddon->reset = ADDON_Reset;
 
+    m_instanceData = instance->videocodec;
     m_instanceData->toAddon->addonInstance = this;
-    m_instanceData->toAddon->open = ADDON_Open;
-    m_instanceData->toAddon->reconfigure = ADDON_Reconfigure;
-    m_instanceData->toAddon->add_data = ADDON_AddData;
-    m_instanceData->toAddon->get_picture = ADDON_GetPicture;
-    m_instanceData->toAddon->get_name = ADDON_GetName;
-    m_instanceData->toAddon->reset = ADDON_Reset;
   }
 
   inline static bool ADDON_Open(const AddonInstance_VideoCodec* instance,

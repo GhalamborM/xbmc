@@ -8,11 +8,12 @@
 
 #pragma once
 
+#include "LibraryLoader.h"
+
 #include <stdio.h>
 #ifdef TARGET_POSIX
 #include "PlatformDefs.h"
 #endif
-#include "DllLoader.h"
 
 class SoLoader : public LibraryLoader
 {
@@ -27,6 +28,9 @@ public:
   bool IsSystemDll() override;
   HMODULE GetHModule() override;
   bool HasSymbols() override;
+
+private:
+  bool PerformLoad(const std::string& libPath);
 
 private:
   void* m_soHandle;

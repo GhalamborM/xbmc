@@ -11,18 +11,22 @@
 #include "CharsetConverter.h"
 #include "ServiceBroker.h"
 #include "URL.h"
-#include "filesystem/CurlFile.h"
 #include "filesystem/File.h"
+#include "filesystem/HttpClientFactory.h"
+#include "filesystem/IHttpClient.h"
 #include "guilib/GUIRSSControl.h"
-#include "guilib/LocalizeStrings.h"
 #include "log.h"
 #include "network/Network.h"
+#include "resources/LocalizeStrings.h"
+#include "resources/ResourcesComponent.h"
 #include "settings/AdvancedSettings.h"
 #include "settings/SettingsComponent.h"
-#include "threads/SingleLock.h"
 #include "threads/SystemClock.h"
 #include "utils/HTMLUtil.h"
 #include "utils/XTimeUtils.h"
+#include "windowing/WinSystem.h"
+
+#include <mutex>
 
 #define RSS_COLOR_BODY      0
 #define RSS_COLOR_HEADLINE  1
@@ -56,7 +60,7 @@ CRssReader::~CRssReader()
 
 void CRssReader::Create(IRssObserver* aObserver, const std::vector<std::string>& aUrls, const std::vector<int> &times, int spacesBetweenFeeds, bool rtl)
 {
-  CSingleLock lock(m_critical);
+  std::unique_lock lock(m_critical);
 
   m_pObserver = aObserver;
   m_spacesBetweenFeeds = spacesBetweenFeeds;
@@ -85,7 +89,7 @@ void CRssReader::requestRefresh()
 
 void CRssReader::AddToQueue(int iAdd)
 {
-  CSingleLock lock(m_critical);
+  std::unique_lock lock(m_critical);
   if (iAdd < (int)m_vecUrls.size())
     m_vecQueue.push_back(iAdd);
   if (!m_bIsRunning)
@@ -103,7 +107,7 @@ void CRssReader::OnExit()
 
 int CRssReader::GetQueueSize()
 {
-  CSingleLock lock(m_critical);
+  std::unique_lock lock(m_critical);
   return m_vecQueue.size();
 }
 
@@ -111,7 +115,7 @@ void CRssReader::Process()
 {
   while (GetQueueSize())
   {
-    CSingleLock lock(m_critical);
+    std::unique_lock lock(m_critical);
 
     int iFeed = m_vecQueue.front();
     m_vecQueue.erase(m_vecQueue.begin());
@@ -119,27 +123,28 @@ void CRssReader::Process()
     m_strFeed[iFeed].clear();
     m_strColors[iFeed].clear();
 
-    CCurlFile http;
-    http.SetUserAgent(CServiceBroker::GetSettingsComponent()->GetAdvancedSettings()->m_userAgent);
-    http.SetTimeout(2);
+    auto http = XFILE::CreateHttpClient();
+    http->SetUserAgent(CServiceBroker::GetSettingsComponent()->GetAdvancedSettings()->m_userAgent);
+    http->SetTimeout(2);
     std::string strXML;
     std::string strUrl = m_vecUrls[iFeed];
-    lock.Leave();
+    lock.unlock();
 
     int nRetries = 3;
     CURL url(strUrl);
-    std::string fileCharset;
 
     // we wait for the network to come up
     if ((url.IsProtocol("http") || url.IsProtocol("https")) &&
         !CServiceBroker::GetNetwork().IsAvailable())
     {
       CLog::Log(LOGWARNING, "RSS: No network connection");
-      strXML = "<rss><item><title>"+g_localizeStrings.Get(15301)+"</title></item></rss>";
+      strXML = "<rss><item><title>" +
+               CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(15301) +
+               "</title></item></rss>";
     }
     else
     {
-      XbmcThreads::EndTime timeout(15000);
+      XbmcThreads::EndTime<> timeout(15s);
       while (!m_bStop && nRetries > 0)
       {
         if (timeout.IsTimePast())
@@ -161,9 +166,8 @@ void CRssReader::Process()
         }
         else
         {
-          if (http.Get(strUrl, strXML))
+          if (http->Get(strUrl, strXML))
           {
-            fileCharset = http.GetProperty(XFILE::FILE_PROPERTY_CONTENT_CHARSET);
             CLog::Log(LOGDEBUG, "Got rss feed: {}", strUrl);
             break;
           }
@@ -173,27 +177,11 @@ void CRssReader::Process()
             CLog::Log(LOGERROR, "Unable to obtain rss feed: {}", strUrl);
         }
       }
-      http.Cancel();
+      http->Cancel();
     }
-    if (!strXML.empty() && m_pObserver)
-    {
-      // erase any <content:encoded> tags (also unsupported by tinyxml)
-      size_t iStart = strXML.find("<content:encoded>");
-      size_t iEnd = 0;
-      while (iStart != std::string::npos)
-      {
-        // get <content:encoded> end position
-        iEnd = strXML.find("</content:encoded>", iStart) + 18;
 
-        // erase the section
-        strXML = strXML.erase(iStart, iEnd - iStart);
-
-        iStart = strXML.find("<content:encoded>");
-      }
-
-      if (Parse(strXML, iFeed, fileCharset))
-        CLog::Log(LOGDEBUG, "Parsed rss feed: {}", strUrl);
-    }
+    if (!strXML.empty() && m_pObserver && Parse(strXML, iFeed))
+      CLog::Log(LOGDEBUG, "Parsed rss feed: {}", strUrl);
   }
   UpdateObserver();
 }
@@ -211,7 +199,8 @@ void CRssReader::getFeed(vecText &text)
 
     for (unsigned int j = 0; j < m_strFeed[i].size(); j++)
     {
-      character_t letter = m_strFeed[i][j] | ((m_strColors[i][j] - 48) << 16);
+      character_t letter = static_cast<character_t>(m_strFeed[i][j]) |
+                           (static_cast<character_t>(m_strColors[i][j] - 48) << 32);
       text.push_back(letter);
     }
   }
@@ -240,11 +229,11 @@ void CRssReader::AddString(std::wstring aString, int aColour, int iFeed)
     m_strColors[iFeed] += aString;
 }
 
-void CRssReader::GetNewsItems(TiXmlElement* channelXmlNode, int iFeed)
+void CRssReader::GetNewsItems(tinyxml2::XMLNode* channelXmlNode, int iFeed)
 {
   HTML::CHTMLUtil html;
 
-  TiXmlElement * itemNode = channelXmlNode->FirstChildElement("item");
+  auto* itemNode = channelXmlNode->FirstChildElement("item");
   std::map<std::string, std::wstring> mTagElements;
   typedef std::pair<std::string, std::wstring> StrPair;
   std::list<std::string>::iterator i;
@@ -255,27 +244,27 @@ void CRssReader::GetNewsItems(TiXmlElement* channelXmlNode, int iFeed)
   if (m_tagSet.empty())
     AddTag("title");
 
-  while (itemNode != nullptr)
+  while (itemNode)
   {
-    TiXmlNode* childNode = itemNode->FirstChild();
+    auto* childNode = itemNode->FirstChild();
     mTagElements.clear();
-    while (childNode != nullptr)
+    while (childNode)
     {
-      std::string strName = childNode->ValueStr();
+      std::string strName = childNode->Value();
 
       for (i = m_tagSet.begin(); i != m_tagSet.end(); ++i)
       {
         if (!childNode->NoChildren() && *i == strName)
         {
-          std::string htmlText = childNode->FirstChild()->ValueStr();
+          std::string htmlText = childNode->FirstChild()->Value();
 
           // This usually happens in right-to-left languages where they want to
           // specify in the RSS body that the text should be RTL.
           // <title>
-          //  <div dir="RTL">��� ����: ���� �� �����</div>
+          //  <div dir="RTL">פעילות הבינאום, W3C!</div>
           // </title>
           if (htmlText == "div" || htmlText == "span")
-            htmlText = childNode->FirstChild()->FirstChild()->ValueStr();
+            htmlText = childNode->FirstChild()->FirstChild()->Value();
 
           std::wstring unicodeText, unicodeText2;
 
@@ -306,39 +295,32 @@ void CRssReader::GetNewsItems(TiXmlElement* channelXmlNode, int iFeed)
   }
 }
 
-bool CRssReader::Parse(const std::string& data, int iFeed, const std::string& charset)
+bool CRssReader::Parse(const std::string& data, int iFeed)
 {
   m_xml.Clear();
-  m_xml.Parse(data, charset);
-
-  CLog::Log(LOGDEBUG, "RSS feed encoding: {}", m_xml.GetUsedCharset());
+  m_xml.Parse(data);
 
   return Parse(iFeed);
 }
 
 bool CRssReader::Parse(int iFeed)
 {
-  TiXmlElement* rootXmlNode = m_xml.RootElement();
+  auto* rootXmlNode = m_xml.RootElement();
 
   if (!rootXmlNode)
     return false;
 
-  TiXmlElement* rssXmlNode = NULL;
-
-  std::string strValue = rootXmlNode->ValueStr();
-  if (strValue.find("rss") != std::string::npos ||
-      strValue.find("rdf") != std::string::npos)
-    rssXmlNode = rootXmlNode;
-  else
+  std::string strValue = rootXmlNode->Value();
+  if (strValue.find("rss") == std::string::npos && strValue.find("rdf") == std::string::npos)
   {
     // Unable to find root <rss> or <rdf> node
     return false;
   }
 
-  TiXmlElement* channelXmlNode = rssXmlNode->FirstChildElement("channel");
+  auto* channelXmlNode = rootXmlNode->FirstChildElement("channel");
   if (channelXmlNode)
   {
-    TiXmlElement* titleNode = channelXmlNode->FirstChildElement("title");
+    auto* titleNode = channelXmlNode->FirstChildElement("title");
     if (titleNode && !titleNode->NoChildren())
     {
       std::string strChannel = titleNode->FirstChild()->Value();
@@ -353,7 +335,7 @@ bool CRssReader::Parse(int iFeed)
     GetNewsItems(channelXmlNode,iFeed);
   }
 
-  GetNewsItems(rssXmlNode,iFeed);
+  GetNewsItems(rootXmlNode, iFeed);
 
   // avoid trailing ' - '
   if (m_strFeed[iFeed].size() > 3 && m_strFeed[iFeed].substr(m_strFeed[iFeed].size() - 3) == L" - ")
@@ -386,7 +368,7 @@ void CRssReader::UpdateObserver()
   getFeed(feed);
   if (!feed.empty())
   {
-    CSingleLock lock(CServiceBroker::GetWinSystem()->GetGfxContext());
+    std::unique_lock lock(CServiceBroker::GetWinSystem()->GetGfxContext());
     if (m_pObserver) // need to check again when locked to make sure observer wasnt removed
       m_pObserver->OnFeedUpdate(feed);
   }

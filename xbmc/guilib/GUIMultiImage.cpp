@@ -9,18 +9,21 @@
 #include "GUIMultiImage.h"
 
 #include "FileItem.h"
+#include "FileItemList.h"
 #include "GUIMessage.h"
 #include "ServiceBroker.h"
 #include "TextureCache.h"
 #include "TextureManager.h"
 #include "WindowIDs.h"
 #include "filesystem/Directory.h"
-#include "input/Key.h"
+#include "jobs/JobManager.h"
 #include "utils/FileExtensionProvider.h"
-#include "utils/JobManager.h"
 #include "utils/Random.h"
 #include "utils/StringUtils.h"
 #include "utils/URIUtils.h"
+#include "windowing/WinSystem.h"
+
+#include <mutex>
 
 using namespace KODI::GUILIB;
 using namespace XFILE;
@@ -33,6 +36,7 @@ CGUIMultiImage::CGUIMultiImage(int parentID, int controlID, float posX, float po
   m_timePerImage = timePerImage + fadeTime;
   m_timeToPauseAtEnd = timeToPauseAtEnd;
   m_image.SetCrossFade(fadeTime);
+  m_image.SetParentControl(this);
   m_randomized = randomized;
   m_loop = loop;
   ControlType = GUICONTROL_MULTI_IMAGE;
@@ -44,6 +48,7 @@ CGUIMultiImage::CGUIMultiImage(int parentID, int controlID, float posX, float po
 CGUIMultiImage::CGUIMultiImage(const CGUIMultiImage &from)
   : CGUIControl(from), m_texturePath(from.m_texturePath), m_imageTimer(), m_files(), m_image(from.m_image)
 {
+  m_image.SetParentControl(this);
   m_timePerImage = from.m_timePerImage;
   m_timeToPauseAtEnd = from.m_timeToPauseAtEnd;
   m_randomized = from.m_randomized;
@@ -129,10 +134,17 @@ void CGUIMultiImage::Process(unsigned int currentTime, CDirtyRegionList &dirtyre
 
         m_imageTimer.StartZero();
       }
+
+      // keep the window processed until the next image is due
+      MarkDirtyRegion(DIRTY_STATE_CHILD);
     }
   }
   else if (m_directoryStatus != LOADING)
     m_image.SetFileName("");
+
+  // keep the window processed until the loaded directory is picked up
+  if (m_directoryStatus == LOADING || m_directoryStatus == LOADED)
+    MarkDirtyRegion(DIRTY_STATE_CHILD);
 
   if (CServiceBroker::GetWinSystem()->GetGfxContext().SetClipRegion(m_posX, m_posY, m_width, m_height))
   {
@@ -164,6 +176,11 @@ bool CGUIMultiImage::OnMessage(CGUIMessage &message)
   {
     if (!m_texturePath.IsConstant())
       FreeResources();
+    return true;
+  }
+  if (message.GetMessage() == GUI_MSG_RESET_MULTI_IMAGE)
+  {
+    ResetMultiImage();
     return true;
   }
   return CGUIControl::OnMessage(message);
@@ -223,7 +240,7 @@ void CGUIMultiImage::LoadDirectory()
    3. Bundled folder
    */
   CFileItem item(m_currentPath, false);
-  if (item.IsPicture() || CTextureCache::GetInstance().HasCachedImage(m_currentPath))
+  if (item.IsPicture() || CServiceBroker::GetTextureCache()->HasCachedImage(m_currentPath))
     m_files.push_back(m_currentPath);
   else // bundled folder?
     m_files =
@@ -234,9 +251,10 @@ void CGUIMultiImage::LoadDirectory()
     return;
   }
   // slow(er) checks necessary - do them in the background
-  CSingleLock lock(m_section);
+  std::unique_lock lock(m_section);
   m_directoryStatus = LOADING;
-  m_jobID = CJobManager::GetInstance().AddJob(new CMultiImageJob(m_currentPath), this, CJob::PRIORITY_NORMAL);
+  m_jobID = CServiceBroker::GetJobManager()->AddJob(new CMultiImageJob(m_currentPath), this,
+                                                    CJob::PRIORITY_NORMAL);
 }
 
 void CGUIMultiImage::OnDirectoryLoaded()
@@ -249,22 +267,27 @@ void CGUIMultiImage::OnDirectoryLoaded()
 
   // flag as loaded - no point in constantly reloading them
   m_directoryStatus = READY;
+  ResetMultiImage();
+}
+
+void CGUIMultiImage::CancelLoading()
+{
+  std::unique_lock lock(m_section);
+  if (m_directoryStatus == LOADING)
+    CServiceBroker::GetJobManager()->CancelJob(m_jobID);
+  m_directoryStatus = UNLOADED;
+}
+
+void CGUIMultiImage::ResetMultiImage()
+{
   m_imageTimer.StartZero();
   m_currentImage = 0;
   m_image.SetFileName(m_files.empty() ? "" : m_files[0]);
 }
 
-void CGUIMultiImage::CancelLoading()
-{
-  CSingleLock lock(m_section);
-  if (m_directoryStatus == LOADING)
-    CJobManager::GetInstance().CancelJob(m_jobID);
-  m_directoryStatus = UNLOADED;
-}
-
 void CGUIMultiImage::OnJobComplete(unsigned int jobID, bool success, CJob *job)
 {
-  CSingleLock lock(m_section);
+  std::unique_lock lock(m_section);
   if (m_directoryStatus == LOADING && strncmp(job->GetType(), "multiimage", 10) == 0)
   {
     m_files = ((CMultiImageJob *)job)->m_files;

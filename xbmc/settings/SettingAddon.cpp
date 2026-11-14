@@ -9,39 +9,47 @@
 #include "SettingAddon.h"
 
 #include "addons/Addon.h"
+#include "addons/addoninfo/AddonInfo.h"
+#include "addons/addoninfo/AddonType.h"
 #include "settings/lib/SettingsManager.h"
 #include "utils/XBMCTinyXML.h"
 #include "utils/XMLUtils.h"
 #include "utils/log.h"
 
-CSettingAddon::CSettingAddon(const std::string &id, CSettingsManager *settingsManager /* = nullptr */)
+#include <mutex>
+
+CSettingAddon::CSettingAddon(std::string_view id, CSettingsManager* settingsManager /* = nullptr */)
   : CSettingString(id, settingsManager)
-{ }
+{
+}
 
-CSettingAddon::CSettingAddon(const std::string &id, int label, const std::string &value, CSettingsManager *settingsManager /* = nullptr */)
+CSettingAddon::CSettingAddon(std::string_view id,
+                             int label,
+                             const std::string& value,
+                             CSettingsManager* settingsManager /* = nullptr */)
   : CSettingString(id, label, value, settingsManager)
-{ }
+{
+}
 
-CSettingAddon::CSettingAddon(const std::string &id, const CSettingAddon &setting)
+CSettingAddon::CSettingAddon(std::string_view id, const CSettingAddon& setting)
   : CSettingString(id, setting)
 {
   copyaddontype(setting);
 }
 
-SettingPtr CSettingAddon::Clone(const std::string &id) const
+SettingPtr CSettingAddon::Clone(std::string_view id) const
 {
   return std::make_shared<CSettingAddon>(id, *this);
 }
 
 bool CSettingAddon::Deserialize(const TiXmlNode *node, bool update /* = false */)
 {
-  CExclusiveLock lock(m_critical);
+  std::unique_lock lock(m_critical);
 
   if (!CSettingString::Deserialize(node, update))
     return false;
 
-  if (m_control != nullptr &&
-     (m_control->GetType() != "button" || m_control->GetFormat() != "addon"))
+  if (m_control && (m_control->GetType() != "button" || m_control->GetFormat() != "addon"))
   {
     CLog::Log(LOGERROR, "CSettingAddon: invalid <control> of \"{}\"", m_id);
     return false;
@@ -49,14 +57,14 @@ bool CSettingAddon::Deserialize(const TiXmlNode *node, bool update /* = false */
 
   bool ok = false;
   std::string strAddonType;
-  auto constraints = node->FirstChild("constraints");
-  if (constraints != nullptr)
+  const TiXmlNode* constraints = node->FirstChild("constraints");
+  if (constraints)
   {
     // get the addon type
     if (XMLUtils::GetString(constraints, "addontype", strAddonType) && !strAddonType.empty())
     {
       m_addonType = ADDON::CAddonInfo::TranslateType(strAddonType);
-      if (m_addonType != ADDON::ADDON_UNKNOWN)
+      if (m_addonType != ADDON::AddonType::UNKNOWN)
         ok = true;
     }
   }
@@ -75,6 +83,6 @@ void CSettingAddon::copyaddontype(const CSettingAddon &setting)
 {
   CSettingString::Copy(setting);
 
-  CExclusiveLock lock(m_critical);
+  std::unique_lock lock(m_critical);
   m_addonType = setting.m_addonType;
 }

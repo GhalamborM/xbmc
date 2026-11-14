@@ -9,16 +9,18 @@
 #pragma once
 
 #include "ThumbLoader.h"
-#include "addons/Addon.h"
-#include "addons/AddonEvents.h"
-#include "addons/RepositoryUpdater.h"
+#include "filesystem/AddonsPaths.h"
 #include "windows/GUIMediaWindow.h"
 
 #include <string>
 #include <vector>
 
-class CFileItem;
 class CFileItemList;
+
+namespace ADDON
+{
+enum class AddonType;
+}
 
 class CGUIWindowAddonBrowser : public CGUIMediaWindow
 {
@@ -42,14 +44,14 @@ public:
    *         "Get More" was chosen, 0 if the selection process was cancelled or -1
    *         if an error occurred or
    */
-  static int SelectAddonID(ADDON::TYPE type,
+  static int SelectAddonID(ADDON::AddonType type,
                            std::string& addonID,
                            bool showNone = false,
                            bool showDetails = true,
                            bool showInstalled = true,
                            bool showInstallable = false,
                            bool showMore = true);
-  static int SelectAddonID(const std::vector<ADDON::TYPE>& types,
+  static int SelectAddonID(const std::vector<ADDON::AddonType>& types,
                            std::string& addonID,
                            bool showNone = false,
                            bool showDetails = true,
@@ -73,7 +75,7 @@ public:
    *         "Get More" was chosen, 0 if the selection process was cancelled or -1
    *         if an error occurred or
    */
-  static int SelectAddonID(ADDON::TYPE type,
+  static int SelectAddonID(ADDON::AddonType type,
                            std::vector<std::string>& addonIDs,
                            bool showNone = false,
                            bool showDetails = true,
@@ -81,7 +83,7 @@ public:
                            bool showInstalled = true,
                            bool showInstallable = false,
                            bool showMore = true);
-  static int SelectAddonID(const std::vector<ADDON::TYPE>& types,
+  static int SelectAddonID(const std::vector<ADDON::AddonType>& types,
                            std::vector<std::string>& addonIDs,
                            bool showNone = false,
                            bool showDetails = true,
@@ -101,12 +103,10 @@ protected:
   bool Update(const std::string& strDirectory, bool updateFilterPath = true) override;
   std::string GetStartFolder(const std::string& dir) override;
 
-  std::string GetRootPath() const override { return "addons://"; }
+  std::string GetRootPath() override { return KODI::ADDONS::ROOT; }
 
 private:
   void SetProperties();
-  void UpdateStatus(const CFileItemPtr& item);
-  void OnEvent(const ADDON::CRepositoryUpdater::RepositoryUpdated& event);
-  void OnEvent(const ADDON::AddonEvent& event);
+  void UpdateStatus(const CFileItemPtr& item) const;
   CProgramThumbLoader m_thumbLoader;
 };

@@ -19,7 +19,15 @@ namespace MEMORY
 void* AlignedMalloc(size_t s, size_t alignTo)
 {
   void* p = nullptr;
-  posix_memalign(&p, alignTo, s);
+  int res = posix_memalign(&p, alignTo, s);
+  if (res == EINVAL)
+  {
+    throw std::runtime_error("Failed to align memory, alignment is not a multiple of 2");
+  }
+  else if (res == ENOMEM)
+  {
+    throw std::runtime_error("Failed to align memory, insufficient memory available");
+  }
   return p;
 }
 
@@ -46,6 +54,7 @@ void GetMemoryStatus(MemoryStatus* buffer)
   uint64_t free;
   uint64_t total;
   uint64_t reclaimable;
+  uint64_t available = 0;
 
   std::string token;
 
@@ -61,10 +70,13 @@ void GetMemoryStatus(MemoryStatus* buffer)
       file >> total;
     if (token == "SReclaimable:")
       file >> reclaimable;
+    if (token == "MemAvailable:")
+      file >> available;
   }
 
   buffer->totalPhys = total * 1024;
-  buffer->availPhys = (free + cached + reclaimable + buffers) * 1024;
+  buffer->availPhys =
+      available > 0 ? available * 1024 : (free + cached + reclaimable + buffers) * 1024;
 }
 
 }

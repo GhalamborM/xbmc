@@ -9,8 +9,13 @@
 #include "GUIScrollBarControl.h"
 
 #include "GUIMessage.h"
-#include "input/Key.h"
+#include "input/actions/Action.h"
+#include "input/actions/ActionIDs.h"
+#include "input/mouse/MouseEvent.h"
+#include "input/mouse/MouseStat.h"
 #include "utils/StringUtils.h"
+
+using namespace KODI;
 
 #define MIN_NIB_SIZE 4.0f
 
@@ -34,8 +39,8 @@ GUIScrollBarControl::GUIScrollBarControl(int parentID,
     m_guiNibNoFocus(CGUITexture::CreateTexture(posX, posY, width, height, nibTexture)),
     m_guiNibFocus(CGUITexture::CreateTexture(posX, posY, width, height, nibTextureFocus))
 {
-  m_guiNibNoFocus->SetAspectRatio(CAspectRatio::AR_CENTER);
-  m_guiNibFocus->SetAspectRatio(CAspectRatio::AR_CENTER);
+  m_guiNibNoFocus->SetAspectRatio(CAspectRatio::CENTER);
+  m_guiNibFocus->SetAspectRatio(CAspectRatio::CENTER);
   m_numItems = 100;
   m_offset = 0;
   m_pageSize = 10;
@@ -67,10 +72,18 @@ void GUIScrollBarControl::Process(unsigned int currentTime, CDirtyRegionList &di
     changed |= UpdateBarSize();
 
   changed |= m_guiBackground->Process(currentTime);
-  changed |= m_guiBarNoFocus->Process(currentTime);
-  changed |= m_guiBarFocus->Process(currentTime);
-  changed |= m_guiNibNoFocus->Process(currentTime);
-  changed |= m_guiNibFocus->Process(currentTime);
+
+  // Only process textures that will actually be rendered based on focus state
+  if (m_bHasFocus)
+  {
+    changed |= m_guiBarFocus->Process(currentTime);
+    changed |= m_guiNibFocus->Process(currentTime);
+  }
+  else
+  {
+    changed |= m_guiBarNoFocus->Process(currentTime);
+    changed |= m_guiNibNoFocus->Process(currentTime);
+  }
 
   if (changed)
     MarkDirtyRegion();
@@ -223,7 +236,7 @@ void GUIScrollBarControl::SetInvalid()
 {
   CGUIControl::SetInvalid();
   m_guiBackground->SetInvalid();
-  m_guiBarFocus->SetInvalid();
+  m_guiBarNoFocus->SetInvalid();
   m_guiBarFocus->SetInvalid();
   m_guiNibNoFocus->SetInvalid();
   m_guiNibFocus->SetInvalid();
@@ -231,6 +244,14 @@ void GUIScrollBarControl::SetInvalid()
 
 bool GUIScrollBarControl::UpdateBarSize()
 {
+  // Skip recalculation if scroll parameters haven't changed
+  if (m_offset == m_lastOffset && m_pageSize == m_lastPageSize && m_numItems == m_lastNumItems)
+    return false;
+
+  m_lastOffset = m_offset;
+  m_lastPageSize = m_pageSize;
+  m_lastNumItems = m_numItems;
+
   bool changed = false;
 
   // scale our textures to suit
@@ -313,16 +334,16 @@ void GUIScrollBarControl::SetFromPosition(const CPoint &point)
   }
 }
 
-EVENT_RESULT GUIScrollBarControl::OnMouseEvent(const CPoint &point, const CMouseEvent &event)
+EVENT_RESULT GUIScrollBarControl::OnMouseEvent(const CPoint& point, const MOUSE::CMouseEvent& event)
 {
-  if (event.m_id == ACTION_MOUSE_DRAG)
+  if (event.m_id == ACTION_MOUSE_DRAG || event.m_id == ACTION_MOUSE_DRAG_END)
   {
-    if (event.m_state == 1)
+    if (static_cast<HoldAction>(event.m_state) == HoldAction::DRAG)
     { // we want exclusive access
       CGUIMessage msg(GUI_MSG_EXCLUSIVE_MOUSE, GetID(), GetParentID());
       SendWindowMessage(msg);
     }
-    else if (event.m_state == 3)
+    else if (static_cast<HoldAction>(event.m_state) == HoldAction::DRAG_END)
     { // we're done with exclusive access
       CGUIMessage msg(GUI_MSG_EXCLUSIVE_MOUSE, 0, GetParentID());
       SendWindowMessage(msg);

@@ -34,7 +34,8 @@ public:
   bool Open() override;
   int Read(uint8_t* buf, int buf_size) override;
   int64_t Seek(int64_t offset, int whence) override;
-  void SetReadRate(unsigned rate) override;
+  void SetReadRate(uint32_t rate) override;
+  bool IsStreaming() const override;
 
 protected:
   IVideoPlayer* m_pPlayer;

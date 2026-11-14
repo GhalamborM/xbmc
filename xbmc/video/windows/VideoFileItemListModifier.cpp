@@ -9,20 +9,28 @@
 #include "VideoFileItemListModifier.h"
 
 #include "FileItem.h"
+#include "FileItemList.h"
 #include "ServiceBroker.h"
 #include "filesystem/VideoDatabaseDirectory/DirectoryNode.h"
-#include "guilib/LocalizeStrings.h"
+#include "resources/LocalizeStrings.h"
+#include "resources/ResourcesComponent.h"
 #include "settings/AdvancedSettings.h"
 #include "settings/Settings.h"
 #include "settings/SettingsComponent.h"
+#include "utils/ItemProperties.h"
 #include "video/VideoDatabase.h"
 #include "video/VideoDbUrl.h"
+#include "video/VideoFileItemClassify.h"
+#include "video/VideoUtils.h"
 
+#include <memory>
+
+using namespace KODI::VIDEO;
 using namespace XFILE::VIDEODATABASEDIRECTORY;
 
 bool CVideoFileItemListModifier::CanModify(const CFileItemList &items) const
 {
-  if (items.IsVideoDb())
+  if (IsVideoDb(items))
     return true;
 
   return false;
@@ -38,7 +46,7 @@ bool CVideoFileItemListModifier::Modify(CFileItemList &items) const
 //  depending on the child node
 void CVideoFileItemListModifier::AddQueuingFolder(CFileItemList& items)
 {
-  if (!items.IsVideoDb())
+  if (!IsVideoDb(items))
     return;
 
   auto directoryNode = CDirectoryNode::ParseURL(items.GetPath());
@@ -62,58 +70,66 @@ void CVideoFileItemListModifier::AddQueuingFolder(CFileItemList& items)
 
   switch (pNode->GetChildType())
   {
-  case NODE_TYPE_SEASONS:
-  {
-    const std::string& strLabel = g_localizeStrings.Get(20366);
-    pItem.reset(new CFileItem(strLabel));  // "All Seasons"
-    videoUrl.AppendPath("-1/");
-    pItem->SetPath(videoUrl.ToString());
-    // set the number of watched and unwatched items accordingly
-    int watched = 0;
-    int unwatched = 0;
-    for (int i = 0; i < items.Size(); i++)
+    case NodeType::SEASONS:
     {
-      CFileItemPtr item = items[i];
-      watched += static_cast<int>(item->GetProperty("watchedepisodes").asInteger());
-      unwatched += static_cast<int>(item->GetProperty("unwatchedepisodes").asInteger());
-    }
-    pItem->SetProperty("totalepisodes", watched + unwatched);
-    pItem->SetProperty("numepisodes", watched + unwatched); // will be changed later to reflect watchmode setting
-    pItem->SetProperty("watchedepisodes", watched);
-    pItem->SetProperty("unwatchedepisodes", unwatched);
-
-    // @note: The items list may contain additional items that do not belong to the show.
-    // This is the case of the up directory (..) or movies linked to the tvshow.
-    // Iterate through the list till the first season type is found and the infotag can safely be copied.
-
-    if (items.Size() > 1)
-    {
-      for (int i = 1; i < items.Size(); i++)
+      const std::string& strLabel =
+          CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(20366);
+      pItem = std::make_shared<CFileItem>(strLabel); // "All Seasons"
+      videoUrl.AppendPath("-1/");
+      pItem->SetPath(videoUrl.ToString());
+      // set the number of watched and unwatched items accordingly
+      int watched = 0;
+      int unwatched = 0;
+      int inprogress = 0;
+      for (int i = 0; i < items.Size(); i++)
       {
-        if (items[i]->GetVideoInfoTag() && items[i]->GetVideoInfoTag()->m_type == MediaTypeSeason &&
-            items[i]->GetVideoInfoTag()->m_iSeason > 0)
+        CFileItemPtr item = items[i];
+        watched +=
+            static_cast<int>(item->GetProperty(KODI::ITEM::PROPERTY::WATCHED_EPISODES).asInteger());
+        unwatched += static_cast<int>(
+            item->GetProperty(KODI::ITEM::PROPERTY::UNWATCHED_EPISODES).asInteger());
+        inprogress += static_cast<int>(
+            item->GetProperty(KODI::ITEM::PROPERTY::IN_PROGRESS_EPISODES).asInteger());
+      }
+      KODI::VIDEO::UTILS::SetEpisodeCounts(*pItem, watched + unwatched, watched);
+      pItem->SetProperty(KODI::ITEM::PROPERTY::IN_PROGRESS_EPISODES, inprogress);
+
+      // @note: The items list may contain additional items that do not belong to the show.
+      // This is the case of the up directory (..) or movies linked to the tvshow.
+      // Iterate through the list till the first season type is found and the infotag can safely be copied.
+
+      if (items.Size() > 1)
+      {
+        for (int i = 1; i < items.Size(); i++)
         {
-          *pItem->GetVideoInfoTag() = *items[i]->GetVideoInfoTag();
-          pItem->GetVideoInfoTag()->m_iSeason = -1;
-          break;
+          if (items[i]->HasVideoInfoTag() &&
+              items[i]->GetVideoInfoTag()->GetMediaType() == KODI::MEDIA::TYPE::SEASON &&
+              items[i]->GetVideoInfoTag()->m_iSeason > 0)
+          {
+            *pItem->GetVideoInfoTag() = *items[i]->GetVideoInfoTag();
+            pItem->GetVideoInfoTag()->m_iSeason = -1;
+            pItem->GetVideoInfoTag()->m_strPlot = "";
+            break;
+          }
         }
       }
-    }
 
-    pItem->GetVideoInfoTag()->m_strTitle = strLabel;
-    pItem->GetVideoInfoTag()->m_iEpisode = watched + unwatched;
-    pItem->GetVideoInfoTag()->SetPlayCount((unwatched == 0) ? 1 : 0);
-    CVideoDatabase db;
-    if (db.Open())
-    {
-      pItem->GetVideoInfoTag()->m_iDbId = db.GetSeasonId(pItem->GetVideoInfoTag()->m_iIdShow, -1);
-      db.Close();
-    }
-    pItem->GetVideoInfoTag()->m_type = MediaTypeSeason;
+      pItem->GetVideoInfoTag()->m_strTitle = strLabel;
+      pItem->GetVideoInfoTag()->m_iEpisode = watched + unwatched;
+      pItem->GetVideoInfoTag()->SetPlayCount((unwatched == 0) ? 1 : 0);
+      CVideoDatabase db;
+      if (db.Open())
+      {
+        pItem->GetVideoInfoTag()->m_iDbId = db.GetSeasonId(pItem->GetVideoInfoTag()->m_iIdShow, -1);
+        db.Close();
+      }
+      pItem->GetVideoInfoTag()->SetMediaType(KODI::MEDIA::TYPE::SEASON);
   }
   break;
-  case NODE_TYPE_MUSICVIDEOS_ALBUM:
-    pItem.reset(new CFileItem("* " + g_localizeStrings.Get(16100)));  // "* All Videos"
+  case NodeType::MUSICVIDEOS_ALBUM:
+    pItem = std::make_shared<CFileItem>(
+        "* " +
+        CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(16100)); // "* All Videos"
     videoUrl.AppendPath("-1/");
     pItem->SetPath(videoUrl.ToString());
     break;
@@ -123,8 +139,10 @@ void CVideoFileItemListModifier::AddQueuingFolder(CFileItemList& items)
 
   if (pItem)
   {
-    pItem->m_bIsFolder = true;
-    pItem->SetSpecialSort(CServiceBroker::GetSettingsComponent()->GetAdvancedSettings()->m_bVideoLibraryAllItemsOnBottom ? SortSpecialOnBottom : SortSpecialOnTop);
+    pItem->SetFolder(true);
+    const auto advSettings = CServiceBroker::GetSettingsComponent()->GetAdvancedSettings();
+    pItem->SetSpecialSort(advSettings->m_bVideoLibraryAllItemsOnBottom ? SortSpecial::BOTTOM
+                                                                       : SortSpecial::TOP);
     pItem->SetCanQueue(false);
     items.Add(pItem);
   }

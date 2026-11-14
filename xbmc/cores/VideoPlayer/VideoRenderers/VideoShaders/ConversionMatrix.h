@@ -8,8 +8,10 @@
 
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <memory>
 
 extern "C" {
@@ -22,7 +24,7 @@ class CMatrix
 public:
   CMatrix() = default;
   explicit CMatrix(const CMatrix<Order - 1>& other);
-  explicit CMatrix(const std::array<std::array<float, Order>, Order>& other) { m_mat = other; }
+  explicit CMatrix(const std::array<std::array<float, Order>, Order>& other) : m_mat(other) {}
   explicit CMatrix(const std::array<std::array<float, Order - 1>, Order - 1>& other);
   virtual ~CMatrix() = default;
 
@@ -190,6 +192,16 @@ public:
   CConvertMatrix& SetDestinationBlack(float black);
 
   /**
+   * @brief Set the hue rotation in degrees.
+   */
+  CConvertMatrix& SetDestinationHue(float hue);
+
+  /**
+   * @brief Set the saturation (chroma gain).
+   */
+  CConvertMatrix& SetDestinationSaturation(float saturation);
+
+  /**
    * @brief Set the destination limited range boolean.
    */
   CConvertMatrix& SetDestinationLimitedRange(bool limited);
@@ -219,6 +231,18 @@ public:
    */
   static Matrix3x1 GetRGBYuvCoefs(AVColorSpace colspace);
 
+  /**
+   * @brief Get the matrix rotating hue and scaling saturation of linear RGB
+   *        around the luminance axis, transposed like GetPrimMat().
+   */
+  static Matrix3 GetLinearHueSatMat(AVColorSpace colspace, float hue, float saturation);
+
+  /**
+   * @brief Get the gamma exponent for a gamma setting of 0..100, 50 is neutral.
+   *        The adjusted signal is signal^(1 / exponent).
+   */
+  static float GetGammaExponent(float gamma);
+
 private:
   const CGlMatrix& GenMat();
   const CMatrix<3>& GenPrimMat();
@@ -237,4 +261,6 @@ private:
   int m_srcTextureBits = 8;
   float m_contrast = 1.0;
   float m_black = 0.0;
+  float m_hue = 0.0;
+  float m_saturation = 1.0;
 };

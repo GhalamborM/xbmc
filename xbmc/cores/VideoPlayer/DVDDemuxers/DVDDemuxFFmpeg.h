@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2005-2018 Team Kodi
+ *  Copyright (C) 2005-2026 Team Kodi
  *  This file is part of Kodi - https://kodi.tv
  *
  *  SPDX-License-Identifier: GPL-2.0-or-later
@@ -20,7 +20,9 @@ extern "C" {
 }
 
 class CDVDDemuxFFmpeg;
+class CDVDInputStream;
 class CURL;
+struct ChapterFFmpeg;
 
 enum class TRANSPORT_STREAM_STATE
 {
@@ -92,6 +94,7 @@ public:
   std::string GetFileName() override;
 
   DemuxPacket* Read() override;
+  DemuxPacket* ReadInternal(bool keep);
 
   bool SeekTime(double time, bool backwards = false, double* startpts = NULL) override;
   bool SeekByte(int64_t pos);
@@ -106,8 +109,10 @@ public:
   int GetChapterCount() override;
   int GetChapter() override;
   void GetChapterName(std::string& strChapterName, int chapterIdx=-1) override;
-  int64_t GetChapterPos(int chapterIdx = -1) override;
+  std::chrono::milliseconds GetChapterPos(int chapterIdx = -1) override;
   std::string GetStreamCodecName(int iStreamId) override;
+
+  bool IsStreaming() const override;
 
   bool Aborted();
 
@@ -124,13 +129,19 @@ protected:
   void CreateStreams(unsigned int program = UINT_MAX);
   void DisposeStreams();
   void ParsePacket(AVPacket* pkt);
+  void SaveProbedStreamParameters();
+  void RestoreProbedStreamParameters();
+  void ClearProbedStreamParameters();
   TRANSPORT_STREAM_STATE TransportStreamAudioState();
   TRANSPORT_STREAM_STATE TransportStreamVideoState();
   bool IsTransportStreamReady();
   void ResetVideoStreams();
+  void FlushInputSeek();
   AVDictionary* GetFFMpegOptionsFromInput();
   double ConvertTimestamp(int64_t pts, int den, int num);
-  void UpdateCurrentPTS();
+#ifdef HAVE_LIBBLURAY
+  void ConvertBlurayTimestamps(DemuxPacket* packet, const AVStream* stream);
+#endif
   bool IsProgramChange();
   unsigned int HLSSelectProgram();
 
@@ -139,6 +150,8 @@ protected:
 
   void GetL16Parameters(int& channels, int& samplerate);
   double SelectAspect(AVStream* st, bool& forced);
+
+  StreamHdrType DetermineHdrType(AVStream* pStream);
 
   CCriticalSection m_critSection;
   std::map<int, CDemuxStream*> m_streams;
@@ -157,7 +170,7 @@ protected:
   unsigned int m_initialProgramNumber;
   int m_seekStream;
 
-  XbmcThreads::EndTime  m_timeout;
+  XbmcThreads::EndTime<> m_timeout;
 
   // Due to limitations of ffmpeg, we only can detect a program change
   // with a packet. This struct saves the packet for the next read and
@@ -168,6 +181,21 @@ protected:
     int      result;    // result from av_read_packet
   }m_pkt;
 
+  struct AVCodecParametersDeleter
+  {
+    void operator()(AVCodecParameters* codecpar) const { avcodec_parameters_free(&codecpar); }
+  };
+
+  struct ProbedStream
+  {
+    std::unique_ptr<AVCodecParameters, AVCodecParametersDeleter> codecpar;
+    AVRational rFrameRate{0, 0};
+    AVRational avgFrameRate{0, 0};
+    AVRational sampleAspectRatio{0, 0};
+  };
+  // What avformat_find_stream_info() established, kept across the transport stream re-open.
+  std::map<int, ProbedStream> m_probedStreams;
+
   bool m_streaminfo;
   bool m_reopen = false;
   bool m_checkTransportStream;
@@ -175,5 +203,9 @@ protected:
   double m_dtsAtDisplayTime;
   bool m_seekToKeyFrame = false;
   double m_startTime = 0;
+  std::vector<ChapterFFmpeg> m_chapters;
+#ifdef HAVE_LIBBLURAY
+  uint64_t m_blurayReadBase{0};
+  std::map<int, uint64_t> m_blurayReadPos;
+#endif
 };
-

@@ -14,14 +14,21 @@
 */
 
 #include "IMsgTargetCallback.h"
+#include "threads/CriticalSection.h"
+#include "threads/SingleLock.h"
 #include "utils/ColorUtils.h"
 #include "utils/GlobalsHandling.h"
 #include "windowing/GraphicContext.h"
 
+#include <set>
 #include <utility>
 #include <vector>
 
 // Forward
+namespace ADDON
+{
+struct AddonEvent;
+}
 class CGUIFont;
 class CGUIFontTTF;
 class CXBMCTinyXML;
@@ -40,6 +47,17 @@ struct OrigFontInfo
   bool border;
 };
 
+struct FontMetadata
+{
+  FontMetadata(const std::string& filename, const std::set<std::string>& familyNames)
+    : m_filename{filename}, m_familyNames{familyNames}
+  {
+  }
+
+  std::string m_filename;
+  std::set<std::string> m_familyNames;
+};
+
 /*!
  \ingroup textures
  \brief
@@ -50,14 +68,22 @@ public:
   GUIFontManager();
   ~GUIFontManager() override;
 
+  /*!
+   *  \brief Initialize the font manager.
+   *  Checks that fonts cache are up to date, otherwise update it.
+   */
+  void Initialize();
+
+  bool IsUpdating() const { return m_critSection.IsLocked(); }
+
   bool OnMessage(CGUIMessage& message) override;
 
   void Unload(const std::string& strFontName);
   void LoadFonts(const std::string& fontSet);
   CGUIFont* LoadTTF(const std::string& strFontName,
                     const std::string& strFilename,
-                    UTILS::COLOR::Color textColor,
-                    UTILS::COLOR::Color shadowColor,
+                    KODI::UTILS::COLOR::Color textColor,
+                    KODI::UTILS::COLOR::Color shadowColor,
                     const int iSize,
                     const int iStyle,
                     bool border = false,
@@ -78,8 +104,24 @@ public:
 
   static void SettingOptionsFontsFiller(const std::shared_ptr<const CSetting>& setting,
                                         std::vector<StringSettingOption>& list,
-                                        std::string& current,
-                                        void* data);
+                                        std::string& current);
+
+  /*!
+   * \brief Get the list of user fonts as family names from cache
+   * \return The list of available fonts family names
+   */
+  std::vector<std::string> GetUserFontsFamilyNames();
+
+  /*!
+   * \brief The aspect a font that stretches with the interface is rasterised at
+   * \param aspect The font's own aspect
+   * \param sourceRes The skin resolution the font is declared in
+   * \param scaleX, scaleY The skin to screen scaling, as GetGUIScaling() gives it
+   */
+  static float StretchedFontAspect(float aspect,
+                                   const RESOLUTION_INFO& sourceRes,
+                                   float scaleX,
+                                   float scaleY);
 
 protected:
   void ReloadTTFFonts();
@@ -97,6 +139,24 @@ protected:
   std::vector<OrigFontInfo> m_vecFontInfo;
   RESOLUTION_INFO m_skinResolution;
   bool m_canReload{true};
+
+private:
+  void LoadUserFonts();
+  //! \param resolveIncludes run the active skin's include resolver over the file; never
+  //! for an add-on's Font.xml, whose includes would mutate the skin's global state
+  bool LoadFontsFromFile(const std::string& fontsetFilePath,
+                         const std::string& fontSet,
+                         std::string& firstFontset,
+                         bool resolveIncludes);
+  //! \brief Merge in fonts declared by enabled RESOURCE_FONT add-ons; the skin's win
+  void LoadAddonFonts(const std::string& fontSet);
+
+  void OnAddonEvent(const ADDON::AddonEvent& event);
+
+  mutable CCriticalSection m_critSection;
+  bool m_addonEventsSubscribed{false};
+  std::set<std::string> m_addonFontIds;
+  std::vector<FontMetadata> m_userFontsCache;
 };
 
 /*!

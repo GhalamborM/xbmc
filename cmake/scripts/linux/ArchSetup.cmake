@@ -1,8 +1,10 @@
+include(cmake/scripts/linux/Linkers.txt)
+
 # Main cpp
 set(CORE_MAIN_SOURCE ${CMAKE_SOURCE_DIR}/xbmc/platform/posix/main.cpp)
 
 # we always want to use GNU features if available, so set _GNU_SOURCE
-set(ARCH_DEFINES -DTARGET_POSIX -DTARGET_LINUX -D_GNU_SOURCE)
+list(APPEND ARCH_DEFINES -DTARGET_POSIX -DTARGET_LINUX -D_GNU_SOURCE)
 set(SYSTEM_DEFINES -D__STDC_CONSTANT_MACROS -D_FILE_OFFSET_BITS=64)
 set(PLATFORM_DIR platform/linux)
 set(PLATFORMDEFS_DIR platform/posix)
@@ -35,12 +37,23 @@ else()
   elseif(CPU MATCHES aarch64 OR CPU MATCHES arm64)
     set(ARCH aarch64)
     set(NEON True)
-  elseif(CPU MATCHES riscv64)
-    set(ARCH riscv64)
-    set(NEON False)
   else()
-    message(SEND_ERROR "Unknown CPU: ${CPU}")
+    set(ARCH ${CPU})
   endif()
+endif()
+
+# disable the default gold linker when an alternative was enabled by the user
+if(ENABLE_LLD OR ENABLE_MOLD)
+  set(ENABLE_GOLD OFF CACHE BOOL "" FORCE)
+elseif(ENABLE_GOLD)
+  include(LDGOLD)
+endif()
+if(ENABLE_LLD)
+  set(ENABLE_MOLD OFF CACHE BOOL "" FORCE)
+  include(LLD)
+elseif(ENABLE_MOLD)
+  set(ENABLE_LLD OFF CACHE BOOL "" FORCE)
+  include(MOLD)
 endif()
 
 
@@ -61,7 +74,7 @@ if(CMAKE_BUILD_TYPE STREQUAL Release OR CMAKE_BUILD_TYPE STREQUAL MinSizeRel)
           set(NJOBS ${USE_LTO})
         endif()
 
-        if(CMAKE_COMPILER_IS_GNUCXX)
+        if(CMAKE_CXX_COMPILER_ID STREQUAL GNU)
           # GCC
           # Make sure we strip binaries in Release build
           set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -s")
@@ -70,12 +83,6 @@ if(CMAKE_BUILD_TYPE STREQUAL Release OR CMAKE_BUILD_TYPE STREQUAL MinSizeRel)
         elseif(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
           # CLANG
           set(ENABLE_GOLD OFF CACHE BOOL "gold linker forced to off" FORCE)
-          set(ENABLE_LLD ON CACHE BOOL "lld linker forced to on" FORCE)
-
-          include(LLD)
-          if(NOT LLD_FOUND)
-	    message(FATAL_ERROR "Clang LTO support requires lld, set ENABLE_LLD=ON")
-          endif()
 
           find_package(LLVM REQUIRED)
 
@@ -88,7 +95,11 @@ if(CMAKE_BUILD_TYPE STREQUAL Release OR CMAKE_BUILD_TYPE STREQUAL MinSizeRel)
 
           set(CMAKE_CXX_COMPILE_OPTIONS_IPO -flto=thin)
           set(CMAKE_C_COMPILE_OPTIONS_IPO -flto=thin)
-          set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,--thinlto-jobs=${NJOBS},--thinlto-cache-dir=${CLANG_LTO_CACHE}")
+          if(LLD_FOUND)
+            set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,--thinlto-jobs=${NJOBS},--thinlto-cache-dir=${CLANG_LTO_CACHE}")
+          elseif(MOLD_FOUND)
+            set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,--plugin-opt=jobs=${NJOBS},--plugin-opt=cache-dir=${CLANG_LTO_CACHE}")
+          endif()
           set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS}")
           set(CMAKE_MODULE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS}")
         endif()
@@ -104,13 +115,6 @@ if(KODI_DEPENDSBUILD)
   # Binaries should be directly runnable from host, so include rpath to depends
   set(CMAKE_INSTALL_RPATH "${DEPENDS_PATH}/lib")
   set(CMAKE_BUILD_WITH_INSTALL_RPATH TRUE)
-endif()
-
-if(NOT ENABLE_LLD AND NOT LDGOLD_FOUND)
-  include(LDGOLD)
-endif()
-if(NOT ENABLE_GOLD AND ENABLE_LLD AND NOT LDD_FOUND)
-  include(LLD)
 endif()
 
 include(CheckIncludeFiles)
@@ -143,6 +147,11 @@ if(HAVE_MKOSTEMP)
   list(APPEND ARCH_DEFINES "-DHAVE_MKOSTEMP=1")
 endif()
 
+check_symbol_exists(getmntent_r "mntent.h" HAVE_GETMNTENT_R)
+if(HAVE_GETMNTENT_R)
+  list(APPEND ARCH_DEFINES "-DHAVE_GETMNTENT_R=1")
+endif()
+
 set(CMAKE_REQUIRED_DEFINITIONS "-D_GNU_SOURCE")
 check_symbol_exists("memfd_create" "sys/mman.h" HAVE_LINUX_MEMFD)
 set(CMAKE_REQUIRED_DEFINITIONS "")
@@ -167,9 +176,13 @@ if(NOT "x11" IN_LIST CORE_PLATFORM_NAME_LC)
   set(ENABLE_VDPAU OFF CACHE BOOL "Disabling VDPAU" FORCE)
 endif()
 
-if("x11" IN_LIST CORE_PLATFORM_NAME_LC AND ENABLE_VDPAU)
+if("x11" IN_LIST CORE_PLATFORM_NAME_LC AND (ENABLE_VDPAU AND NOT ${ENABLE_VDPAU} STREQUAL "AUTO"))
   set(ENABLE_GLX ON CACHE BOOL "Enabling GLX" FORCE)
 endif()
+
+if("webos" IN_LIST CORE_PLATFORM_NAME_LC)
+  set(ENABLE_OPTICAL OFF CACHE BOOL "" FORCE)
+endif ()
 
 # Architecture endianness detector
 include(TestBigEndian)
@@ -180,3 +193,15 @@ if(ARCH_IS_BIGENDIAN)
 else()
   message(STATUS "Host architecture is little-endian")
 endif()
+
+# Build internal libs
+if(NOT USE_INTERNAL_LIBS)
+  if(KODI_DEPENDSBUILD)
+    set(USE_INTERNAL_LIBS ON)
+  else()
+    set(USE_INTERNAL_LIBS OFF)
+  endif()
+endif()
+
+# Atomic library
+list(APPEND PLATFORM_REQUIRED_DEPS Atomic)

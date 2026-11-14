@@ -8,19 +8,26 @@
 
 #include "AddonExtensions.h"
 
+#include "utils/StringUtils.h"
+
 using namespace ADDON;
 
-const SExtValue CAddonExtensions::GetValue(const std::string& id) const
+bool SExtValue::asBoolean() const
 {
-  for (const auto& values : m_values)
+  return StringUtils::EqualsNoCase(str, "true");
+}
+
+SExtValue CAddonExtensions::GetValue(std::string_view id) const
+{
+  for (const auto& [_, values] : m_values)
   {
-    for (const auto& value : values.second)
+    for (const auto& [valueId, valueValue] : values)
     {
-      if (value.first == id)
-        return value.second;
+      if (valueId == id)
+        return valueValue;
     }
   }
-  return SExtValue("");
+  return {};
 }
 
 const EXT_VALUES& CAddonExtensions::GetValues() const
@@ -28,27 +35,27 @@ const EXT_VALUES& CAddonExtensions::GetValues() const
   return m_values;
 }
 
-const CAddonExtensions* CAddonExtensions::GetElement(const std::string& id) const
+const CAddonExtensions* CAddonExtensions::GetElement(std::string_view id) const
 {
-  for (const auto& child : m_children)
+  for (const auto& [childId, childExts] : m_children)
   {
-    if (child.first == id)
-      return &child.second;
+    if (childId == id)
+      return &childExts;
   }
 
   return nullptr;
 }
 
-const EXT_ELEMENTS CAddonExtensions::GetElements(const std::string& id) const
+EXT_ELEMENTS CAddonExtensions::GetElements(std::string_view id /*= ""*/) const
 {
   if (id.empty())
     return m_children;
 
   EXT_ELEMENTS children;
-  for (const auto& child : m_children)
+  for (const auto& [childId, childExts] : m_children)
   {
-    if (child.first == id)
-      children.push_back(std::make_pair(child.first, child.second));
+    if (childId == id)
+      children.emplace_back(childId, childExts);
   }
   return children;
 }
@@ -56,6 +63,6 @@ const EXT_ELEMENTS CAddonExtensions::GetElements(const std::string& id) const
 void CAddonExtensions::Insert(const std::string& id, const std::string& value)
 {
   EXT_VALUE extension;
-  extension.push_back(std::make_pair(id, SExtValue(value)));
-  m_values.push_back(std::make_pair(id, extension));
+  extension.emplace_back(id, SExtValue(value));
+  m_values.emplace_back(id, extension);
 }

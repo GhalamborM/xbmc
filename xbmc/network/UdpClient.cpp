@@ -7,11 +7,12 @@
  */
 
 #include "UdpClient.h"
+
+#include <mutex>
 #ifdef TARGET_POSIX
 #include <sys/ioctl.h>
 #endif
 #include "Network.h"
-#include "threads/SingleLock.h"
 #include "utils/TimeUtils.h"
 #include "utils/log.h"
 #include "windowing/GraphicContext.h"
@@ -73,12 +74,12 @@ void CUdpClient::Destroy()
 
 void CUdpClient::OnStartup()
 {
-  SetPriority( GetMinPriority() );
+  SetPriority(ThreadPriority::LOWEST);
 }
 
 bool CUdpClient::Broadcast(int aPort, const std::string& aMessage)
 {
-  CSingleLock lock(critical_section);
+  std::unique_lock lock(critical_section);
 
   struct sockaddr_in addr;
   addr.sin_family = AF_INET;
@@ -95,7 +96,7 @@ bool CUdpClient::Broadcast(int aPort, const std::string& aMessage)
 
 bool CUdpClient::Send(const std::string& aIpAddress, int aPort, const std::string& aMessage)
 {
-  CSingleLock lock(critical_section);
+  std::unique_lock lock(critical_section);
 
   struct sockaddr_in addr;
   addr.sin_family = AF_INET;
@@ -111,7 +112,7 @@ bool CUdpClient::Send(const std::string& aIpAddress, int aPort, const std::strin
 
 bool CUdpClient::Send(struct sockaddr_in aAddress, const std::string& aMessage)
 {
-  CSingleLock lock(critical_section);
+  std::unique_lock lock(critical_section);
 
   UdpCommand transmit = {aAddress, aMessage, NULL, 0};
   commands.push_back(transmit);
@@ -121,7 +122,7 @@ bool CUdpClient::Send(struct sockaddr_in aAddress, const std::string& aMessage)
 
 bool CUdpClient::Send(struct sockaddr_in aAddress, unsigned char* pMessage, DWORD dwSize)
 {
-  CSingleLock lock(critical_section);
+  std::unique_lock lock(critical_section);
 
   UdpCommand transmit = {aAddress, "", pMessage, dwSize};
   commands.push_back(transmit);
@@ -211,9 +212,9 @@ bool CUdpClient::DispatchNextCommand()
 {
   UdpCommand command;
   {
-    CSingleLock lock(critical_section);
+    std::unique_lock lock(critical_section);
 
-    if (commands.size() <= 0)
+    if (commands.empty())
       return false;
 
     COMMANDITERATOR it = commands.begin();

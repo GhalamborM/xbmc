@@ -135,7 +135,10 @@ public:
   uint32_t GetDeviceId() const { return m_cStructure->deviceId; }
 
   /// @brief Set the file serial number, which distinguishes this file from all other files on the same device.
-  void SetFileSerialNumber(uint64_t fileSerialNumber) { m_cStructure->fileSerialNumber = fileSerialNumber; }
+  void SetFileSerialNumber(uint64_t fileSerialNumber)
+  {
+    m_cStructure->fileSerialNumber = fileSerialNumber;
+  }
 
   /// @brief Get the file serial number, which distinguishes this file from all other files on the same device.
   uint64_t GetFileSerialNumber() const { return m_cStructure->fileSerialNumber; }
@@ -240,9 +243,9 @@ public:
   /// | Name | Type | Set call | Get call
   /// |------|------|----------|----------
   /// | **Number of bytes cached** | `uint64_t` | @ref CacheStatus::SetForward "SetForward" | @ref CacheStatus::GetForward "GetForward"
-  /// | **Maximum number of bytes per second** | `unsigned int` | @ref CacheStatus::SetMaxRate "SetMaxRate" | @ref CacheStatus::GetMaxRate "GetMaxRate"
-  /// | **Average read rate from source file** | `unsigned int` | @ref CacheStatus::SetCurrentRate "SetCurrentRate" | @ref CacheStatus::GetCurrentRate "GetCurrentRate"
-  /// | **Cache low speed condition detected** | `bool` | @ref CacheStatus::SetLowspeed "SetLowspeed" | @ref CacheStatus::GetLowspeed "GetLowspeed"
+  /// | **Maximum number of bytes per second** | `uint32_t` | @ref CacheStatus::SetMaxRate "SetMaxRate" | @ref CacheStatus::GetMaxRate "GetMaxRate"
+  /// | **Average read rate from source file** | `uint32_t` | @ref CacheStatus::SetCurrentRate "SetCurrentRate" | @ref CacheStatus::GetCurrentRate "GetCurrentRate"
+  /// | **Cache low speed rate detected** | `uint32_t` | @ref CacheStatus::SetLowRate "SetLowRate" | @ref CacheStatus::GetLowRate "GetLowRate"
   ///
 
   /// @addtogroup cpp_kodi_vfs_Defs_CacheStatus
@@ -256,22 +259,22 @@ public:
   uint64_t GetForward() { return m_cStructure->forward; }
 
   /// @brief Set maximum number of bytes per second cache is allowed to fill.
-  void SetMaxRate(unsigned int maxrate) { m_cStructure->maxrate = maxrate; }
+  void SetMaxRate(uint32_t maxrate) { m_cStructure->maxrate = maxrate; }
 
   /// @brief Set maximum number of bytes per second cache is allowed to fill.
-  unsigned int GetMaxRate() { return m_cStructure->maxrate; }
+  uint32_t GetMaxRate() { return m_cStructure->maxrate; }
 
-  /// @brief Set average read rate from source file since last position change.
-  void SetCurrentRate(unsigned int currate) { m_cStructure->currate = currate; }
+  /// @brief Set number of bytes per second for average read rate from source file since last position change.
+  void SetCurrentRate(uint32_t currate) { m_cStructure->currate = currate; }
 
-  /// @brief Get average read rate from source file since last position change.
-  unsigned int GetCurrentRate() { return m_cStructure->currate; }
+  /// @brief Get number of bytes per second for average read rate from source file since last position change.
+  uint32_t GetCurrentRate() { return m_cStructure->currate; }
 
-  /// @brief Set cache low speed condition detected.
-  void SetLowspeed(bool lowspeed) { m_cStructure->lowspeed = lowspeed; }
+  /// @brief Set number of bytes per second for low speed rate.
+  void SetLowRate(uint32_t lowrate) { m_cStructure->lowrate = lowrate; }
 
-  /// @brief Get cache low speed condition detected.
-  bool GetLowspeed() { return m_cStructure->lowspeed; }
+  /// @brief Get number of bytes per second for low speed rate.
+  uint32_t GetLowRate() { return m_cStructure->lowrate; }
 
   ///@}
 };
@@ -559,14 +562,18 @@ public:
             bool folder = false,
             int64_t size = -1,
             time_t dateTime = 0)
-    : m_label(label), m_path(path), m_folder(folder), m_size(size), m_dateTime(dateTime)
+    : m_label(label),
+      m_path(path),
+      m_folder(folder),
+      m_size(size),
+      m_dateTime(dateTime)
   {
   }
   //----------------------------------------------------------------------------
 
   //============================================================================
-  // @note Not for addon development itself needed, thats why below is
-  // disabled for doxygen!
+  // @note Not necessary for addon development, therefore it's
+  // disabled for doxygen below!
   //
   // @ingroup cpp_kodi_vfs_CDirEntry
   // @brief Constructor to create own copy
@@ -1145,7 +1152,7 @@ inline std::string ATTR_DLL_LOCAL GetFileMD5(const std::string& path)
 /// std::string thumb;
 /// std::string filename;
 /// if (kodi::gui::DialogFileBrowser::ShowAndGetFile("local", "*.avi|*.mpg|*.mp4",
-///                                                "Test File selection to get Thumnail",
+///                                                "Test File selection to get Thumbnail",
 ///                                                filename))
 /// {
 ///   thumb = kodi::vfs::GetCacheThumbName(filename);
@@ -2017,6 +2024,32 @@ public:
   /// @param[out] line The buffer to store the data in.
   /// @return True when a line was read, false otherwise.
   ///
+  /// ------------------------------------------------------------------------
+  ///
+  /// **Example:**
+  /// ~~~~~~~~~~~~~{.cpp}
+  /// #include <kodi/Filesystem.h>
+  ///
+  /// ...
+  ///
+  /// /* Create the needed file handle class */
+  /// kodi::vfs::CFile myFile;
+  ///
+  /// /* Open the wanted file */
+  /// if (myFile.OpenFile(kodi::addon::GetUserPath("/myFile.txt")))
+  /// {
+  ///   /* Read all lines inside file */
+  ///   while (1)
+  ///   {
+  ///     std::string line;
+  ///     if (!myFile.ReadLine(line))
+  ///       break;
+  ///     fprintf(stderr, "%s\n", line.c_str());
+  ///   }
+  /// }
+  ///
+  /// ~~~~~~~~~~~~~
+  ///
   bool ReadLine(std::string& line)
   {
     using namespace kodi::addon;
@@ -2024,12 +2057,19 @@ public:
     line.clear();
     if (!m_file)
       return false;
-    // TODO: Read 1024 chars into buffer. If file position advanced that many
-    // chars, we didn't hit a newline. Otherwise, if file position is 1 or 2
-    // past the number of bytes read, we read (and skipped) a newline sequence.
-    char buffer[1025];
+    // Read 1024 chars into buffer. If file position advanced that many
+    // chars, we didn't hit a newline. Otherwise, we read a newline
+    // or we reached the end of the file.
+    //
+    // The strncpy idiom is used here (C++ allows a simpler implementation):
+    //
+    // char buffer[BUFFER_SIZE];
+    // strncpy(buffer, sourceString, BUFFER_SIZE - 1);
+    // buffer[BUFFER_SIZE - 1] = '\0';
+    //
+    char buffer[1025]{};
     if (CPrivateBase::m_interface->toKodi->kodi_filesystem->read_file_string(
-            CPrivateBase::m_interface->toKodi->kodiBase, m_file, buffer, sizeof(buffer)))
+            CPrivateBase::m_interface->toKodi->kodiBase, m_file, buffer, sizeof(buffer) - 1))
     {
       line = buffer;
       return !line.empty();
@@ -2247,7 +2287,7 @@ public:
   /// @param[in] rate Cache rate size to use
   /// @return true if successfully done, false otherwise
   ///
-  bool IoControlSetCacheRate(unsigned int rate)
+  bool IoControlSetCacheRate(uint32_t rate)
   {
     using namespace kodi::addon;
 

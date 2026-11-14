@@ -11,12 +11,14 @@
 #include "ControllerDefinitions.h"
 #include "ControllerLayout.h"
 #include "URL.h"
+#include "addons/addoninfo/AddonType.h"
 #include "games/controllers/input/PhysicalTopology.h"
-#include "utils/XBMCTinyXML.h"
+#include "utils/XBMCTinyXML2.h"
 #include "utils/XMLUtils.h"
 #include "utils/log.h"
 
 #include <algorithm>
+#include <cstring>
 
 using namespace KODI;
 using namespace GAME;
@@ -26,7 +28,8 @@ using namespace GAME;
 struct FeatureTypeEqual
 {
   FeatureTypeEqual(FEATURE_TYPE type, JOYSTICK::INPUT_TYPE inputType)
-    : type(type), inputType(inputType)
+    : type(type),
+      inputType(inputType)
   {
   }
 
@@ -55,7 +58,8 @@ struct FeatureTypeEqual
 const ControllerPtr CController::EmptyPtr;
 
 CController::CController(const ADDON::AddonInfoPtr& addonInfo)
-  : CAddon(addonInfo, ADDON::ADDON_GAME_CONTROLLER), m_layout(new CControllerLayout)
+  : CAddon(addonInfo, ADDON::AddonType::GAME_CONTROLLER),
+    m_layout(std::make_unique<CControllerLayout>())
 {
 }
 
@@ -121,16 +125,16 @@ bool CController::LoadLayout(void)
 
     CLog::Log(LOGINFO, "Loading controller layout: {}", CURL::GetRedacted(strLayoutXmlPath));
 
-    CXBMCTinyXML xmlDoc;
+    CXBMCTinyXML2 xmlDoc;
     if (!xmlDoc.LoadFile(strLayoutXmlPath))
     {
-      CLog::Log(LOGDEBUG, "Unable to load file: {} at line {}", xmlDoc.ErrorDesc(),
-                xmlDoc.ErrorRow());
+      CLog::Log(LOGDEBUG, "Unable to load file: {} at line {}", xmlDoc.ErrorStr(),
+                xmlDoc.ErrorLineNum());
       return false;
     }
 
-    TiXmlElement* pRootElement = xmlDoc.RootElement();
-    if (!pRootElement || pRootElement->NoChildren() || pRootElement->ValueStr() != LAYOUT_XML_ROOT)
+    auto* pRootElement = xmlDoc.RootElement();
+    if (pRootElement == nullptr || std::strcmp(pRootElement->Value(), LAYOUT_XML_ROOT) != 0)
     {
       CLog::Log(LOGERROR, "Can't find root <{}> tag", LAYOUT_XML_ROOT);
       return false;

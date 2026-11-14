@@ -1,15 +1,7 @@
-include ../../Makefile.include
+include ../../Makefile.include WAYLANDPP-SCANNER-VERSION ../../download-files.include
 PREFIX=$(NATIVEPREFIX)
 PLATFORM=$(NATIVEPLATFORM)
-DEPS=../../Makefile.include Makefile
-
-# lib name, version
-LIBNAME=waylandpp
-VERSION=0.2.8
-SOURCE=$(LIBNAME)-$(VERSION)
-ARCHIVE=$(SOURCE).tar.gz
-
-APP=$(PLATFORM)/wayland-scanner++
+DEPS =../../Makefile.include Makefile WAYLANDPP-SCANNER-VERSION ../../download-files.include 001-fix-gcc13-build.patch
 
 CMAKE_OPTIONS := -DBUILD_DOCUMENTATION=OFF \
                  -DBUILD_LIBRARIES=OFF \
@@ -23,25 +15,23 @@ BUILDDIR = $(PLATFORM)/build
 
 all: .installed-$(PLATFORM)
 
-$(TARBALLS_LOCATION)/$(ARCHIVE):
-	cd $(TARBALLS_LOCATION); $(RETRIEVE_TOOL) $(RETRIEVE_TOOL_FLAGS) $(BASE_URL)/$(ARCHIVE)
 
-$(PLATFORM): $(TARBALLS_LOCATION)/$(ARCHIVE) $(DEPS)
+.configured-$(PLATFORM): $(DEPS) | $(TARBALLS_LOCATION)/$(ARCHIVE).$(HASH_TYPE)
 	rm -rf $(PLATFORM)/*; mkdir -p $(PLATFORM)
 	cd $(PLATFORM); $(ARCHIVE_TOOL) $(ARCHIVE_TOOL_FLAGS) $(TARBALLS_LOCATION)/$(ARCHIVE)
+	cd $(PLATFORM); patch -p1 -i ../001-fix-gcc13-build.patch
 	mkdir -p $(BUILDDIR)
 	cd $(BUILDDIR); $(NATIVEPREFIX)/bin/cmake $(CMAKE_OPTIONS) ..
+	touch $@
 
-$(APP): $(PLATFORM)
+.installed-$(PLATFORM): .configured-$(PLATFORM)
 	$(MAKE) -C $(BUILDDIR)
-
-.installed-$(PLATFORM): $(APP)
 	$(MAKE) -C $(BUILDDIR) install
 	touch $@
 
 clean:
 	$(MAKE) -C $(BUILDDIR) clean
-	rm -f .installed-$(PLATFORM)
+	rm -f .installed-$(PLATFORM) .configured-$(PLATFORM)
 
 distclean:
-	rm -rf $(PLATFORM) .installed-$(PLATFORM)
+	rm -rf $(PLATFORM) .installed-$(PLATFORM) .configured-$(PLATFORM)

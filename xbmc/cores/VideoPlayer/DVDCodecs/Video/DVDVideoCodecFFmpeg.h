@@ -8,20 +8,23 @@
 
 #pragma once
 
+#include "DVDVideoCodec.h"
+#include "DVDVideoPP.h"
 #include "cores/VideoPlayer/DVDCodecs/DVDCodecs.h"
 #include "cores/VideoPlayer/DVDStreamInfo.h"
-#include "DVDVideoCodec.h"
-#include "DVDVideoPPFFmpeg.h"
+
+#include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
-extern "C" {
-#include <libavfilter/avfilter.h>
+extern "C"
+{
 #include <libavcodec/avcodec.h>
+#include <libavfilter/avfilter.h>
 #include <libavformat/avformat.h>
 #include <libavutil/avutil.h>
 #include <libswscale/swscale.h>
-#include <libpostproc/postprocess.h>
 }
 
 class CVideoBufferPoolFFmpeg;
@@ -47,6 +50,7 @@ public:
 
 protected:
   void Dispose();
+  CDVDVideoCodec::VCReturn HandleHwFatal();
   static enum AVPixelFormat GetFormat(struct AVCodecContext * avctx, const AVPixelFormat * fmt);
 
   int  FilterOpen(const std::string& filters, bool scale);
@@ -73,7 +77,7 @@ protected:
   bool m_filterEof = false;
   bool m_eof = false;
 
-  CDVDVideoPPFFmpeg m_postProc;
+  std::unique_ptr<IDVDVideoPP> m_postProc;
 
   int m_iPictureWidth = 0;
   int m_iPictureHeight = 0;
@@ -83,6 +87,7 @@ protected:
 
   std::string m_name;
   int m_decoderState;
+  int m_hwFailedCount = 0;
   IHardwareDecoder *m_pHardware = nullptr;
   int m_iLastKeyframe = 0;
   double m_dts = DVD_NOPTS_VALUE;
@@ -98,6 +103,8 @@ protected:
   double m_DAR = 1.0;
   CDVDStreamInfo m_hints;
   CDVDCodecOptions m_options;
+  bool m_exportDoviRpu = false;
+  std::map<int64_t, std::vector<uint8_t>> m_av1DoviRpus; // by packet pts
 
   struct CDropControl
   {

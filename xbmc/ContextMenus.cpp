@@ -13,27 +13,40 @@
 #include "guilib/GUIComponent.h"
 #include "guilib/GUIWindowManager.h"
 #include "input/WindowTranslator.h"
+#include "music/MusicFileItemClassify.h"
+#include "resources/LocalizeStrings.h"
+#include "resources/ResourcesComponent.h"
 #include "storage/MediaManager.h"
+#include "utils/ItemProperties.h"
+#include "utils/PlaceholderPaths.h"
+#include "utils/StringUtils.h"
 #include "utils/URIUtils.h"
 #include "utils/Variant.h"
+
+using namespace KODI;
 
 namespace CONTEXTMENU
 {
 
   bool CEjectDisk::IsVisible(const CFileItem& item) const
   {
-#ifdef HAS_DVD_DRIVE
-    return item.IsRemovable() && (item.IsDVD() || item.IsCDDA());
+#ifdef HAS_OPTICAL_DRIVE
+    return item.IsRemovable() && (item.IsDVD() || MUSIC::IsCDDA(item));
 #else
     return false;
 #endif
   }
 
-  bool CEjectDisk::Execute(const CFileItemPtr& item) const
+  bool CEjectDisk::Execute(const std::shared_ptr<CFileItem>& item) const
   {
-#ifdef HAS_DVD_DRIVE
-    CServiceBroker::GetMediaManager().ToggleTray(
-        CServiceBroker::GetMediaManager().TranslateDevicePath(item->GetPath())[0]);
+#ifdef HAS_OPTICAL_DRIVE
+    // Sources carry the drive, which cdda://local/ and mount points don't name. An item on the
+    // disc itself has no source, so fall back to the drive root of its own path.
+    std::string devicePath{item->GetProperty(ITEM::PROPERTY::DEVICE_PATH).asString()};
+    const std::string& path{item->GetPath()};
+    if (devicePath.empty() && URIUtils::IsDOSPath(path) && path[1] == ':')
+      devicePath = path.substr(0, 2);
+    CServiceBroker::GetMediaManager().ToggleTray(devicePath);
 #endif
     return true;
   }
@@ -41,10 +54,10 @@ namespace CONTEXTMENU
   bool CEjectDrive::IsVisible(const CFileItem& item) const
   {
     // Must be HDD
-    return item.IsRemovable() && !item.IsDVD() && !item.IsCDDA();
+    return item.IsRemovable() && !item.IsDVD() && !MUSIC::IsCDDA(item);
   }
 
-  bool CEjectDrive::Execute(const CFileItemPtr& item) const
+  bool CEjectDrive::Execute(const std::shared_ptr<CFileItem>& item) const
   {
     return CServiceBroker::GetMediaManager().Eject(item->GetPath());
   }
@@ -69,15 +82,21 @@ int GetTargetWindowID(const CFileItem& item)
 
 std::string CAddRemoveFavourite::GetLabel(const CFileItem& item) const
 {
-  return g_localizeStrings.Get(CServiceBroker::GetFavouritesService().IsFavourited(item, GetTargetWindowID(item))
-                               ? 14077   /* Remove from favourites */
-                               : 14076); /* Add to favourites */
+  return CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(
+      CServiceBroker::GetFavouritesService().IsFavourited(item, GetTargetWindowID(item))
+          ? 14077 /* Remove from favourites */
+          : 14076); /* Add to favourites */
 }
 
 bool CAddRemoveFavourite::IsVisible(const CFileItem& item) const
 {
-  return (!item.GetPath().empty() && !item.IsParentFolder() && !item.IsPath("add") &&
-          !item.IsPath("newplaylist://") && !URIUtils::IsProtocol(item.GetPath(), "favourites") &&
+  if (item.GetProperty(ITEM::PROPERTY::HIDE_ADD_REMOVE_FAVOURITE).asBoolean())
+    return false;
+
+  return (!item.GetPath().empty() && !item.IsParentFolder() &&
+          !item.IsPath(ITEM::PLACEHOLDER::ADD_SOURCE) &&
+          !item.IsPath(ITEM::PLACEHOLDER::NEW_PLAYLIST) &&
+          !URIUtils::IsProtocol(item.GetPath(), "favourites") &&
           !URIUtils::IsProtocol(item.GetPath(), "newsmartplaylist") &&
           !URIUtils::IsProtocol(item.GetPath(), "newtag") &&
           !URIUtils::IsProtocol(item.GetPath(), "musicsearch") &&
@@ -94,7 +113,7 @@ bool CAddRemoveFavourite::IsVisible(const CFileItem& item) const
          item.GetPath() == "pvr://search/radio/";
 }
 
-bool CAddRemoveFavourite::Execute(const CFileItemPtr& item) const
+bool CAddRemoveFavourite::Execute(const std::shared_ptr<CFileItem>& item) const
 {
   return CServiceBroker::GetFavouritesService().AddOrRemove(*item.get(), GetTargetWindowID(*item));
 }

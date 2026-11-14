@@ -8,6 +8,9 @@
 
 #pragma once
 
+// No advantage to clobbering history when the formatted file is much less readable
+// clang-format off
+
 // Window ID defines to make the code a bit more readable
 #define WINDOW_INVALID                     9999 // do not change. value is used to avoid include in headers.
 #define WINDOW_HOME                       10000
@@ -17,6 +20,7 @@
 #define WINDOW_SETTINGS_MENU              10004
 #define WINDOW_SYSTEM_INFORMATION         10007
 #define WINDOW_SCREEN_CALIBRATION         10011
+#define WINDOW_SCREEN_ALIGNMENT           10023
 
 #define WINDOW_SETTINGS_START             10016
 #define WINDOW_SETTINGS_SYSTEM            10016
@@ -40,6 +44,8 @@
 #define WINDOW_ADDON_BROWSER              10040
 
 #define WINDOW_EVENT_LOG                  10050
+
+#define WINDOW_FAVOURITES 10060
 
 #define WINDOW_SCREENSAVER_DIM               97
 #define WINDOW_DEBUG_INFO                    98
@@ -70,7 +76,6 @@
 #define WINDOW_DIALOG_LOCK_SETTINGS       10131
 #define WINDOW_DIALOG_CONTENT_SETTINGS    10132
 #define WINDOW_DIALOG_LIBEXPORT_SETTINGS  10133
-#define WINDOW_DIALOG_FAVOURITES          10134
 #define WINDOW_DIALOG_SONG_INFO           10135
 #define WINDOW_DIALOG_SMART_PLAYLIST_EDITOR 10136
 #define WINDOW_DIALOG_SMART_PLAYLIST_RULE   10137
@@ -81,7 +86,9 @@
 #define WINDOW_DIALOG_SLIDER              10145
 #define WINDOW_DIALOG_ADDON_INFO          10146
 #define WINDOW_DIALOG_TEXT_VIEWER         10147
+#ifdef HAS_OPTICAL_DRIVE
 #define WINDOW_DIALOG_PLAY_EJECT          10148
+#endif
 #define WINDOW_DIALOG_PERIPHERALS         10149
 #define WINDOW_DIALOG_PERIPHERAL_SETTINGS 10150
 #define WINDOW_DIALOG_EXT_PROGRESS        10151
@@ -131,7 +138,9 @@
 #define WINDOW_RADIO_SEARCH               (WINDOW_PVR_ID_START+9)
 #define WINDOW_TV_TIMER_RULES             (WINDOW_PVR_ID_START+10)
 #define WINDOW_RADIO_TIMER_RULES          (WINDOW_PVR_ID_START+11)
-#define WINDOW_PVR_ID_END                 WINDOW_RADIO_TIMER_RULES
+#define WINDOW_TV_PROVIDERS (WINDOW_PVR_ID_START + 12)
+#define WINDOW_RADIO_PROVIDERS (WINDOW_PVR_ID_START + 13)
+#define WINDOW_PVR_ID_END WINDOW_RADIO_PROVIDERS
 
 // virtual windows for PVR specific keymap bindings in fullscreen playback
 #define WINDOW_FULLSCREEN_LIVETV          10800
@@ -150,6 +159,15 @@
 #define WINDOW_DIALOG_GAME_ADVANCED_SETTINGS 10826
 #define WINDOW_DIALOG_GAME_VIDEO_ROTATION 10827
 #define WINDOW_DIALOG_GAME_PORTS 10828
+#define WINDOW_DIALOG_IN_GAME_SAVES 10829
+#define WINDOW_DIALOG_GAME_SAVES 10830
+#define WINDOW_DIALOG_GAME_AGENTS 10831
+#define WINDOW_DIALOG_GAME_DISC_MANAGER 10832
+#define WINDOW_DIALOG_GAME_ACHIEVEMENTS 10833
+#define WINDOW_DIALOG_GAME_LEADERBOARDS 10836
+#define WINDOW_DIALOG_GAME_LEADERBOARD_ENTRIES 10837
+#define WINDOW_DIALOG_GAME_INDICATORS 10838
+#define WINDOW_DIALOG_GAME_CHEATS 10839
 
 //#define WINDOW_VIRTUAL_KEYBOARD           11000
 // WINDOW_ID's from 11100 to 11199 reserved for Skins
@@ -158,10 +176,22 @@
 #define WINDOW_DIALOG_MUSIC_INFO          12001
 #define WINDOW_DIALOG_OK                  12002
 #define WINDOW_DIALOG_VIDEO_INFO          12003
+#define WINDOW_DIALOG_MANAGE_VIDEO_VERSIONS 12004
 #define WINDOW_FULLSCREEN_VIDEO           12005
 #define WINDOW_VISUALISATION              12006
 #define WINDOW_SLIDESHOW                  12007
 #define WINDOW_DIALOG_COLOR_PICKER 12008
+
+//! @todo Numbers given here must match the ids given in strings.po for a translatable string for
+//! the window. 12009 to 12014 are already taken for something else in strings.po (accidentally).
+//! So, do not define windows with ids 12009 to 12014, unless strings.po got fixed.
+
+#define WINDOW_DIALOG_MANAGE_VIDEO_EXTRAS 12017
+
+#define WINDOW_DIALOG_SELECT_VIDEO_STREAM 12300
+#define WINDOW_DIALOG_SELECT_AUDIO_STREAM 12301
+#define WINDOW_DIALOG_SELECT_SUBTITLE_STREAM 12302
+
 #define WINDOW_WEATHER                    12600
 #define WINDOW_SCREENSAVER                12900
 #define WINDOW_DIALOG_VIDEO_OSD           12901
@@ -185,3 +215,4 @@
 #define WINDOW_ADDON_START                14000
 #define WINDOW_ADDON_END                  14099
 
+// clang-format on

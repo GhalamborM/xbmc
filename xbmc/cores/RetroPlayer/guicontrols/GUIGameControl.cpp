@@ -8,7 +8,6 @@
 
 #include "GUIGameControl.h"
 
-#include "Application.h"
 #include "GUIRenderSettings.h"
 #include "ServiceBroker.h"
 #include "cores/RetroPlayer/RetroPlayerUtils.h"
@@ -127,10 +126,10 @@ void CGUIGameControl::SetHeight(float height)
 
 void CGUIGameControl::UpdateInfo(const CGUIListItem* item /* = nullptr */)
 {
-  Reset();
-
   if (item)
   {
+    Reset();
+
     std::string strVideoFilter = m_videoFilterInfo.GetItemLabel(item);
     if (!strVideoFilter.empty())
     {

@@ -11,13 +11,13 @@
 using namespace KODI;
 using namespace RETRO;
 
-CRPProcessInfoGbm::CRPProcessInfoGbm() : CRPProcessInfo("GBM")
+CRPProcessInfoGbm::CRPProcessInfoGbm() : CRPProcessInfoEGL("GBM")
 {
 }
 
-CRPProcessInfo* CRPProcessInfoGbm::Create()
+std::unique_ptr<CRPProcessInfo> CRPProcessInfoGbm::Create()
 {
-  return new CRPProcessInfoGbm();
+  return std::make_unique<CRPProcessInfoGbm>();
 }
 
 void CRPProcessInfoGbm::Register()

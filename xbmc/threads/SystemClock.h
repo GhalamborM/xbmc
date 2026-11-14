@@ -8,55 +8,89 @@
 
 #pragma once
 
+#include "utils/log.h"
+
 #include <chrono>
 #include <limits>
 #include <thread>
 
 namespace XbmcThreads
 {
-  /**
-   * This function returns the system clock's number of milliseconds but with
-   *  an arbitrary reference point. It handles the wrapping of any underlying
-   *  system clock by setting a starting point at the first call. It should
-   *  only be used for measuring time durations.
-   *
-   * Of course, on windows it just calls timeGetTime, so you're on your own.
-   */
 
-  unsigned int SystemClockMillis();
+template<typename>
+struct is_chrono_duration : std::false_type
+{
+};
 
-  /**
-   * DO NOT compare the results from SystemClockMillis() to an expected end time
-   *  that was calculated by adding a number of milliseconds to some start time.
-   *  The reason is because the SystemClockMillis could wrap. Instead use this
-   *  class which uses differences (which are safe across a wrap).
-   */
-  class EndTime
+template<typename Rep, typename Period>
+struct is_chrono_duration<std::chrono::duration<Rep, Period>> : std::true_type
+{
+};
+
+template<typename T = std::chrono::milliseconds, bool = is_chrono_duration<T>::value>
+class EndTime;
+
+template<typename T>
+class EndTime<T, true>
+{
+public:
+  explicit EndTime(const T duration) { Set(duration); }
+
+  EndTime() = default;
+  EndTime(const EndTime& right) = delete;
+  ~EndTime() = default;
+
+  static constexpr T Max() { return m_max; }
+
+  void Set(const T duration)
   {
-  public:
-    EndTime();
-    explicit EndTime(unsigned int millisecondsIntoTheFuture);
-    EndTime(const EndTime& right) = delete;
-    ~EndTime() = default;
+    m_startTime = std::chrono::steady_clock::now();
 
-    void Set(unsigned int millisecondsIntoTheFuture);
+    if (duration > m_max)
+    {
+      m_totalWaitTime = m_max;
+      CLog::Log(LOGWARNING, "duration ({}) greater than max ({}) - duration will be truncated!",
+                duration.count(), m_max.count());
+    }
+    else
+    {
+      m_totalWaitTime = duration;
+    }
+  }
 
-    bool IsTimePast() const;
+  bool IsTimePast() const
+  {
+    const auto now = std::chrono::steady_clock::now();
 
-    unsigned int MillisLeft() const;
+    return ((now - m_startTime) >= m_totalWaitTime);
+  }
 
-    void SetExpired() { m_totalWaitTime = std::chrono::milliseconds(0); }
-    void SetInfinite() { m_totalWaitTime = InfiniteValue; }
-    bool IsInfinite() const { return (m_totalWaitTime == InfiniteValue); }
+  T GetTimeLeft() const
+  {
+    const auto now = std::chrono::steady_clock::now();
 
-    unsigned int GetInitialTimeoutValue() const;
-    unsigned int GetStartTime() const;
+    const auto left = ((m_startTime + m_totalWaitTime) - now);
 
-  private:
-    std::chrono::steady_clock::time_point m_startTime;
-    std::chrono::milliseconds m_totalWaitTime;
+    if (left < T::zero())
+      return T::zero();
 
-    const std::chrono::milliseconds InfiniteValue =
-        std::chrono::milliseconds(std::numeric_limits<std::chrono::milliseconds::rep>::max());
-  };
-}
+    return std::chrono::duration_cast<T>(left);
+  }
+
+  void SetExpired() { m_totalWaitTime = T::zero(); }
+
+  void SetInfinite() { m_totalWaitTime = m_max; }
+
+  T GetInitialTimeoutValue() const { return m_totalWaitTime; }
+
+  std::chrono::steady_clock::time_point GetStartTime() const { return m_startTime; }
+
+private:
+  std::chrono::steady_clock::time_point m_startTime;
+  T m_totalWaitTime = T::zero();
+
+  static constexpr T m_max =
+      std::chrono::duration_cast<T>(std::chrono::steady_clock::duration::max());
+};
+
+} // namespace XbmcThreads

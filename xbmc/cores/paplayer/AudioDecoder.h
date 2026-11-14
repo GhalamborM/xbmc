@@ -8,12 +8,15 @@
 
 #pragma once
 
-#include "ICodec.h"
-#include "cores/AudioEngine/Utils/AEChannelInfo.h"
 #include "threads/CriticalSection.h"
 #include "utils/RingBuffer.h"
 
+#include <cstdint>
+
+struct AudioStreamInfo;
+struct AEAudioFormat;
 class CFileItem;
+class ICodec;
 
 #define PACKET_SIZE 3840    // audio packet size - we keep 1 in reserve for gapless playback
                             // using a multiple of 1, 2, 3, 4, 5, 6 to guarantee track alignment
@@ -43,18 +46,12 @@ public:
   CAudioDecoder();
   ~CAudioDecoder();
 
-  bool Create(const CFileItem &file, int64_t seekOffset);
+  bool Create(const CFileItem& file, int64_t seekOffset, int streamIndex);
   void Destroy();
 
   int ReadSamples(int numsamples);
 
-  bool CanSeek()
-  {
-    if (m_codec)
-      return m_codec->CanSeek();
-    else
-      return false;
-  }
+  bool CanSeek();
   int64_t Seek(int64_t time);
   int64_t TotalTime();
   void SetTotalTime(int64_t time);
@@ -63,13 +60,19 @@ public:
   void SetStatus(int status) { m_status = status; }
 
   AEAudioFormat GetFormat();
-  unsigned int GetChannels() { return GetFormat().m_channelLayout.Count(); }
+  unsigned int GetChannels();
   // Data management
   unsigned int GetDataSize(bool checkPktSize);
   void *GetData(unsigned int samples);
   uint8_t* GetRawData(int &size);
   ICodec *GetCodec() const { return m_codec; }
   float GetReplayGain(float &peakVal);
+
+  int GetStreamCount() const;
+  int GetStreamIndex() const;
+  bool IsUsable() const;
+  bool SetStream(int index);
+  void GetStreamInfo(int index, AudioStreamInfo& info) const;
 
 private:
   // pcm buffer
@@ -90,8 +93,25 @@ private:
   int m_status;
   bool m_canPlay;
 
+  /*! \brief Work out the startup-buffer threshold for the format now being decoded */
+  void UpdateStartThreshold();
+
+  /*! \brief Size the pcm buffer for the format now being decoded
+   *
+   * \return false if the codec describes an invalid format, true if buffer created
+   */
+  bool CreatePcmBuffer();
+
+  // Cached startup-buffer threshold in bytes, computed from the format of the stream being
+  // decoded. Avoids recomputing a 64-bit multiply/divide in the ReadSamples hot loop while
+  // STATUS_QUEUING.
+  uint64_t m_startThresholdBytes;
+
   // the codec we're using
   ICodec* m_codec;
 
-  CCriticalSection m_critSection;
+  // current stream
+  int m_streamIndex = 0;
+
+  mutable CCriticalSection m_critSection;
 };

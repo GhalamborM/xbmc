@@ -16,7 +16,11 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
+#include <unordered_map>
 #include <vector>
+
+#include <fmt/format.h>
 
 class CAlbum;
 class CArtist;
@@ -28,31 +32,30 @@ class CMusicAlbumInfo;
 class CMusicArtistInfo;
 }
 
-typedef enum
-{
-  CONTENT_MOVIES,
-  CONTENT_TVSHOWS,
-  CONTENT_MUSICVIDEOS,
-  CONTENT_ALBUMS,
-  CONTENT_ARTISTS,
-  CONTENT_NONE,
-} CONTENT_TYPE;
-
 namespace XFILE
 {
-  class CCurlFile;
+class IHttpClient;
 }
-
-class CScraperUrl;
 
 namespace ADDON
 {
 class CScraper;
-typedef std::shared_ptr<CScraper> ScraperPtr;
+using ScraperPtr = std::shared_ptr<CScraper>;
 
-std::string TranslateContent(const CONTENT_TYPE &content, bool pretty=false);
-CONTENT_TYPE TranslateContent(const std::string &string);
-TYPE ScraperTypeFromContent(const CONTENT_TYPE &content);
+enum class ContentType
+{
+  MOVIES,
+  MOVIE_VERSIONS,
+  TVSHOWS,
+  MUSICVIDEOS,
+  ALBUMS,
+  ARTISTS,
+  NONE,
+};
+
+std::string TranslateContent(ContentType content, bool pretty = false);
+ContentType TranslateContent(std::string_view string);
+AddonType ScraperTypeFromContent(ContentType content);
 
 // thrown as exception to signal abort or show error dialog
 class CScraperError
@@ -75,7 +78,7 @@ private:
 class CScraper : public CAddon
 {
 public:
-  explicit CScraper(const AddonInfoPtr& addonInfo, TYPE addonType);
+  explicit CScraper(const AddonInfoPtr& addonInfo, AddonType addonType);
 
   /*! \brief Set the scraper settings for a particular path from an XML string
    Loads the default and user settings (if not already loaded) and, if the given XML string is non-empty,
@@ -85,7 +88,7 @@ public:
    \return true if settings are available, false otherwise
    \sa GetPathSettings
    */
-  bool SetPathSettings(CONTENT_TYPE content, const std::string& xml);
+  bool SetPathSettings(ContentType content, const std::string& xml);
 
   /*! \brief Get the scraper settings for a particular path in the form of an XML string
    Loads the default and user settings (if not already loaded) and returns the user settings in the
@@ -99,11 +102,11 @@ public:
    Any previously cached files are cleared if they have been cached for longer than the specified
    cachepersistence.
    */
-  void ClearCache();
+  void ClearCache() const;
 
-  CONTENT_TYPE Content() const { return m_pathContent; }
+  ContentType Content() const { return m_pathContent; }
   bool RequiresSettings() const { return m_requiressettings; }
-  bool Supports(const CONTENT_TYPE &content) const;
+  bool Supports(ContentType content) const;
 
   bool IsInUse() const override;
   bool IsNoop();
@@ -123,21 +126,39 @@ public:
    */
   CScraperUrl ResolveIDToUrl(const std::string &externalID);
 
-  std::vector<CScraperUrl> FindMovie(XFILE::CCurlFile &fcurl,
-    const std::string &movieTitle, int movieYear, bool fFirst);
-  std::vector<MUSIC_GRABBER::CMusicAlbumInfo> FindAlbum(XFILE::CCurlFile &fcurl,
-    const std::string &sAlbum, const std::string &sArtist = "");
-  std::vector<MUSIC_GRABBER::CMusicArtistInfo> FindArtist(
-    XFILE::CCurlFile &fcurl, const std::string &sArtist);
-  VIDEO::EPISODELIST GetEpisodeList(XFILE::CCurlFile &fcurl, const CScraperUrl &scurl);
+  std::vector<CScraperUrl> FindMovie(XFILE::IHttpClient& fcurl,
+                                     const std::string& movieTitle,
+                                     int movieYear,
+                                     bool fFirst);
+  std::vector<MUSIC_GRABBER::CMusicAlbumInfo> FindAlbum(XFILE::IHttpClient& fcurl,
+                                                        const std::string& sAlbum,
+                                                        const std::string& sArtist = "");
+  std::vector<MUSIC_GRABBER::CMusicArtistInfo> FindArtist(XFILE::IHttpClient& fcurl,
+                                                          const std::string& sArtist);
+  KODI::VIDEO::EPISODELIST GetEpisodeList(XFILE::IHttpClient& fcurl, const CScraperUrl& scurl);
 
-  bool GetVideoDetails(XFILE::CCurlFile &fcurl, const CScraperUrl &scurl,
-    bool fMovie/*else episode*/, CVideoInfoTag &video);
-  bool GetAlbumDetails(XFILE::CCurlFile &fcurl, const CScraperUrl &scurl,
-    CAlbum &album);
-  bool GetArtistDetails(XFILE::CCurlFile &fcurl, const CScraperUrl &scurl,
-    const std::string &sSearch, CArtist &artist);
-  bool GetArtwork(XFILE::CCurlFile &fcurl, CVideoInfoTag &details);
+  struct StringHash
+  {
+    using is_transparent = void; // Enables heterogeneous operations.
+    std::size_t operator()(std::string_view sv) const
+    {
+      std::hash<std::string_view> hasher;
+      return hasher(sv);
+    }
+  };
+  using UniqueIDs = std::unordered_map<std::string, std::string, StringHash, std::equal_to<>>;
+
+  bool GetVideoDetails(XFILE::IHttpClient& fcurl,
+                       const UniqueIDs& uniqueIDs,
+                       const CScraperUrl& scurl,
+                       bool fMovie /*else episode*/,
+                       CVideoInfoTag& video);
+  bool GetAlbumDetails(XFILE::IHttpClient& fcurl, const CScraperUrl& scurl, CAlbum& album);
+  bool GetArtistDetails(XFILE::IHttpClient& fcurl,
+                        const CScraperUrl& scurl,
+                        const std::string& sSearch,
+                        CArtist& artist);
+  bool GetArtwork(XFILE::IHttpClient& fcurl, CVideoInfoTag& details);
 
 private:
   CScraper(const CScraper &rhs) = delete;
@@ -158,25 +179,86 @@ private:
 
   bool Load();
   std::vector<std::string> Run(const std::string& function,
-                              const CScraperUrl& url,
-                              XFILE::CCurlFile& http,
-                              const std::vector<std::string>* extras = NULL);
+                               const CScraperUrl& url,
+                               XFILE::IHttpClient& http,
+                               const std::vector<std::string>* extras = nullptr);
   std::vector<std::string> RunNoThrow(const std::string& function,
-                              const CScraperUrl& url,
-                              XFILE::CCurlFile& http,
-                              const std::vector<std::string>* extras = NULL);
+                                      const CScraperUrl& url,
+                                      XFILE::IHttpClient& http,
+                                      const std::vector<std::string>* extras = nullptr);
   std::string InternalRun(const std::string& function,
-                         const CScraperUrl& url,
-                         XFILE::CCurlFile& http,
-                         const std::vector<std::string>* extras);
+                          const CScraperUrl& url,
+                          XFILE::IHttpClient& http,
+                          const std::vector<std::string>* extras);
 
-  bool m_fLoaded;
+  //! \brief FindMovie without the result cache in front of it
+  std::vector<CScraperUrl> FindMovieUncached(XFILE::IHttpClient& fcurl,
+                                             const std::string& movieTitle,
+                                             int movieYear,
+                                             bool fFirst);
+
+  //! \brief GetVideoDetails without the result cache in front of it
+  bool GetVideoDetailsUncached(XFILE::IHttpClient& fcurl,
+                               const UniqueIDs& uniqueIDs,
+                               const CScraperUrl& scurl,
+                               bool fMovie,
+                               CVideoInfoTag& video);
+
+  /*! \brief Cache scraper results rather than repeating the request.
+
+   Lifetime is this instance.
+   Repeats come from versions, discs and folders of the same title, which are scraped close together.
+   Not synchronised, matching the rest of CScraper: a scraper shared between threads needs the
+   caller to provide that.
+   */
+  static constexpr size_t MAX_CACHED_RESULTS{50};
+  std::unordered_map<std::string, std::vector<CScraperUrl>, StringHash, std::equal_to<>>
+      m_findCache;
+  std::unordered_map<std::string, std::shared_ptr<const CVideoInfoTag>, StringHash, std::equal_to<>>
+      m_detailsCache;
+
+  bool m_fLoaded = false;
   bool m_isPython = false;
-  bool m_requiressettings;
+  bool m_requiressettings = false;
   CDateTimeSpan m_persistence;
-  CONTENT_TYPE m_pathContent;
+  ContentType m_pathContent = ContentType::NONE;
   CScraperParser m_parser;
 };
 
-}
+} // namespace ADDON
 
+template<>
+struct fmt::formatter<ADDON::ContentType> : fmt::formatter<std::string_view>
+{
+  template<typename FormatContext>
+  constexpr auto format(const ADDON::ContentType& type, FormatContext& ctx) const
+  {
+    return fmt::formatter<std::string_view>::format(enumToSV(type), ctx);
+  }
+
+private:
+  static constexpr std::string_view enumToSV(ADDON::ContentType type)
+  {
+    using namespace std::literals::string_view_literals;
+    switch (type)
+    {
+      using enum ADDON::ContentType;
+
+      case MOVIES:
+        return "movies"sv;
+      case MOVIE_VERSIONS:
+        return "movie versions"sv;
+      case TVSHOWS:
+        return "TV shows"sv;
+      case MUSICVIDEOS:
+        return "music videos"sv;
+      case ALBUMS:
+        return "albums"sv;
+      case ARTISTS:
+        return "artists"sv;
+      case NONE:
+        return "none"sv;
+    }
+    throw std::invalid_argument("no content string found");
+  }
+};

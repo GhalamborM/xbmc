@@ -8,7 +8,6 @@
 # ARCH - the system architecture
 # ARCH_DEFINES - list of compiler definitions for this architecture
 # SYSTEM_DEFINES - list of compiler definitions for this system
-# DEP_DEFINES - compiler definitions for system dependencies (e.g. LIRC)
 # + the results of compiler tests etc.
 
 # workaround a bug in older cmake, where binutils wouldn't be set after deleting CMakeCache.txt
@@ -59,9 +58,13 @@ endif()
 # this variable is set if we can execute build artefacts on the host system (for example unit tests).
 if(CMAKE_HOST_SYSTEM_PROCESSOR STREQUAL CMAKE_SYSTEM_PROCESSOR AND
    CMAKE_HOST_SYSTEM_NAME STREQUAL CMAKE_SYSTEM_NAME)
-  set(CORE_HOST_IS_TARGET TRUE)
+  if(NOT DEFINED HOST_CAN_EXECUTE_TARGET)
+    set(HOST_CAN_EXECUTE_TARGET TRUE)
+  endif()
 else()
-  set(CORE_HOST_IS_TARGET FALSE)
+  if(NOT HOST_CAN_EXECUTE_TARGET)
+    set(HOST_CAN_EXECUTE_TARGET FALSE)
+  endif()
 endif()
 
 # system specific arch setup
@@ -73,6 +76,11 @@ if(NOT EXISTS ${CMAKE_SOURCE_DIR}/cmake/scripts/${CORE_SYSTEM_NAME}/ArchSetup.cm
                       "Note: Specifying a toolchain requires a clean build directory!")
 endif()
 include(${CMAKE_SOURCE_DIR}/cmake/scripts/${CORE_SYSTEM_NAME}/ArchSetup.cmake)
+
+# No TARBALL_DIR given, or no arch specific default set
+if(NOT TARBALL_DIR)
+  set(TARBALL_DIR ${CMAKE_BINARY_DIR}/${CORE_BUILD_DIR}/download)
+endif()
 
 message(STATUS "Core system type: ${CORE_SYSTEM_NAME}")
 message(STATUS "Platform: ${CORE_PLATFORM_NAME}")
@@ -154,7 +162,14 @@ if(NOT MSVC)
     -Wdouble-promotion
     -Wmissing-field-initializers
     -Wsign-compare
+    -Wextra
+    -Wno-unused-parameter # from -Wextra
   )
+
+  add_options(CXX ALL_BUILDS
+    -Wnon-virtual-dtor
+  )
+
   add_options(ALL_LANGUAGES DEBUG
     -g
     -D_DEBUG

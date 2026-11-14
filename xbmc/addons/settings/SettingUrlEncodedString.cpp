@@ -14,15 +14,21 @@
 namespace ADDON
 {
 
-CSettingUrlEncodedString::CSettingUrlEncodedString(const std::string &id, CSettingsManager *settingsManager /* = NULL */)
+CSettingUrlEncodedString::CSettingUrlEncodedString(
+    std::string_view id, CSettingsManager* settingsManager /* = nullptr */)
   : CSettingString(id, settingsManager)
 { }
 
-CSettingUrlEncodedString::CSettingUrlEncodedString(const std::string &id, int label, const std::string &value, CSettingsManager *settingsManager /* = NULL */)
+CSettingUrlEncodedString::CSettingUrlEncodedString(
+    std::string_view id,
+    int label,
+    const std::string& value,
+    CSettingsManager* settingsManager /* = nullptr */)
   : CSettingString(id, label, value, settingsManager)
 { }
 
-CSettingUrlEncodedString::CSettingUrlEncodedString(const std::string &id, const CSettingUrlEncodedString &setting)
+CSettingUrlEncodedString::CSettingUrlEncodedString(std::string_view id,
+                                                   const CSettingUrlEncodedString& setting)
   : CSettingString(id, setting)
 { }
 

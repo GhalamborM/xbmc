@@ -8,17 +8,18 @@
 
 #include "ProfilesOperations.h"
 
+#include "FileItem.h"
+#include "FileItemList.h"
 #include "GUIPassword.h"
 #include "ServiceBroker.h"
-#include "guilib/LocalizeStrings.h"
 #include "messaging/ApplicationMessenger.h"
 #include "profiles/ProfileManager.h"
 #include "settings/SettingsComponent.h"
+#include "utils/ArtTypes.h"
 #include "utils/Digest.h"
 #include "utils/Variant.h"
 
 using namespace JSONRPC;
-using namespace KODI::MESSAGING;
 using KODI::UTILITY::CDigest;
 
 JSONRPC_STATUS CProfilesOperations::GetProfiles(const std::string &method, ITransportLayer *transport, IClient *client, const CVariant &parameterObject, CVariant &result)
@@ -31,7 +32,7 @@ JSONRPC_STATUS CProfilesOperations::GetProfiles(const std::string &method, ITran
   {
     const CProfile *profile = profileManager->GetProfile(i);
     CFileItemPtr item(new CFileItem(profile->getName()));
-    item->SetArt("thumb", profile->getThumb());
+    item->SetArt(KODI::ART::TYPE::THUMB, profile->getThumb());
     listItems.Add(item);
   }
 
@@ -47,12 +48,12 @@ JSONRPC_STATUS CProfilesOperations::GetProfiles(const std::string &method, ITran
         std::string profilename = (*profileiter)["label"].asString();
         int index = profileManager->GetProfileIndex(profilename);
         const CProfile *profile = profileManager->GetProfile(index);
-        LockType locktype = LOCK_MODE_UNKNOWN;
+        LockMode locktype = LockMode::UNKNOWN;
         if (index == 0)
           locktype = profileManager->GetMasterProfile().getLockMode();
         else
           locktype = profile->getLockMode();
-        (*profileiter)["lockmode"] = locktype;
+        (*profileiter)["lockmode"] = static_cast<int>(locktype);
       }
       break;
     }
@@ -72,7 +73,7 @@ JSONRPC_STATUS CProfilesOperations::GetCurrentProfile(const std::string &method,
     if (propertyiter->isString())
     {
       if (propertyiter->asString() == "lockmode")
-        profileVariant["lockmode"] = currentProfile.getLockMode();
+        profileVariant["lockmode"] = static_cast<int>(currentProfile.getLockMode());
       else if (propertyiter->asString() == "thumbnail")
         profileVariant["thumbnail"] = currentProfile.getThumb();
     }
@@ -90,7 +91,7 @@ JSONRPC_STATUS CProfilesOperations::LoadProfile(const std::string &method, ITran
   std::string profilename = parameterObject["profile"].asString();
   int index = profileManager->GetProfileIndex(profilename);
 
-  if (index < 0)
+  if (index <= INVALID_PROFILE_ID)
     return InvalidParams;
 
   // get the profile
@@ -105,8 +106,8 @@ JSONRPC_STATUS CProfilesOperations::LoadProfile(const std::string &method, ITran
   // if the profile does not require a password or
   // the user is prompted and provides the correct password
   // we can load the requested profile
-  if (profile->getLockMode() == LOCK_MODE_EVERYONE ||
-     (bPrompt && g_passwordManager.IsProfileLockUnlocked(index, bCanceled, bPrompt)))
+  if (profile->getLockMode() == LockMode::EVERYONE ||
+      (bPrompt && g_passwordManager.IsProfileLockUnlocked(index, bCanceled, bPrompt)))
     bLoadProfile = true;
   else if (!bCanceled)  // Password needed and user provided it
   {
@@ -129,7 +130,7 @@ JSONRPC_STATUS CProfilesOperations::LoadProfile(const std::string &method, ITran
 
   if (bLoadProfile)
   {
-    CApplicationMessenger::GetInstance().PostMsg(TMSG_LOADPROFILE, index);
+    CServiceBroker::GetAppMessenger()->PostMsg(TMSG_LOADPROFILE, index);
     return ACK;
   }
   return InvalidParams;

@@ -6,9 +6,11 @@
  *  See LICENSES/README.md for more information.
  */
 
-#include "cores/AudioEngine/Interfaces/AESound.h"
-#include "ActiveAE.h"
 #include "ActiveAESound.h"
+
+#include "ActiveAE.h"
+#include "cores/AudioEngine/Interfaces/AESound.h"
+#include "filesystem/File.h"
 #include "utils/log.h"
 
 extern "C" {
@@ -18,11 +20,8 @@ extern "C" {
 using namespace ActiveAE;
 using namespace XFILE;
 
-CActiveAESound::CActiveAESound(const std::string &filename, CActiveAE *ae) :
-  IAESound         (filename),
-  m_filename       (filename),
-  m_volume         (1.0f    ),
-  m_channel        (AE_CH_NULL)
+CActiveAESound::CActiveAESound(const std::string& filename, CActiveAE* ae)
+  : IAESound(filename), m_filename(filename)
 {
   m_orig_sound = NULL;
   m_dst_sound = NULL;
@@ -111,7 +110,7 @@ CSoundPacket *CActiveAESound::GetSound(bool orig)
 
 bool CActiveAESound::Prepare()
 {
-  unsigned int flags = READ_TRUNCATED | READ_CHUNKED;
+  unsigned int flags = READ_TRUNCATED;
   m_pFile = new CFile();
 
   if (!m_pFile->Open(m_filename, flags))
@@ -120,7 +119,7 @@ bool CActiveAESound::Prepare()
     m_pFile = NULL;
     return false;
   }
-  m_isSeekPossible = m_pFile->IoControl(IOCTRL_SEEK_POSSIBLE, NULL) != 0;
+  m_isSeekPossible = m_pFile->IoControl(IOControl::SEEK_POSSIBLE, NULL) != 0;
   m_fileSize = m_pFile->GetLength();
   return true;
 }

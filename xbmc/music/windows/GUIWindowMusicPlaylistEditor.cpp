@@ -10,21 +10,30 @@
 
 #include "Autorun.h"
 #include "FileItem.h"
+#include "FileItemList.h"
 #include "GUIUserMessages.h"
 #include "ServiceBroker.h"
+#include "URL.h"
 #include "Util.h"
 #include "dialogs/GUIDialogFileBrowser.h"
 #include "dialogs/GUIDialogKaiToast.h"
+#include "filesystem/LibraryPaths.h"
 #include "filesystem/PlaylistFileDirectory.h"
+#include "filesystem/SourcesDirectory.h"
 #include "guilib/GUIKeyboardFactory.h"
-#include "guilib/LocalizeStrings.h"
-#include "input/Key.h"
+#include "input/actions/Action.h"
+#include "input/actions/ActionIDs.h"
+#include "music/MusicUtils.h"
 #include "playlists/PlayListM3U.h"
+#include "resources/LocalizeStrings.h"
+#include "resources/ResourcesComponent.h"
 #include "settings/Settings.h"
 #include "settings/SettingsComponent.h"
+#include "utils/ContentNames.h"
 #include "utils/StringUtils.h"
 #include "utils/URIUtils.h"
 #include "utils/Variant.h"
+#include "video/VideoDbPaths.h"
 
 #define CONTROL_LABELFILES        12
 
@@ -35,6 +44,8 @@
 #define CONTROL_LIST              50
 #define CONTROL_PLAYLIST         100
 #define CONTROL_LABEL_PLAYLIST   101
+
+using namespace KODI;
 
 CGUIWindowMusicPlaylistEditor::CGUIWindowMusicPlaylistEditor(void)
     : CGUIWindowMusicBase(WINDOW_MUSIC_PLAYLIST_EDITOR, "MyMusicPlaylistEditor.xml")
@@ -80,10 +91,10 @@ bool CGUIWindowMusicPlaylistEditor::OnClick(int iItem, const std::string& player
   CFileItemPtr item = m_vecItems->Get(iItem);
 
   // Expand .m3u files in sources list when clicked on regardless of <playlistasfolders>
-  if (item->IsFileFolder(EFILEFOLDER_MASK_ONBROWSE))
+  if (item->IsFileFolder(FileFolderType::MASK_ONBROWSE))
     return Update(item->GetPath());
   // Avoid playback (default click behaviour) of media files
-  if (!item->m_bIsFolder)
+  if (!item->IsFolder())
     return false;
 
   return CGUIWindowMusicBase::OnClick(iItem, player);
@@ -175,23 +186,24 @@ bool CGUIWindowMusicPlaylistEditor::GetDirectory(const std::string &strDirectory
   items.Clear();
   if (strDirectory.empty())
   { // root listing - list files:// and musicdb://
-    CFileItemPtr files(new CFileItem("sources://music/", true));
-    files->SetLabel(g_localizeStrings.Get(744));
+    CFileItemPtr files(
+        new CFileItem(XFILE::CSourcesDirectory::PathOf(KODI::MEDIA::MediaSection::MUSIC), true));
+    files->SetLabel(CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(744));
     files->SetLabelPreformatted(true);
-    files->m_bIsShareOrDrive = true;
+    files->SetIsShareOrDrive(true);
     items.Add(files);
 
-    CFileItemPtr mdb(new CFileItem("library://music/", true));
-    mdb->SetLabel(g_localizeStrings.Get(14022));
+    CFileItemPtr mdb(new CFileItem(MEDIA::LIBRARY_PATH::MUSIC, true));
+    mdb->SetLabel(CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(14022));
     mdb->SetLabelPreformatted(true);
-    mdb->m_bIsShareOrDrive = true;
+    mdb->SetIsShareOrDrive(true);
     items.SetPath("");
     items.Add(mdb);
 
-    CFileItemPtr vdb(new CFileItem("videodb://musicvideos/", true));
-    vdb->SetLabel(g_localizeStrings.Get(20389));
+    CFileItemPtr vdb(new CFileItem(VIDEO::DB_PATH::MUSICVIDEOS, true));
+    vdb->SetLabel(CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(20389));
     vdb->SetLabelPreformatted(true);
-    vdb->m_bIsShareOrDrive = true;
+    vdb->SetIsShareOrDrive(true);
     items.SetPath("");
     items.Add(vdb);
 
@@ -219,8 +231,9 @@ void CGUIWindowMusicPlaylistEditor::UpdateButtons()
   CGUIWindowMusicBase::UpdateButtons();
 
   // Update object count label
-  std::string items = StringUtils::Format("{} {}", m_vecItems->GetObjectCount(),
-                                          g_localizeStrings.Get(127)); // " 14 Objects"
+  std::string items = StringUtils::Format(
+      "{} {}", m_vecItems->GetObjectCount(),
+      CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(127)); // " 14 Objects"
   SET_CONTROL_LABEL(CONTROL_LABELFILES, items);
 }
 
@@ -239,7 +252,7 @@ void CGUIWindowMusicPlaylistEditor::PlayItem(int iItem)
   if (m_vecItems->IsVirtualDirectoryRoot() && !m_vecItems->Get(iItem)->IsDVD())
     return;
 
-#ifdef HAS_DVD_DRIVE
+#ifdef HAS_OPTICAL_DRIVE
   if (m_vecItems->Get(iItem)->IsDVD())
     MEDIA_DETECT::CAutorun::PlayDiscAskResume(m_vecItems->Get(iItem)->GetPath());
   else
@@ -256,7 +269,7 @@ void CGUIWindowMusicPlaylistEditor::OnQueueItem(int iItem, bool)
   // and thus want a different layout for each item
   CFileItemPtr item(new CFileItem(*m_vecItems->Get(iItem)));
   CFileItemList newItems;
-  AddItemToPlayList(item, newItems);
+  MUSIC_UTILS::GetItemsForPlayList(item, newItems);
   AppendToPlaylist(newItems);
 }
 
@@ -268,7 +281,7 @@ bool CGUIWindowMusicPlaylistEditor::Update(const std::string &strDirectory, bool
   if (!CGUIMediaWindow::Update(strDirectory, updateFilterPath))
     return false;
 
-  m_vecItems->SetContent("files");
+  m_vecItems->SetContent(MEDIA::CONTENT::FILES);
   m_thumbLoader.Load(*m_vecItems);
 
   // update our playlist control
@@ -298,8 +311,9 @@ void CGUIWindowMusicPlaylistEditor::UpdatePlaylist()
   OnMessage(msg);
 
   // indicate how many songs we have
-  std::string items = StringUtils::Format("{} {}", m_playlist->Size(),
-                                          g_localizeStrings.Get(134)); // "123 Songs"
+  std::string items = StringUtils::Format(
+      "{} {}", m_playlist->Size(),
+      CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(134)); // "123 Songs"
   SET_CONTROL_LABEL(CONTROL_LABEL_PLAYLIST, items);
 
   m_playlistThumbLoader.Load(*m_playlist);
@@ -340,9 +354,9 @@ void CGUIWindowMusicPlaylistEditor::OnLoadPlaylist()
 {
   // Prompt user for file to load from music playlists folder
   std::string playlist;
-  if (CGUIDialogFileBrowser::ShowAndGetFile("special://musicplaylists/",
-                                            ".m3u|.pls|.b4s|.wpl|.xspf", g_localizeStrings.Get(656),
-                                            playlist))
+  if (CGUIDialogFileBrowser::ShowAndGetFile(
+          "special://musicplaylists/", ".m3u|.m3u8|.pls|.b4s|.wpl|.xspf",
+          CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(656), playlist))
     LoadPlaylist(playlist);
 }
 
@@ -370,22 +384,29 @@ void CGUIWindowMusicPlaylistEditor::OnSavePlaylist()
 {
   // saves playlist to the playlist folder
   std::string name = URIUtils::GetFileName(m_strLoadedPlaylist);
-  URIUtils::RemoveExtension(name);
+  std::string extension = URIUtils::GetExtension(m_strLoadedPlaylist);
+  if (extension.empty())
+    extension = ".m3u8";
+  else
+    URIUtils::RemoveExtension(name);
 
-  if (CGUIKeyboardFactory::ShowAndGetInput(name, CVariant{g_localizeStrings.Get(16012)}, false))
-  { // save playlist as an .m3u
+  if (CGUIKeyboardFactory::ShowAndGetInput(
+          name, CVariant{CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(16012)},
+          false))
+  {
     PLAYLIST::CPlayListM3U playlist;
     playlist.Add(*m_playlist);
     std::string path = URIUtils::AddFileToFolder(
       CServiceBroker::GetSettingsComponent()->GetSettings()->GetString(CSettings::SETTING_SYSTEM_PLAYLISTSPATH),
       "music",
-      name + ".m3u");
+      name + extension);
 
     playlist.Save(path);
     m_strLoadedPlaylist = name;
-    CGUIDialogKaiToast::QueueNotification(CGUIDialogKaiToast::Info,
-                                          g_localizeStrings.Get(559), // "Playlist"
-                                          g_localizeStrings.Get(35259)); // "Saved"
+    CGUIDialogKaiToast::QueueNotification(
+        CGUIDialogKaiToast::Info,
+        CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(559), // "Playlist"
+        CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(35259)); // "Saved"
   }
 }
 
@@ -399,9 +420,12 @@ void CGUIWindowMusicPlaylistEditor::AppendToPlaylist(CFileItemList &newItems)
 
 void CGUIWindowMusicPlaylistEditor::OnSourcesContext()
 {
+  static constexpr int CONTEXT_BUTTON_QUEUE_ITEM = 0;
+  static constexpr int CONTEXT_BUTTON_BROWSE_INTO = 1;
+
   CFileItemPtr item = GetCurrentListItem();
   CContextButtons buttons;
-  if (item->IsFileFolder(EFILEFOLDER_MASK_ONBROWSE))
+  if (item->IsFileFolder(FileFolderType::MASK_ONBROWSE))
     buttons.Add(CONTEXT_BUTTON_BROWSE_INTO, 37015); //Browse into
   if (item && !item->IsParentFolder() && !m_vecItems->IsVirtualDirectoryRoot())
     buttons.Add(CONTEXT_BUTTON_QUEUE_ITEM, 15019); // Add (to playlist)

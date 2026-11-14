@@ -16,7 +16,12 @@
 #include "DVDSubtitles/DVDSubtitleStream.h"
 #include "cores/VideoPlayer/Interface/DemuxPacket.h"
 #include "cores/VideoPlayer/Interface/TimingConstants.h"
+#include "language/LanguageTag.h"
 #include "utils/StringUtils.h"
+
+#include <memory>
+
+using namespace KODI::LANGUAGE;
 
 CDVDDemuxVobsub::CDVDDemuxVobsub() = default;
 
@@ -33,6 +38,7 @@ std::vector<CDemuxStream*> CDVDDemuxVobsub::GetStreams() const
 {
   std::vector<CDemuxStream*> streams;
 
+  streams.reserve(m_Streams.size());
   for (auto iter : m_Streams)
     streams.push_back(iter);
 
@@ -49,7 +55,7 @@ bool CDVDDemuxVobsub::Open(const std::string& filename, int source, const std::s
     return false;
 
   std::string vobsub = subfilename;
-  if ( vobsub == "")
+  if (vobsub.empty())
   {
     vobsub = filename;
     vobsub.erase(vobsub.rfind('.'), vobsub.size());
@@ -63,7 +69,7 @@ bool CDVDDemuxVobsub::Open(const std::string& filename, int source, const std::s
   if (!m_Input || !m_Input->Open())
     return false;
 
-  m_Demuxer.reset(new CDVDDemuxFFmpeg());
+  m_Demuxer = std::make_unique<CDVDDemuxFFmpeg>();
   if (!m_Demuxer->Open(m_Input, false))
     return false;
 
@@ -82,7 +88,7 @@ bool CDVDDemuxVobsub::Open(const std::string& filename, int source, const std::s
     if (line[0] == '#')
       continue;
 
-    size_t pos = line.find_first_of(":");
+    size_t pos = line.find_first_of(':');
     if (pos != std::string::npos)
     {
       pos += 1;
@@ -112,9 +118,8 @@ bool CDVDDemuxVobsub::Open(const std::string& filename, int source, const std::s
 
   for(unsigned i=0;i<m_Streams.size();i++)
   {
-    m_Streams[i]->ExtraSize = state.extra.length()+1;
-    m_Streams[i]->ExtraData = new uint8_t[m_Streams[i]->ExtraSize];
-    strcpy((char*)m_Streams[i]->ExtraData, state.extra.c_str());
+    m_Streams[i]->extraData =
+        FFmpegExtraData(reinterpret_cast<uint8_t*>(state.extra.data()), state.extra.length() + 1);
   }
 
   return true;
@@ -202,16 +207,17 @@ bool CDVDDemuxVobsub::ParseId(SState& state, std::string& line)
   std::unique_ptr<CStream> stream(new CStream(this));
 
   StringUtils::Trim(line);
-  stream->language = line.substr(0, 2);
+  // The language runs up to the stream index, as in "en, index: 0"
+  size_t pos = line.find_first_of(',');
+  stream->language = CLanguageTag::Parse(line.substr(0, pos));
 
-  size_t pos = line.find_first_of(",");
   if (pos != std::string::npos)
   {
     pos += 1;
     line.erase(0, pos);
   }
   StringUtils::TrimLeft(line);
-  pos = line.find_first_of(":");
+  pos = line.find_first_of(':');
   if (pos != std::string::npos && line.substr(0, pos + 1) == "index:")
   {
     pos += 1;
@@ -223,14 +229,14 @@ bool CDVDDemuxVobsub::ParseId(SState& state, std::string& line)
   stream->codec = AV_CODEC_ID_DVD_SUBTITLE;
   stream->uniqueId = m_Streams.size();
   stream->source = m_source;
-  stream->demuxerId = m_demuxerId;
+  stream->demuxerId = GetDemuxerId();
 
   state.id = stream->uniqueId;
   m_Streams.push_back(stream.release());
   return true;
 }
 
-bool CDVDDemuxVobsub::ParseExtra(SState& state, std::string& line)
+bool CDVDDemuxVobsub::ParseExtra(SState& state, const std::string& line)
 {
   state.extra += line;
   state.extra += '\n';
@@ -255,14 +261,15 @@ bool CDVDDemuxVobsub::ParseTimestamp(SState& state, std::string& line)
   return true;
 }
 
-void CDVDDemuxVobsub::EnableStream(int id, bool enable)
+bool CDVDDemuxVobsub::EnableStream(int id, bool enable)
 {
   for (auto &stream : m_Streams)
   {
     if (stream->uniqueId == id)
     {
       stream->m_discard = !enable;
-      break;
+      return true;
     }
   }
+  return false;
 }

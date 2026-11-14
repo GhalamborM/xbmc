@@ -1,14 +1,14 @@
 set(SOURCES android_main.cpp
-            AndroidFeatures.cpp
             AndroidJoyStick.cpp
             AndroidKey.cpp
+            AndroidKeyboard.cpp
             AndroidMouse.cpp
             AndroidTouch.cpp
             EventLoop.cpp
-            GraphicBuffer.cpp
             JNIMainActivity.cpp
             JNIXBMCMainView.cpp
             JNIXBMCMediaSession.cpp
+            JNIXBMCNativeKeyboard.cpp
             JNIXBMCVideoView.cpp
             JNIXBMCAudioManagerOnAudioFocusChangeListener.cpp
             JNIXBMCSurfaceTextureOnFrameAvailableListener.cpp
@@ -17,24 +17,25 @@ set(SOURCES android_main.cpp
             JNIXBMCNsdManagerResolveListener.cpp
             JNIXBMCJsonHandler.cpp
             JNIXBMCFile.cpp
+            JNIXBMCTextureCache.cpp
             JNIXBMCURIUtils.cpp
             JNIXBMCDisplayManagerDisplayListener.cpp
-            ${NDKROOT}/sources/android/native_app_glue/android_native_app_glue.c
-            ${NDKROOT}/sources/android/cpufeatures/cpu-features.c)
+            JNIXBMCSpeechRecognitionListener.cpp
+            JNIXBMCConnectivityManagerNetworkCallback.cpp
+            JNIXBMCBroadcastReceiver.cpp
+            ${NDKROOT}/sources/android/native_app_glue/android_native_app_glue.c)
 
-set(HEADERS AndroidExtra.h
-            AndroidFeatures.h
-            AndroidJoyStick.h
+set(HEADERS AndroidJoyStick.h
             AndroidKey.h
+            AndroidKeyboard.h
             AndroidMouse.h
             AndroidTouch.h
-            DllGraphicBuffer.h
             EventLoop.h
-            GraphicBuffer.h
             IActivityHandler.h
             JNIMainActivity.h
             JNIXBMCMainView.h
             JNIXBMCMediaSession.h
+            JNIXBMCNativeKeyboard.h
             JNIXBMCVideoView.h
             JNIXBMCAudioManagerOnAudioFocusChangeListener.h
             JNIXBMCSurfaceTextureOnFrameAvailableListener.h
@@ -43,11 +44,16 @@ set(HEADERS AndroidExtra.h
             JNIXBMCNsdManagerResolveListener.h
             JNIXBMCJsonHandler.h
             JNIXBMCFile.h
+            JNIXBMCTextureCache.h
             JNIXBMCURIUtils.h
             JNIXBMCDisplayManagerDisplayListener.h
+            JNIXBMCSpeechRecognitionListener.h
+            JNIXBMCConnectivityManagerNetworkCallback.h
+            JNIXBMCBroadcastReceiver.h
             XBMCApp.h)
 
+set_source_files_properties(${NDKROOT}/sources/android/native_app_glue/android_native_app_glue.c PROPERTIES
+                            SKIP_LINTING ON)
 core_add_library(platform_android_activity)
-target_include_directories(${CORE_LIBRARY}
-                           PRIVATE ${NDKROOT}/sources/android/native_app_glue
-                                   ${NDKROOT}/sources/android/cpufeatures)
+target_include_directories(${CORE_LIBRARY} SYSTEM
+                           PRIVATE ${NDKROOT}/sources/android/native_app_glue)

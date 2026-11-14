@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2005-2018 Team Kodi
+ *  Copyright (C) 2005-2024 Team Kodi
  *  This file is part of Kodi - https://kodi.tv
  *
  *  SPDX-License-Identifier: GPL-2.0-or-later
@@ -23,6 +23,14 @@ class CSetting;
 
 namespace PERIPHERALS
 {
+/// \ingroup peripherals
+/// \{
+
+/*!
+ * \brief Indicates a joystick has no preference for port number
+ */
+constexpr auto JOYSTICK_NO_PORT_REQUESTED = -1;
+
 enum PeripheralBusType
 {
   PERIPHERAL_BUS_UNKNOWN = 0,
@@ -71,6 +79,22 @@ enum PeripheralType
   PERIPHERAL_JOYSTICK,
   PERIPHERAL_KEYBOARD,
   PERIPHERAL_MOUSE,
+};
+
+/*!
+ * \brief Power status of the device attached via HDMI-CEC.
+ *
+ * This is the result of calling libCEC's GetDevicePowerStatus. UNKNOWN means the device could not
+ * be found or queried on the CEC bus. NO_ADAPTER means no CEC adapter is present.
+ */
+enum class CecPowerStatus
+{
+  NO_ADAPTER = -1, //!< no CEC adapter present, or libCEC not built
+  ON = 0,
+  STANDBY = 1,
+  TRANSITION_TO_ON = 2,
+  TRANSITION_TO_STANDBY = 3,
+  UNKNOWN = 4,
 };
 
 class CPeripheral;
@@ -319,7 +343,8 @@ class PeripheralScanResult
 {
 public:
   explicit PeripheralScanResult(const PeripheralBusType busType)
-    : m_busType(busType), m_mappedBusType(busType)
+    : m_busType(busType),
+      m_mappedBusType(busType)
   {
   }
 
@@ -336,10 +361,16 @@ public:
 
   PeripheralType m_type = PERIPHERAL_UNKNOWN;
   std::string m_strLocation;
+  // Stable physical/topology location, used to key per-adapter settings. Empty if unavailable.
+  std::string m_strPhysicalLocation;
   int m_iVendorId = 0;
   int m_iProductId = 0;
   PeripheralType m_mappedType = PERIPHERAL_UNKNOWN;
   std::string m_strDeviceName;
+  // Generic name from the peripherals.xml mapping. Kept separate from m_strDeviceName,
+  // which a bus may override with a per-adapter name, so a settings file keyed by the
+  // generic name can still be found.
+  std::string m_strMappedDeviceName;
   PeripheralBusType m_busType = PERIPHERAL_BUS_UNKNOWN;
   PeripheralBusType m_mappedBusType = PERIPHERAL_BUS_UNKNOWN;
   unsigned int m_iSequence = 0; // when more than one adapter of the same type is found
@@ -362,9 +393,11 @@ struct PeripheralScanResults
 
   bool ContainsResult(const PeripheralScanResult& result) const
   {
-    return std::find(m_results.begin(), m_results.end(), result) != m_results.end();
+    return std::ranges::find(m_results, result) != m_results.end();
   }
 
   std::vector<PeripheralScanResult> m_results;
 };
+
+/// \}
 } // namespace PERIPHERALS

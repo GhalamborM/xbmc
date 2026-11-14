@@ -1,16 +1,20 @@
+list(APPEND CORE_MAIN_SOURCE ${CMAKE_SOURCE_DIR}/xbmc/platform/darwin/osx/XBMCApplication.mm)
+
 if(NOT APP_RENDER_SYSTEM OR APP_RENDER_SYSTEM STREQUAL "gl")
   list(APPEND PLATFORM_REQUIRED_DEPS OpenGl)
   set(APP_RENDER_SYSTEM gl)
-  list(APPEND SYSTEM_DEFINES -DGL_DO_NOT_WARN_IF_MULTI_GL_VERSION_HEADERS_INCLUDED)
+  list(APPEND SYSTEM_DEFINES -DGL_DO_NOT_WARN_IF_MULTI_GL_VERSION_HEADERS_INCLUDED
+                             -DGL_SILENCE_DEPRECATION)
 else()
   message(SEND_ERROR "Currently only OpenGL rendering is supported. Please set APP_RENDER_SYSTEM to \"gl\"")
 endif()
 
-if(NOT APP_WINDOW_SYSTEM OR APP_WINDOW_SYSTEM STREQUAL sdl)
-  list(APPEND SYSTEM_DEFINES -DHAS_SDL)
-  list(APPEND PLATFORM_REQUIRED_DEPS Sdl)
-  list(APPEND CORE_MAIN_SOURCE ${CMAKE_SOURCE_DIR}/xbmc/platform/darwin/osx/SDL/SDLMain.mm
-                               ${CMAKE_SOURCE_DIR}/xbmc/platform/posix/main.cpp)
-else()
-  message(SEND_ERROR "Currently only SDL windowing is supported. Please set APP_WINDOW_SYSTEM to \"sdl\"")
+set(${CORE_SYSTEM_NAME}_SEARCH_CONFIG NO_DEFAULT_PATH CACHE STRING "")
+list(APPEND PLATFORM_REQUIRED_DEPS Smctemp>=0.4.0)
+
+list(APPEND PLATFORM_OPTIONAL_PACKAGES LibAACS LibBDPlus)
+
+# Builds libbluray jar files to enable bluray menu support
+if(NOT DEFINED ENABLE_BLURAY_JAR)
+  set(ENABLE_BLURAY_JAR ON)
 endif()

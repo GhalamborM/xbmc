@@ -8,26 +8,24 @@
 
 #include "CircularCache.h"
 
-#include "threads/SingleLock.h"
 #include "threads/SystemClock.h"
 #include "utils/log.h"
 
 #include <algorithm>
+#include <mutex>
 #include <string.h>
 
 using namespace XFILE;
 using namespace std::chrono_literals;
 
 CCircularCache::CCircularCache(size_t front, size_t back)
- : CCacheStrategy()
- , m_beg(0)
- , m_end(0)
- , m_cur(0)
- , m_buf(NULL)
- , m_size(front + back)
- , m_size_back(back)
+  : CCacheStrategy(),
+    m_buf(NULL),
+    m_size(front + back),
+    m_size_back(back)
 #ifdef TARGET_WINDOWS
- , m_handle(NULL)
+    ,
+    m_handle(NULL)
 #endif
 {
 }
@@ -71,7 +69,7 @@ void CCircularCache::Close()
 
 size_t CCircularCache::GetMaxWriteSize(const size_t& iRequestSize)
 {
-  CSingleLock lock(m_sync);
+  std::unique_lock lock(m_sync);
 
   size_t back  = (size_t)(m_cur - m_beg); // Backbuffer size
   size_t front = (size_t)(m_end - m_cur); // Frontbuffer size
@@ -102,7 +100,7 @@ size_t CCircularCache::GetMaxWriteSize(const size_t& iRequestSize)
  */
 int CCircularCache::WriteToCache(const char *buf, size_t len)
 {
-  CSingleLock lock(m_sync);
+  std::unique_lock lock(m_sync);
 
   // where are we in the buffer
   size_t pos   = m_end % m_size;
@@ -146,7 +144,7 @@ int CCircularCache::WriteToCache(const char *buf, size_t len)
  */
 int CCircularCache::ReadFromCache(char *buf, size_t len)
 {
-  CSingleLock lock(m_sync);
+  std::unique_lock lock(m_sync);
 
   size_t pos   = m_cur % m_size;
   size_t front = (size_t)(m_end - m_cur);
@@ -181,23 +179,23 @@ int CCircularCache::ReadFromCache(char *buf, size_t len)
  * Note that caller needs to make sure there's sufficient space in the forward
  * buffer for "minimum" bytes else we may block the full timeout time
  */
-int64_t CCircularCache::WaitForData(unsigned int minimum, unsigned int millis)
+int64_t CCircularCache::WaitForData(uint32_t minimum, std::chrono::milliseconds timeout)
 {
-  CSingleLock lock(m_sync);
+  std::unique_lock lock(m_sync);
   int64_t avail = m_end - m_cur;
 
-  if(millis == 0 || IsEndOfInput())
+  if (timeout == 0ms || IsEndOfInput())
     return avail;
 
   if(minimum > m_size - m_size_back)
     minimum = m_size - m_size_back;
 
-  XbmcThreads::EndTime endtime(millis);
+  XbmcThreads::EndTime<> endtime{timeout};
   while (!IsEndOfInput() && avail < minimum && !endtime.IsTimePast() )
   {
-    lock.Leave();
+    lock.unlock();
     m_written.Wait(50ms); // may miss the deadline. shouldn't be a problem.
-    lock.Enter();
+    lock.lock();
     avail = m_end - m_cur;
   }
 
@@ -206,7 +204,7 @@ int64_t CCircularCache::WaitForData(unsigned int minimum, unsigned int millis)
 
 int64_t CCircularCache::Seek(int64_t pos)
 {
-  CSingleLock lock(m_sync);
+  std::unique_lock lock(m_sync);
 
   // if seek is a bit over what we have, try to wait a few seconds for the data to be available.
   // we try to avoid a (heavy) seek on the source
@@ -218,9 +216,9 @@ int64_t CCircularCache::Seek(int64_t pos)
      */
     m_cur = m_end;
 
-    lock.Leave();
-    WaitForData((size_t)(pos - m_cur), 5000);
-    lock.Enter();
+    lock.unlock();
+    WaitForData((size_t)(pos - m_cur), 5s);
+    lock.lock();
 
     if (pos < m_beg || pos > m_end)
       CLog::Log(LOGDEBUG,
@@ -239,7 +237,7 @@ int64_t CCircularCache::Seek(int64_t pos)
 
 bool CCircularCache::Reset(int64_t pos)
 {
-  CSingleLock lock(m_sync);
+  std::unique_lock lock(m_sync);
   if (IsCachedPosition(pos))
   {
     m_cur = pos;

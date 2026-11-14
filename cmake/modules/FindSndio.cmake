@@ -3,39 +3,28 @@
 # ---------
 # Finds the Sndio Library
 #
-# This will define the following variables:
+# This will define the following target:
 #
-# SNDIO_FOUND - system has sndio
-# SNDIO_INCLUDE_DIRS - sndio include directory
-# SNDIO_DEFINITIONS - sndio definitions
+#  ${APP_NAME_LC}::Sndio - the sndio library
 #
-# and the following imported targets::
-#
-#  Sndio::Sndio    - the sndio library
-#
+if(NOT TARGET ${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME})
+  include(cmake/scripts/common/ModuleHelpers.cmake)
 
-find_path(SNDIO_INCLUDE_DIR sndio.h)
-find_library(SNDIO_LIBRARY sndio)
+  set(${CMAKE_FIND_PACKAGE_NAME}_MODULE_LC sndio)
+  set(${${CMAKE_FIND_PACKAGE_NAME}_MODULE_LC}_DISABLE_VERSION ON)
 
+  SETUP_BUILD_VARS()
 
-include(FindPackageHandleStandardArgs)
-find_package_handle_standard_args(Sndio
-                                  REQUIRED_VARS SNDIO_LIBRARY SNDIO_INCLUDE_DIR)
+  SETUP_FIND_SPECS()
 
-if(SNDIO_FOUND)
-  set(SNDIO_INCLUDE_DIRS ${SNDIO_INCLUDE_DIR})
-  set(SNDIO_LIBRARIES ${SNDIO_LIBRARY})
-  set(SNDIO_DEFINITIONS -DHAS_SNDIO=1)
+  SEARCH_EXISTING_PACKAGES()
 
-  if(NOT TARGET Sndio::Sndio)
-    add_library(Sndio::Sndio UNKNOWN IMPORTED)
-    set_target_properties(Sndio::Sndio PROPERTIES
-                                       IMPORTED_LOCATION "${SNDIO_LIBRARY}"
-                                       INTERFACE_INCLUDE_DIRECTORIES "${SNDIO_INCLUDE_DIR}")
-    set_target_properties(Sndio::Sndio PROPERTIES
-                                       INTERFACE_COMPILE_DEFINITIONS -DHAS_SNDIO=1)
+  if(${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME}_FOUND)
+    list(APPEND AUDIO_BACKENDS_LIST "sndio")
+    set(AUDIO_BACKENDS_LIST ${AUDIO_BACKENDS_LIST} PARENT_SCOPE)
+
+    add_library(${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME} ALIAS PkgConfig::${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME})
+    set(${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_COMPILE_DEFINITIONS HAS_SNDIO)
+    ADD_TARGET_COMPILE_DEFINITION()
   endif()
 endif()
-
-
-mark_as_advanced(SNDIO_INCLUDE_DIR SNDIO_LIBRARY)

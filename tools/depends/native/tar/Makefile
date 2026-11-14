@@ -1,13 +1,7 @@
-include ../../Makefile.include
+include ../../Makefile.include TAR-VERSION ../../download-files.include
 PREFIX=$(NATIVEPREFIX)
 PLATFORM=$(NATIVEPLATFORM)
-DEPS= ../../Makefile.include Makefile
-
-# app name, version
-APPNAME=tar
-VERSION=1.34
-SOURCE=$(APPNAME)-$(VERSION)
-ARCHIVE=$(SOURCE).tar.xz
+DEPS = ../../Makefile.include TAR-VERSION Makefile ../../download-files.include 01-link-libintl-libiconv.patch
 
 export PATH:=$(PREFIX)/bin:$(PATH)
 CONFIGURE=./configure --prefix=$(PREFIX) \
@@ -20,16 +14,16 @@ APPBIN=$(PREFIX)/bin/tar
 
 all: .installed-$(PLATFORM)
 
-$(TARBALLS_LOCATION)/$(ARCHIVE):
-	cd $(TARBALLS_LOCATION); $(RETRIEVE_TOOL) $(RETRIEVE_TOOL_FLAGS) $(BASE_URL)/$(ARCHIVE)
 
-$(PLATFORM): $(TARBALLS_LOCATION)/$(ARCHIVE) $(DEPS)
+.configured-$(PLATFORM): $(DEPS) | $(TARBALLS_LOCATION)/$(ARCHIVE).$(HASH_TYPE)
 	-rm -rf $(PLATFORM)/*; mkdir -p $(PLATFORM)
 	cd $(PLATFORM); $(ARCHIVE_TOOL) $(ARCHIVE_TOOL_FLAGS) $(TARBALLS_LOCATION)/$(ARCHIVE)
+	cd $(PLATFORM); patch -p1 -i ../01-link-libintl-libiconv.patch
 	cd $(PLATFORM); $(AUTORECONF)
 	cd $(PLATFORM); $(CONFIGURE)
+	touch $@
 
-$(APP): $(PLATFORM)
+$(APP): .configured-$(PLATFORM)
 	$(MAKE) -C $(PLATFORM)
 
 .installed-$(PLATFORM): $(APP)
@@ -42,4 +36,4 @@ clean:
 	$(MAKE) -C $(PLATFORM) clean
 
 distclean::
-	rm -rf $(PLATFORM) .installed-$(PLATFORM)
+	rm -rf $(PLATFORM) .installed-$(PLATFORM) .configured-$(PLATFORM)

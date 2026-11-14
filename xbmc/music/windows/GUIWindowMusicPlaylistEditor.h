@@ -27,8 +27,8 @@ protected:
   bool GetDirectory(const std::string &strDirectory, CFileItemList &items) override;
   void UpdateButtons() override;
   bool Update(const std::string &strDirectory, bool updateFilterPath = true) override;
-  void OnPrepareFileItems(CFileItemList &items) override;
-  void OnQueueItem(int iItem, bool) override;
+  void OnPrepareFileItems(CFileItemList& items) override;
+  void OnQueueItem(int iItem, bool first = false) override;
   std::string GetStartFolder(const std::string& dir) override { return ""; }
 
   void OnSourcesContext();

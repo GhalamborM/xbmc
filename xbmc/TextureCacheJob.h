@@ -8,16 +8,20 @@
 
 #pragma once
 
+#include "jobs/Job.h"
 #include "pictures/PictureScalingAlgorithm.h"
-#include "utils/Job.h"
 
-#include <cstddef>
+#include <cstdint>
 #include <memory>
-#include <stdint.h>
 #include <string>
 #include <vector>
 
+class CFileItem;
 class CTexture;
+namespace IMAGE_FILES
+{
+class CImageFileURL;
+}
 
 /*!
  \ingroup textures
@@ -26,24 +30,20 @@ class CTexture;
 class CTextureDetails
 {
 public:
-  CTextureDetails()
-  {
-    id = -1;
-    width = height = 0;
-    updateable = false;
-  };
   bool operator==(const CTextureDetails &right) const
   {
     return (id    == right.id    &&
             file  == right.file  &&
             width == right.width );
   };
-  int          id;
-  std::string  file;
-  std::string  hash;
-  unsigned int width;
-  unsigned int height;
-  bool         updateable;
+
+  int id{-1};
+  std::string file;
+  std::string hash;
+  unsigned int width{0};
+  unsigned int height{0};
+  bool updateable{false};
+  bool hashRevalidated{false};
 };
 
 /*!
@@ -55,11 +55,22 @@ public:
 class CTextureCacheJob : public CJob
 {
 public:
-  CTextureCacheJob(const std::string &url, const std::string &oldHash = "");
+  static constexpr const char* JOB_TYPE_CACHE_IMAGE = "cacheimage";
+
+  /*!
+   \param url location of the image
+   \param oldDetails what the image is already cached as, if anything. Its hash is only set once
+          the image is due its periodic check, and an unchanged image is then revalidated rather
+          than cached all over again.
+   \param knownHash hash of the source file, if the caller already knows it (see GetImageHash())
+   */
+  CTextureCacheJob(const std::string& url,
+                   const CTextureDetails& oldDetails = {},
+                   const std::string& knownHash = "");
   ~CTextureCacheJob() override;
 
-  const char* GetType() const override { return kJobTypeCacheImage; }
-  bool operator==(const CJob *job) const override;
+  const char* GetType() const override { return JOB_TYPE_CACHE_IMAGE; }
+  bool Equals(const CJob* job) const override;
   bool DoWork() override;
 
   /*! \brief retrieve a hash for the given image
@@ -67,39 +78,61 @@ public:
    \param url location of the image
    \return a hash string for this image
    */
-  bool CacheTexture(std::unique_ptr<CTexture>* texture = nullptr);
+  bool CacheTexture();
 
-  static bool ResizeTexture(const std::string &url, uint8_t* &result, size_t &result_size);
+  static bool ResizeTexture(const std::string& url,
+                            unsigned int height,
+                            unsigned int width,
+                            CPictureScalingAlgorithm::Algorithm scalingAlgorithm,
+                            uint8_t*& result,
+                            size_t& result_size);
+
+  /*! \brief Retrieve a hash for a file already returned by a directory listing
+   \param listedFile the file, as listed by CDirectory::GetDirectory() without DIR_FLAG_NO_FILE_INFO
+   \return a hash string for this file, or empty if the listing didn't provide the information -
+           not every VFS layer does, and the caller should then let the file be stat'ed as usual
+   */
+  static std::string GetImageHash(const CFileItem& listedFile);
+
+  /*! \brief Whether a mime type leaves an image possible
+   \param mimeType the type to consider, empty if nothing has said what it is
+   \return true for an image type, and for the type a source gives when it doesn't know
+   */
+  static bool MayBeAnImage(const std::string& mimeType);
 
   std::string m_url;
-  std::string m_oldHash;
+  CTextureDetails m_oldDetails;
   CTextureDetails m_details;
+
+  /*! \brief Whether this job is the one that reserved m_url in the texture cache.
+   Only the reserver may release it.
+   \sa CTextureCache::StartCacheImage, CTextureCache::OnCachingComplete
+   */
+  bool m_holdsProcessingClaim{false};
+
 private:
+  /*! \brief Whether the copy this image was previously cached to is still present
+   Revalidating leaves that copy in place rather than writing it again, so it has to still be
+   there - if it has been deleted the image needs caching again.
+   */
+  bool HasCachedFile() const;
+
   /*! \brief retrieve a hash for the given image
    Combines the size, ctime and mtime of the image file into a "unique" hash
    \param url location of the image
    \return a hash string for this image
    */
-  static std::string GetImageHash(const std::string &url);
+  static std::string GetImageHashFromStat(const std::string& url);
 
-  /*! \brief Check whether a given URL represents an image that can be updated
-   We currently don't check http:// and https:// URLs for updates, under the assumption that
-   a image URL is much more likely to be static and the actual image at the URL is unlikely
-   to change, so no point checking all the time.
-   \param url the url to check
-   \return true if the image given by the URL should be checked for updates, false otherwise
-   */
-  bool UpdateableURL(const std::string &url) const;
+  /*! \brief Format a hash from a file's modification time and size
 
-  /*! \brief Decode an image URL to the underlying image, width, height and orientation
-   \param url wrapped URL of the image
-   \param width width derived from URL
-   \param height height derived from URL
-   \param scalingAlgorithm scaling algorithm derived from URL
-   \param additional_info additional information, such as "flipped" to flip horizontally
-   \return URL of the underlying image file.
+   \param modificationTime the file's modification time, as a unix timestamp
+   \param size the file's size in bytes
+   \return the hash, or empty if neither value was usable
    */
-  static std::string DecodeImageURL(const std::string &url, unsigned int &width, unsigned int &height, CPictureScalingAlgorithm::Algorithm& scalingAlgorithm, std::string &additional_info);
+  static std::string FormatImageHash(int64_t modificationTime, int64_t size);
+
+  std::string m_knownHash;
 
   /*! \brief Load an image at a given target size and orientation.
 
@@ -107,16 +140,13 @@ private:
    or smaller than the desired size for speed reasons.
 
    \param image the URL of the image file.
-   \param width the desired maximum width.
-   \param height the desired maximum height.
-   \param additional_info extra info for loading, such as whether to flip horizontally.
+   \param maxWidth the maximum width to load the image at, 0 for no limit.
+   \param maxHeight the maximum height to load the image at, 0 for no limit.
    \return a pointer to a CTexture object, NULL if failed.
    */
-  static std::unique_ptr<CTexture> LoadImage(const std::string& image,
-                                             unsigned int width,
-                                             unsigned int height,
-                                             const std::string& additional_info,
-                                             bool requirePixels = false);
+  static std::unique_ptr<CTexture> LoadImage(const IMAGE_FILES::CImageFileURL& imageURL,
+                                             unsigned int maxWidth,
+                                             unsigned int maxHeight);
 
   std::string    m_cachePath;
 };
@@ -129,7 +159,7 @@ public:
   explicit CTextureUseCountJob(const std::vector<CTextureDetails> &textures);
 
   const char* GetType() const override { return "usecount"; }
-  bool operator==(const CJob *job) const override;
+  bool Equals(const CJob* job) const override;
   bool DoWork() override;
 
 private:

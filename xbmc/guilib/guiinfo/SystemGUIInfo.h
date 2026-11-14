@@ -9,13 +9,12 @@
 #pragma once
 
 #include "guilib/guiinfo/GUIInfoProvider.h"
+#include "utils/GpuInfo.h"
 #include "utils/Temperature.h"
 
-namespace KODI
-{
-namespace GUILIB
-{
-namespace GUIINFO
+#include <memory>
+
+namespace KODI::GUILIB::GUIINFO
 {
 
 class CGUIInfo;
@@ -27,17 +26,28 @@ public:
   ~CSystemGUIInfo() override = default;
 
   // KODI::GUILIB::GUIINFO::IGUIInfoProvider implementation
-  bool InitCurrentItem(CFileItem *item) override;
-  bool GetLabel(std::string& value, const CFileItem *item, int contextWindow, const CGUIInfo &info, std::string *fallback) const override;
-  bool GetInt(int& value, const CGUIListItem *item, int contextWindow, const CGUIInfo &info) const override;
-  bool GetBool(bool& value, const CGUIListItem *item, int contextWindow, const CGUIInfo &info) const override;
+  bool InitCurrentItem(CFileItem* item) override;
+  bool GetLabel(std::string& value,
+                const CFileItem* item,
+                int contextWindow,
+                const CGUIInfo& info,
+                std::string* fallback) const override;
+  bool GetInt(int& value,
+              const CGUIListItem* item,
+              int contextWindow,
+              const CGUIInfo& info) const override;
+  bool GetBool(bool& value,
+               const CGUIListItem* item,
+               int contextWindow,
+               const CGUIInfo& info) const override;
 
   float GetFPS() const { return m_fps; }
   void UpdateFPS();
 
 private:
   std::string GetSystemHeatInfo(int info) const;
-  CTemperature GetGPUTemperature() const;
+
+  std::unique_ptr<CGPUInfo> m_gpuInfo;
 
   static const int SYSTEM_HEAT_UPDATE_INTERVAL = 60000;
 
@@ -50,6 +60,4 @@ private:
   unsigned int m_lastFPSTime = 0;
 };
 
-} // namespace GUIINFO
-} // namespace GUILIB
-} // namespace KODI
+} // namespace KODI::GUILIB::GUIINFO

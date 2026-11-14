@@ -6,13 +6,15 @@
  *  See LICENSES/README.md for more information.
  */
 
-
 #include "WinSystemX11GLESContext.h"
 
-#include "Application.h"
 #include "GLContextEGL.h"
 #include "OptionalsReg.h"
+#include "ServiceBroker.h"
 #include "X11DPMSSupport.h"
+#include "application/AppParams.h"
+#include "application/ApplicationComponents.h"
+#include "application/ApplicationSkinHandling.h"
 #include "cores/RetroPlayer/process/X11/RPProcessInfoX11.h"
 #include "cores/RetroPlayer/rendering/VideoRenderers/RPRendererOpenGLES.h"
 #include "cores/VideoPlayer/DVDCodecs/DVDFactoryCodec.h"
@@ -20,10 +22,11 @@
 #include "cores/VideoPlayer/VideoRenderers/LinuxRendererGLES.h"
 #include "cores/VideoPlayer/VideoRenderers/RenderFactory.h"
 #include "guilib/DispResource.h"
-#include "threads/SingleLock.h"
 #include "utils/log.h"
 #include "windowing/GraphicContext.h"
 #include "windowing/WindowSystemFactory.h"
+
+#include <mutex>
 
 using namespace KODI;
 using namespace KODI::WINDOWING::X11;
@@ -51,7 +54,7 @@ void CWinSystemX11GLESContext::PresentRenderImpl(bool rendered)
   if (m_delayDispReset && m_dispResetTimer.IsTimePast())
   {
     m_delayDispReset = false;
-    CSingleLock lock(m_resourceSection);
+    std::unique_lock lock(m_resourceSection);
     // tell any shared resources
     for (std::vector<IDispResource*>::iterator i = m_resources.begin(); i != m_resources.end(); ++i)
       (*i)->OnResetDisplay();
@@ -91,6 +94,30 @@ EGLConfig CWinSystemX11GLESContext::GetEGLConfig() const
   return m_pGLContext->m_eglConfig;
 }
 
+bool CWinSystemX11GLESContext::BindTextureUploadContext()
+{
+  if (m_pGLContext)
+    return static_cast<CGLContextEGL*>(m_pGLContext)->BindTextureUploadContext();
+  else
+    return false;
+}
+
+bool CWinSystemX11GLESContext::UnbindTextureUploadContext()
+{
+  if (m_pGLContext)
+    return static_cast<CGLContextEGL*>(m_pGLContext)->UnbindTextureUploadContext();
+  else
+    return false;
+}
+
+bool CWinSystemX11GLESContext::HasContext()
+{
+  if (m_pGLContext)
+    return static_cast<CGLContextEGL*>(m_pGLContext)->HasContext();
+  else
+    return false;
+}
+
 bool CWinSystemX11GLESContext::SetWindow(int width, int height, bool fullscreen, const std::string& output, int* winstate)
 {
   int newwin = 0;
@@ -109,7 +136,7 @@ bool CWinSystemX11GLESContext::SetWindow(int width, int height, bool fullscreen,
 
     if (!m_delayDispReset)
     {
-      CSingleLock lock(m_resourceSection);
+      std::unique_lock lock(m_resourceSection);
       // tell any shared resources
       for (std::vector<IDispResource*>::iterator i = m_resources.begin(); i != m_resources.end(); ++i)
         (*i)->OnResetDisplay();
@@ -125,6 +152,7 @@ bool CWinSystemX11GLESContext::CreateNewWindow(const std::string& name, bool ful
     return false;
 
   m_pGLContext->QueryExtensions();
+  m_bufferAgeSupport = m_pGLContext->IsBufferAgeSupported();
   return true;
 }
 
@@ -135,7 +163,11 @@ bool CWinSystemX11GLESContext::ResizeWindow(int newWidth, int newHeight, int new
   CRenderSystemGLES::ResetRenderSystem(newWidth, newHeight);
 
   if (m_newGlContext)
-    g_application.ReloadSkin();
+  {
+    auto& components = CServiceBroker::GetAppComponents();
+    const auto appSkin = components.GetComponent<CApplicationSkinHandling>();
+    appSkin->ReloadSkin();
+  }
 
   return true;
 }
@@ -147,7 +179,11 @@ void CWinSystemX11GLESContext::FinishWindowResize(int newWidth, int newHeight)
   CRenderSystemGLES::ResetRenderSystem(newWidth, newHeight);
 
   if (m_newGlContext)
-    g_application.ReloadSkin();
+  {
+    auto& components = CServiceBroker::GetAppComponents();
+    const auto appSkin = components.GetComponent<CApplicationSkinHandling>();
+    appSkin->ReloadSkin();
+  }
 }
 
 bool CWinSystemX11GLESContext::SetFullScreen(bool fullScreen, RESOLUTION_INFO& res, bool blankOtherDisplays)
@@ -157,7 +193,11 @@ bool CWinSystemX11GLESContext::SetFullScreen(bool fullScreen, RESOLUTION_INFO& r
   CRenderSystemGLES::ResetRenderSystem(res.iWidth, res.iHeight);
 
   if (m_newGlContext)
-    g_application.ReloadSkin();
+  {
+    auto& components = CServiceBroker::GetAppComponents();
+    const auto appSkin = components.GetComponent<CApplicationSkinHandling>();
+    appSkin->ReloadSkin();
+  }
 
   return true;
 }
@@ -205,20 +245,25 @@ XVisualInfo* CWinSystemX11GLESContext::GetVisual()
     return nullptr;
   }
 
-  GLint att[] =
-  {
-    EGL_RED_SIZE, 8,
-    EGL_GREEN_SIZE, 8,
-    EGL_BLUE_SIZE, 8,
-    EGL_ALPHA_SIZE, 8,
-    EGL_BUFFER_SIZE, 32,
-    EGL_DEPTH_SIZE, 24,
-    EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
-    EGL_NONE
-  };
-  EGLint numConfigs;
   EGLConfig eglConfig = 0;
-  if (!eglChooseConfig(eglDisplay, att, &eglConfig, 1, &numConfigs) || numConfigs == 0)
+  for (const EGLint stencilSize : {8, 0})
+  {
+    const EGLint att[] = {EGL_RED_SIZE,     8,           EGL_GREEN_SIZE,      8,
+                          EGL_BLUE_SIZE,    8,           EGL_ALPHA_SIZE,      8,
+                          EGL_BUFFER_SIZE,  32,          EGL_DEPTH_SIZE,      24,
+                          EGL_STENCIL_SIZE, stencilSize, EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
+                          EGL_NONE};
+    EGLint numConfigs{0};
+    if (eglChooseConfig(eglDisplay, att, &eglConfig, 1, &numConfigs) && numConfigs > 0)
+    {
+      if (stencilSize == 0)
+        CLog::Log(LOGWARNING, "EGL: no visual with eight stencil bits; rotated GUI masks will be "
+                              "hidden on framebuffers without stencil support");
+      break;
+    }
+    eglConfig = 0;
+  }
+  if (!eglConfig)
   {
     CLog::Log(LOGERROR, "Failed to choose a config {}", eglGetError());
     return nullptr;
@@ -261,11 +306,11 @@ bool CWinSystemX11GLESContext::RefreshGLContext(bool force)
   VIDEOPLAYER::CRendererFactory::ClearRenderer();
   CLinuxRendererGLES::Register();
 
-  std::string gli = (getenv("KODI_GL_INTERFACE") != nullptr) ? getenv("KODI_GL_INTERFACE") : "";
+  std::string_view gli = CServiceBroker::GetAppParams()->GetGlInterface();
 
   m_pGLContext = new CGLContextEGL(m_dpy, EGL_OPENGL_ES_API);
   success = m_pGLContext->Refresh(force, m_screen, m_glWindow, m_newGlContext);
-  if (!success && gli == "EGL_PB")
+  if (!success && gli == "egl-pb")
   {
     success = m_pGLContext->CreatePB();
     m_newGlContext = true;

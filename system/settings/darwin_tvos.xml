@@ -7,9 +7,6 @@
         <setting id="screensaver.mode">
           <default></default>
         </setting>
-        <setting id="screensaver.usemusicvisinstead">
-          <default>false</default>
-        </setting>
         <setting id="screensaver.usedimonpause">
           <default>false</default>
         </setting>
@@ -32,15 +29,6 @@
           <visible>false</visible>
         </setting>
         <setting id="input.controllerconfig">
-          <visible>false</visible>
-        </setting>
-      </group>
-      <!-- Apple Remote -->
-      <group id="3">
-        <setting id="input.appleremotemode">
-          <visible>false</visible>
-        </setting>
-        <setting id="input.appleremotesequencetime">
           <visible>false</visible>
         </setting>
       </group>
@@ -69,30 +57,25 @@
           </dependencies>
         </setting>
         <!-- Siri remote sensitivity -->
-        <setting id="input.siriremotehorizontalsensitivity" type="integer" label="34009">
+        <setting id="input.siriremotehorizontalsensitivity" type="integer" label="34009" help="24163">
           <level>2</level>
-          <default>400</default>
+          <default>500</default>
           <constraints>
             <minimum>50</minimum>
             <step>50</step>
-            <maximum>1000</maximum>
+            <maximum>1450</maximum>
           </constraints>
           <control type="spinner" format="integer" delayed="false"/>
         </setting>
-        <setting id="input.siriremoteverticalsensitivity" type="integer" label="34010">
+        <setting id="input.siriremoteverticalsensitivity" type="integer" label="34010" help="24163">
           <level>2</level>
-          <default>300</default>
+          <default>650</default>
           <constraints>
             <minimum>50</minimum>
             <step>50</step>
-            <maximum>1000</maximum>
+            <maximum>1450</maximum>
           </constraints>
           <control type="spinner" format="integer" delayed="false"/>
-        </setting>
-        <setting id="input.tvosusekodikeyboard" type="boolean" label="24162" help="34008">
-          <level>1</level>
-          <default>false</default>
-          <control type="toggle" />
         </setting>
       </group>
     </category>

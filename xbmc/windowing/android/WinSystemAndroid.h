@@ -16,8 +16,11 @@
 #include "utils/HDRCapabilities.h"
 #include "windowing/WinSystem.h"
 
+#include <memory>
+
 class CDecoderFilterManager;
 class IDispResource;
+class CNativeWindow;
 
 class CWinSystemAndroid : public CWinSystemBase, public ITimerCallback
 {
@@ -43,6 +46,7 @@ public:
 
   bool HasCursor() override { return false; }
 
+  bool Minimize() override;
   bool Hide() override;
   bool Show(bool raise = true) override;
   void Register(IDispResource *resource) override;
@@ -55,6 +59,7 @@ public:
   bool IsHDRDisplay() override;
 
   CHDRCapabilities GetDisplayHDRCapabilities() const override;
+  float GetGuiSdrPeakLuminance() const override;
 
 protected:
   std::unique_ptr<KODI::WINDOWING::IOSScreenSaver> GetOSScreenSaverImpl() override;
@@ -62,13 +67,13 @@ protected:
 
   CAndroidUtils *m_android;
 
-  EGLDisplay m_nativeDisplay;
-  EGLNativeWindowType m_nativeWindow;
+  EGLDisplay m_nativeDisplay = EGL_NO_DISPLAY;
+  std::shared_ptr<CNativeWindow> m_nativeWindow;
 
   int m_displayWidth;
   int m_displayHeight;
 
-  RENDER_STEREO_MODE m_stereo_mode;
+  RenderStereoMode m_stereo_mode;
 
   CTimer *m_dispResetTimer;
 
@@ -78,5 +83,6 @@ protected:
 
 private:
   bool m_HdmiModeTriggered = false;
+  bool m_dispModesUpdatePending = false;
   void UpdateResolutions(bool bUpdateDesktopRes);
 };

@@ -9,6 +9,8 @@
 #pragma once
 
 #include "iimage.h"
+
+#include <cstdint>
 #include <memory>
 
 extern "C"
@@ -51,6 +53,7 @@ struct AVIOContext;
 struct AVFormatContext;
 struct AVCodecContext;
 struct AVPacket;
+struct AVStreamGroup;
 
 class CFFmpegImage : public IImage
 {
@@ -68,6 +71,7 @@ public:
                                   unsigned char* &bufferout,
                                   unsigned int &bufferoutSize) override;
   void ReleaseThumbnailBuffer() override;
+  void SetColorMetadata(const ImageColorMetadata& color) override;
 
   bool Initialize(unsigned char* buffer, size_t bufSize);
 
@@ -76,6 +80,8 @@ public:
 private:
   static void FreeIOCtx(AVIOContext** ioctx);
   AVFrame* ExtractFrame();
+  AVFrame* ExtractStreamFrame();
+  AVFrame* ExtractTileGridFrame();
   bool DecodeFrame(AVFrame* m_pFrame, unsigned int width, unsigned int height, unsigned int pitch, unsigned char * const pixels);
   static int EncodeFFmpegFrame(AVCodecContext *avctx, AVPacket *pkt, int *got_packet, AVFrame *frame);
   static int DecodeFFmpegFrame(AVCodecContext *avctx, AVFrame *frame, int *got_frame, AVPacket *pkt);
@@ -83,13 +89,23 @@ private:
   std::string m_strMimeType;
   void CleanupLocalOutputBuffer();
 
+  // CICP color metadata for the encoded output (fields default to unset).
+  ImageColorMetadata m_color;
 
   MemBuffer m_buf;
 
   AVIOContext* m_ioctx = nullptr;
   AVFormatContext* m_fctx = nullptr;
   AVCodecContext* m_codec_ctx = nullptr;
+  int m_streamIndex = 0;
+  const AVStreamGroup* m_tileGrid = nullptr;
 
   AVFrame* m_pFrame;
   uint8_t* m_outputBuffer;
+
+  // the size the caller can use, and the size the file actually holds
+  unsigned int m_maxWidth = 0;
+  unsigned int m_maxHeight = 0;
+  unsigned int m_sourceWidth = 0;
+  unsigned int m_sourceHeight = 0;
 };

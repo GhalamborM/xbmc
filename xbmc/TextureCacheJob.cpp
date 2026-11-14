@@ -13,80 +13,124 @@
 #include "TextureCache.h"
 #include "TextureDatabase.h"
 #include "URL.h"
-#include "addons/kodi-dev-kit/include/kodi/c-api/addon-instance/audiodecoder.h"
 #include "commons/ilog.h"
 #include "filesystem/File.h"
+#include "filesystem/IDirectory.h"
 #include "guilib/Texture.h"
-#include "music/MusicThumbLoader.h"
+#include "imagefiles/ImageFileURL.h"
+#include "imagefiles/SpecialImageLoaderFactory.h"
 #include "pictures/Picture.h"
 #include "settings/AdvancedSettings.h"
 #include "settings/SettingsComponent.h"
-#include "utils/EmbeddedArt.h"
+#include "utils/Mime.h"
 #include "utils/StringUtils.h"
 #include "utils/URIUtils.h"
 #include "utils/log.h"
-#include "video/VideoThumbLoader.h"
 
-#include <cstdlib>
+#include <algorithm>
 #include <cstring>
-#include <exception>
-#include <utility>
 
 #include "PlatformDefs.h"
 
-CTextureCacheJob::CTextureCacheJob(const std::string &url, const std::string &oldHash):
-  m_url(url),
-  m_oldHash(oldHash),
-  m_cachePath(CTextureCache::GetCacheFile(m_url))
+CTextureCacheJob::CTextureCacheJob(const std::string& url,
+                                   const CTextureDetails& oldDetails,
+                                   const std::string& knownHash)
+  : m_url(url),
+    m_oldDetails(oldDetails),
+    m_knownHash(knownHash),
+    m_cachePath(CTextureCache::GetCacheFile(m_url))
 {
+}
+
+bool CTextureCacheJob::HasCachedFile() const
+{
+  return !m_oldDetails.file.empty() &&
+         XFILE::CFile::Exists(CTextureCache::GetCachedPath(m_oldDetails.file));
 }
 
 CTextureCacheJob::~CTextureCacheJob() = default;
 
-bool CTextureCacheJob::operator==(const CJob* job) const
+bool CTextureCacheJob::Equals(const CJob* job) const
 {
-  if (strcmp(job->GetType(),GetType()) == 0)
-  {
-    const CTextureCacheJob* cacheJob = dynamic_cast<const CTextureCacheJob*>(job);
-    if (cacheJob && cacheJob->m_cachePath == m_cachePath)
-      return true;
-  }
-  return false;
+  if (strcmp(job->GetType(), GetType()) != 0)
+    return false;
+
+  return static_cast<const CTextureCacheJob*>(job)->m_cachePath == m_cachePath;
 }
 
 bool CTextureCacheJob::DoWork()
 {
   if (ShouldCancel(0, 0))
     return false;
-  if (ShouldCancel(1, 0)) // HACK: second check is because we cancel the job in the first callback, but we don't detect it
-    return false;         //       until the second
 
   // check whether we need cache the job anyway
   bool needsRecaching = false;
-  std::string path(CTextureCache::GetInstance().CheckCachedImage(m_url, needsRecaching));
-  if (!path.empty() && !needsRecaching)
+  std::string path(CServiceBroker::GetTextureCache()->CheckCachedImage(m_url, needsRecaching));
+  // A cached copy whose file has gone is cached again. An image that is its own copy is not
+  if (!path.empty() && !needsRecaching && (path == m_url || XFILE::CFile::Exists(path)))
     return false;
-  return CacheTexture();
+
+  m_holdsProcessingClaim = CServiceBroker::GetTextureCache()->StartCacheImage(m_url);
+  if (m_holdsProcessingClaim)
+    return CacheTexture();
+
+  return false;
 }
 
-bool CTextureCacheJob::CacheTexture(std::unique_ptr<CTexture>* out_texture)
+namespace
 {
-  // unwrap the URL as required
-  std::string additional_info;
-  unsigned int width, height;
-  CPictureScalingAlgorithm::Algorithm scalingAlgorithm;
-  std::string image = DecodeImageURL(m_url, width, height, scalingAlgorithm, additional_info);
+// Most PVR images use "type" to signify 'ownership' of basic images for easy
+// cache cleaning, rather than special generated images
+bool IsPVROwnedImage(const std::string& specialType)
+{
+  return specialType == "pvrchannel_radio" || specialType == "pvrchannel_tv" ||
+         specialType == "pvrprovider" || specialType == "pvrrecording" ||
+         StringUtils::StartsWith(specialType, "epgtag_");
+}
 
-  m_details.updateable = additional_info != "music" && UpdateableURL(image);
-
-  // generate the hash
-  m_details.hash = GetImageHash(image);
-  if (m_details.hash.empty())
+// special generated images and images served via HTTP should not be regularly checked for changes
+bool ShouldCheckForChanges(const std::string& specialType, const std::string& url)
+{
+  const bool isSpecialImage = !specialType.empty() && !IsPVROwnedImage(specialType);
+  if (isSpecialImage)
     return false;
-  else if (m_details.hash == m_oldHash)
-    return true;
 
-  std::unique_ptr<CTexture> texture = LoadImage(image, width, height, additional_info, true);
+  const bool isHTTP =
+      StringUtils::StartsWith(url, "http://") || StringUtils::StartsWith(url, "https://");
+  return !isHTTP;
+}
+} // namespace
+
+bool CTextureCacheJob::CacheTexture()
+{
+  IMAGE_FILES::CImageFileURL imageURL{m_url};
+
+  const auto& image = imageURL.GetTargetFile();
+  m_details.updateable = ShouldCheckForChanges(imageURL.GetSpecialType(), image);
+
+  if (m_details.updateable)
+  {
+    // generate the hash, unless the caller already knows it (saves a file stat)
+    m_details.hash = m_knownHash.empty() ? GetImageHashFromStat(image) : m_knownHash;
+    if (m_details.hash.empty())
+      return false;
+
+    // Unchanged, so the copy already in the cache stands - as long as it is still there
+    if (m_details.hash == m_oldDetails.hash && HasCachedFile())
+    {
+      m_details.hashRevalidated = true;
+      return true;
+    }
+  }
+
+  // CPicture::CacheTexture() will not write out more than imageres/fanartres, so decoding or
+  // holding anything above that ceiling is memory spent on pixels that are discarded
+  const auto advancedSettings = CServiceBroker::GetSettingsComponent()->GetAdvancedSettings();
+  const unsigned int maxHeight =
+      std::max(advancedSettings->m_imageRes, advancedSettings->m_fanartRes);
+  const unsigned int maxWidth = maxHeight * 16 / 9;
+
+  std::unique_ptr<CTexture> texture = LoadImage(imageURL, maxWidth, maxHeight);
   if (texture)
   {
     if (texture->HasAlpha())
@@ -94,39 +138,39 @@ bool CTextureCacheJob::CacheTexture(std::unique_ptr<CTexture>* out_texture)
     else
       m_details.file = m_cachePath + ".jpg";
 
-    CLog::Log(LOGDEBUG, "{} image '{}' to '{}':", m_oldHash.empty() ? "Caching" : "Recaching",
+    CLog::Log(LOGDEBUG,
+              "{} image '{}' to '{}':", m_oldDetails.hash.empty() ? "Caching" : "Recaching",
               CURL::GetRedacted(image), m_details.file);
 
-    if (CPicture::CacheTexture(texture.get(), width, height,
-                               CTextureCache::GetCachedPath(m_details.file), scalingAlgorithm))
+    unsigned int cached_width = 0;
+    unsigned int cached_height = 0;
+    if (CPicture::CacheTexture(texture.get(), cached_width, cached_height,
+                               CTextureCache::GetCachedPath(m_details.file)))
     {
-      m_details.width = width;
-      m_details.height = height;
-      if (out_texture) // caller wants the texture
-        *out_texture = std::move(texture);
+      m_details.width = cached_width;
+      m_details.height = cached_height;
       return true;
     }
   }
   return false;
 }
 
-bool CTextureCacheJob::ResizeTexture(const std::string &url, uint8_t* &result, size_t &result_size)
+bool CTextureCacheJob::ResizeTexture(const std::string& url,
+                                     unsigned int height,
+                                     unsigned int width,
+                                     CPictureScalingAlgorithm::Algorithm scalingAlgorithm,
+                                     uint8_t*& result,
+                                     size_t& result_size)
 {
   result = NULL;
   result_size = 0;
 
-  if (url.empty())
-    return false;
-
-  // unwrap the URL as required
-  std::string additional_info;
-  unsigned int width, height;
-  CPictureScalingAlgorithm::Algorithm scalingAlgorithm;
-  std::string image = DecodeImageURL(url, width, height, scalingAlgorithm, additional_info);
+  const IMAGE_FILES::CImageFileURL imageURL{url};
+  const auto& image = imageURL.GetTargetFile();
   if (image.empty())
     return false;
 
-  std::unique_ptr<CTexture> texture = LoadImage(image, width, height, additional_info, true);
+  std::unique_ptr<CTexture> texture = LoadImage(imageURL, 0, 0);
   if (texture == NULL)
     return false;
 
@@ -136,111 +180,95 @@ bool CTextureCacheJob::ResizeTexture(const std::string &url, uint8_t* &result, s
   return success;
 }
 
-std::string CTextureCacheJob::DecodeImageURL(const std::string &url, unsigned int &width, unsigned int &height, CPictureScalingAlgorithm::Algorithm& scalingAlgorithm, std::string &additional_info)
+bool CTextureCacheJob::MayBeAnImage(const std::string& mimeType)
 {
-  // unwrap the URL as required
-  std::string image(url);
-  additional_info.clear();
-  width = height = 0;
-  scalingAlgorithm = CPictureScalingAlgorithm::NoAlgorithm;
-  if (StringUtils::StartsWith(url, "image://"))
-  {
-    // format is image://[type@]<url_encoded_path>?options
-    CURL thumbURL(url);
-
-    if (!CTextureCache::CanCacheImageURL(thumbURL))
-      return "";
-    if (thumbURL.GetUserName() == "music")
-      additional_info = "music";
-    if (StringUtils::StartsWith(thumbURL.GetUserName(), "video_") ||
-        StringUtils::StartsWith(thumbURL.GetUserName(), "pvr") ||
-        StringUtils::StartsWith(thumbURL.GetUserName(), "epg"))
-      additional_info = thumbURL.GetUserName();
-
-    image = thumbURL.GetHostName();
-
-    if (thumbURL.HasOption("flipped"))
-      additional_info = "flipped";
-
-    if (thumbURL.GetOption("size") == "thumb")
-      width = height = CServiceBroker::GetSettingsComponent()->GetAdvancedSettings()->m_imageRes;
-    else
-    {
-      if (thumbURL.HasOption("width") && StringUtils::IsInteger(thumbURL.GetOption("width")))
-        width = strtol(thumbURL.GetOption("width").c_str(), NULL, 0);
-      if (thumbURL.HasOption("height") && StringUtils::IsInteger(thumbURL.GetOption("height")))
-        height = strtol(thumbURL.GetOption("height").c_str(), NULL, 0);
-    }
-
-    if (thumbURL.HasOption("scaling_algorithm"))
-      scalingAlgorithm = CPictureScalingAlgorithm::FromString(thumbURL.GetOption("scaling_algorithm"));
-  }
-
-  // Handle special case about audiodecoder addon music files, e.g. SACD
-  if (StringUtils::EndsWith(URIUtils::GetExtension(image), KODI_ADDON_AUDIODECODER_TRACK_EXT))
-  {
-    std::string addonImageURL = URIUtils::GetDirectory(image);
-    URIUtils::RemoveSlashAtEnd(addonImageURL);
-    if (XFILE::CFile::Exists(addonImageURL))
-      image = addonImageURL;
-  }
-
-  return image;
+  return StringUtils::StartsWithNoCase(mimeType, "image/") ||
+         StringUtils::EqualsNoCase(mimeType, "application/octet-stream");
 }
 
-std::unique_ptr<CTexture> CTextureCacheJob::LoadImage(const std::string& image,
-                                                      unsigned int width,
-                                                      unsigned int height,
-                                                      const std::string& additional_info,
-                                                      bool requirePixels)
+std::unique_ptr<CTexture> CTextureCacheJob::LoadImage(const IMAGE_FILES::CImageFileURL& imageURL,
+                                                      unsigned int maxWidth,
+                                                      unsigned int maxHeight)
 {
-  if (additional_info == "music")
-  { // special case for embedded music images
-    EmbeddedArt art;
-    if (CMusicThumbLoader::GetEmbeddedThumb(image, art))
-      return CTexture::LoadFromFileInMemory(art.m_data.data(), art.m_size, art.m_mime, width,
-                                            height);
-  }
-
-  if (StringUtils::StartsWith(additional_info, "video_"))
+  if (imageURL.IsSpecialImage())
   {
-    EmbeddedArt art;
-    if (CVideoThumbLoader::GetEmbeddedThumb(image, additional_info.substr(6), art))
-      return CTexture::LoadFromFileInMemory(art.m_data.data(), art.m_size, art.m_mime, width,
-                                            height);
+    IMAGE_FILES::CSpecialImageLoaderFactory specialImageLoader{};
+    auto texture = specialImageLoader.Load(imageURL);
+    if (texture)
+      return texture;
   }
 
   // Validate file URL to see if it is an image
-  CFileItem file(image, false);
-  file.FillInMimeType();
-  if (!(file.IsPicture() && !(file.IsZIP() || file.IsRAR() || file.IsCBR() || file.IsCBZ() ))
-      && !StringUtils::StartsWithNoCase(file.GetMimeType(), "image/") && !StringUtils::EqualsNoCase(file.GetMimeType(), "application/octet-stream")) // ignore non-pictures
-    return NULL;
+  CFileItem file(imageURL.GetTargetFile(), false);
 
-  std::unique_ptr<CTexture> texture =
-      CTexture::LoadFromFile(image, width, height, requirePixels, file.GetMimeType());
+  // An extension naming an image type says what asking the source would, so take it from there
+  // and save a round trip. Anything else - a dynamic page, no extension at all - still asks.
+  const std::string namedType{file.IsPicture() ? CMime::GetMimeType(file) : ""};
+  file.SetMimeType(namedType);
+  file.FillInMimeType();
+
+  if (!(file.IsPicture() && !(file.IsZIP() || file.IsRAR() || file.IsCBR() || file.IsCBZ())) &&
+      !MayBeAnImage(file.GetMimeType())) // ignore non-pictures
+  {
+    return {};
+  }
+
+  auto texture = CTexture::LoadFromFile(imageURL.GetTargetFile(), maxWidth, maxHeight,
+                                        CAspectRatio::KEEP, file.GetMimeType());
+  if (!texture && !namedType.empty())
+  {
+    // The extension named a type that couldn't be read, so the source may be serving another and
+    // only it knows which. It may equally not be an image at all, in which case there is nothing
+    // to try again with.
+    file.SetMimeType("");
+    file.FillInMimeType();
+    if (MayBeAnImage(file.GetMimeType()))
+    {
+      texture = CTexture::LoadFromFile(imageURL.GetTargetFile(), maxWidth, maxHeight,
+                                       CAspectRatio::KEEP, file.GetMimeType());
+    }
+  }
   if (!texture)
-    return NULL;
+    return {};
 
   // EXIF bits are interpreted as: <flipXY><flipY*flipX><flipX>
   // where to undo the operation we apply them in reverse order <flipX>*<flipY*flipX>*<flipXY>
   // When flipped we have an additional <flipX> on the left, which is equivalent to toggling the last bit
-  if (additional_info == "flipped")
+  if (imageURL.flipped)
     texture->SetOrientation(texture->GetOrientation() ^ 1);
 
   return texture;
 }
 
-bool CTextureCacheJob::UpdateableURL(const std::string &url) const
+std::string CTextureCacheJob::FormatImageHash(int64_t modificationTime, int64_t size)
 {
-  // we don't constantly check online images
-  return !(StringUtils::StartsWith(url, "http://") || StringUtils::StartsWith(url, "https://"));
+  if (modificationTime == 0 && size == 0)
+    return "";
+
+  return StringUtils::Format("d{}s{}", modificationTime, size);
 }
 
-std::string CTextureCacheJob::GetImageHash(const std::string &url)
+std::string CTextureCacheJob::GetImageHash(const CFileItem& listedFile)
 {
-  // silently ignore - we cannot state these
-  if (URIUtils::IsProtocol(url,"addons") || URIUtils::IsProtocol(url,"plugin"))
+  // The raw values the listing carried, rather than the item's date/time (UTC conversion -> DST issues)
+  int64_t modificationTime{listedFile.GetProperty(XFILE::DIR_PROPERTY_STAT_MTIME).asInteger(0)};
+  if (modificationTime == 0)
+    modificationTime = listedFile.GetProperty(XFILE::DIR_PROPERTY_STAT_CTIME).asInteger(0);
+
+  // Not every VFS layer fills these in. Without a time the size alone would not match a stat-based
+  // hash, so say nothing is known and let the file be stat'ed as usual
+  if (modificationTime == 0)
+    return "";
+
+  return FormatImageHash(modificationTime, listedFile.GetSize());
+}
+
+std::string CTextureCacheJob::GetImageHashFromStat(const std::string& url)
+{
+  // silently ignore - we cannot stat these
+  // in the case of upnp thumbs are/should be provided when filling the directory list, there's no reason to stat all object ids
+  if (URIUtils::IsProtocol(url, "addons") || URIUtils::IsProtocol(url, "plugin") ||
+      URIUtils::IsProtocol(url, "upnp"))
     return "";
 
   struct __stat64 st;
@@ -249,8 +277,9 @@ std::string CTextureCacheJob::GetImageHash(const std::string &url)
     int64_t time = st.st_mtime;
     if (!time)
       time = st.st_ctime;
-    if (time || st.st_size)
-      return StringUtils::Format("d{}s{}", time, st.st_size);
+
+    if (const std::string hash{FormatImageHash(time, st.st_size)}; !hash.empty())
+      return hash;
 
     // the image exists but we couldn't determine the mtime/ctime and/or size
     // so set an obviously bad hash
@@ -265,7 +294,7 @@ CTextureUseCountJob::CTextureUseCountJob(const std::vector<CTextureDetails> &tex
 {
 }
 
-bool CTextureUseCountJob::operator==(const CJob* job) const
+bool CTextureUseCountJob::Equals(const CJob* job) const
 {
   if (strcmp(job->GetType(),GetType()) == 0)
   {

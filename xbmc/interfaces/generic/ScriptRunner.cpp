@@ -8,7 +8,7 @@
 
 #include "ScriptRunner.h"
 
-#include "Application.h"
+#include "ServiceBroker.h"
 #include "URL.h"
 #include "dialogs/GUIDialogBusy.h"
 #include "dialogs/GUIDialogProgress.h"
@@ -16,6 +16,7 @@
 #include "guilib/GUIWindowManager.h"
 #include "interfaces/generic/RunningScriptObserver.h"
 #include "interfaces/generic/ScriptInvocationManager.h"
+#include "messaging/ApplicationMessenger.h"
 #include "threads/SystemClock.h"
 #include "utils/StringUtils.h"
 #include "utils/log.h"
@@ -32,17 +33,12 @@ ADDON::AddonPtr CScriptRunner::GetAddon() const
 CScriptRunner::CScriptRunner() : m_scriptDone(true)
 { }
 
-bool CScriptRunner::StartScript(const ADDON::AddonPtr& addon, const std::string& path)
-{
-  return RunScriptInternal(addon, path, 0, false);
-}
-
 bool CScriptRunner::RunScript(const ADDON::AddonPtr& addon,
-                              const std::string& path,
+                              const CURL& url,
                               int handle,
                               bool resume)
 {
-  return RunScriptInternal(addon, path, handle, resume, true);
+  return RunScriptInternal(addon, url, handle, resume, true);
 }
 
 void CScriptRunner::SetDone()
@@ -50,20 +46,15 @@ void CScriptRunner::SetDone()
   m_scriptDone.Set();
 }
 
-int CScriptRunner::ExecuteScript(const ADDON::AddonPtr& addon, const std::string& path, bool resume)
+int CScriptRunner::ExecuteScript(const ADDON::AddonPtr& addon, const CURL& path, bool resume)
 {
   return ExecuteScript(addon, path, -1, resume);
 }
 
-int CScriptRunner::ExecuteScript(const ADDON::AddonPtr& addon,
-                                 const std::string& path,
-                                 int handle,
-                                 bool resume)
+int CScriptRunner::ExecuteScript(const ADDON::AddonPtr& addon, CURL url, int handle, bool resume)
 {
-  if (addon == nullptr || path.empty())
+  if (addon == nullptr)
     return false;
-
-  CURL url(path);
 
   // get options and remove them from the URL because we can then use the url
   // to generate the base path which is passed to the add-on script
@@ -91,13 +82,10 @@ int CScriptRunner::ExecuteScript(const ADDON::AddonPtr& addon,
   return scriptId;
 }
 
-bool CScriptRunner::RunScriptInternal(const ADDON::AddonPtr& addon,
-                                      const std::string& path,
-                                      int handle,
-                                      bool resume,
-                                      bool wait /* = true */)
+bool CScriptRunner::RunScriptInternal(
+    const ADDON::AddonPtr& addon, const CURL& url, int handle, bool resume, bool wait /* = true */)
 {
-  if (addon == nullptr || path.empty())
+  if (addon == nullptr)
     return false;
 
   // reset our wait event
@@ -106,7 +94,7 @@ bool CScriptRunner::RunScriptInternal(const ADDON::AddonPtr& addon,
   // store the add-on
   m_addon = addon;
 
-  int scriptId = ExecuteScript(addon, path, handle, resume);
+  int scriptId = ExecuteScript(addon, url, handle, resume);
   if (scriptId < 0)
     return false;
 
@@ -127,7 +115,7 @@ bool CScriptRunner::WaitOnScriptResult(int scriptId,
   // Add-on scripts can be called from the main and other threads. If called
   // form the main thread, we need to bring up the BusyDialog in order to
   // keep the render loop alive
-  if (g_application.IsCurrentThread())
+  if (CServiceBroker::GetAppMessenger()->IsProcessThread())
   {
     if (!m_scriptDone.Wait(20ms))
     {
@@ -135,7 +123,8 @@ bool CScriptRunner::WaitOnScriptResult(int scriptId,
       CRunningScriptObserver scriptObs(scriptId, m_scriptDone);
 
       auto& wm = CServiceBroker::GetGUI()->GetWindowManager();
-      if (wm.IsModalDialogTopmost(WINDOW_DIALOG_PROGRESS))
+      // A closing progress dialog stops pumping the render loop once it becomes inactive.
+      if (wm.GetTopmostModalDialog(true) == WINDOW_DIALOG_PROGRESS)
       {
         auto progress = wm.GetWindow<CGUIDialogProgress>(WINDOW_DIALOG_PROGRESS);
         if (!progress->WaitOnEvent(m_scriptDone))
@@ -155,7 +144,7 @@ bool CScriptRunner::WaitOnScriptResult(int scriptId,
       ;
 
     // give the script 30 seconds to exit before we attempt to stop it
-    XbmcThreads::EndTime timer(30000);
+    XbmcThreads::EndTime<> timer(30s);
     while (!timer.IsTimePast() && CScriptInvocationManager::GetInstance().IsRunning(scriptId) &&
            !m_scriptDone.Wait(20ms))
       ;

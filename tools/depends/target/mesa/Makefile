@@ -1,9 +1,12 @@
 include ../../Makefile.include
-DEPS=../../Makefile.include Makefile
+DEPS =../../Makefile.include Makefile ../../download-files.include \
+                      01-all-py312-setuptools.patch
 
 LIBNAME=mesa
-VERSION=20.1.7
+VERSION=23.0.1
 ARCHIVE=$(LIBNAME)-$(VERSION).tar.xz
+SHA512=9bbe0ba0b1a16fe10b35b6aa3a821d96ab9c4ce4ad38056e2c32271e50b48fd5ef6e1a0babadded631f2b136dfb15acf0c41475d73ee28d132c861ce96517e24
+include ../../download-files.include
 
 MESON_BUILD_TYPE=release
 
@@ -14,8 +17,11 @@ endif
 ifeq ($(CPU), x86_64)
   MESA_GALLIUM_DRIVERS=iris
 else ifeq ($(CPU), $(filter $(CPU), arm aarch64))
-  MESA_GALLIUM_DRIVERS=kmsro,vc4
-  MESA_EXTRA=-Dplatforms=wayland,drm
+  MESA_GALLIUM_DRIVERS=kmsro,vc4,swrast,panfrost
+endif
+
+ifeq ($(RENDER_SYSTEM),gles)
+  MESA_EXTRA=-Dplatforms=wayland
 endif
 
 # configuration settings
@@ -26,31 +32,30 @@ CONFIGURE = $(NATIVEPREFIX)/bin/python3 $(NATIVEPREFIX)/bin/meson \
 	-Ddri-drivers= \
 	-Dgallium-drivers="$(MESA_GALLIUM_DRIVERS)" \
 	-Dgallium-extra-hud=false \
-	-Dgallium-xvmc=false \
 	-Dgallium-omx=disabled \
 	-Dgallium-nine=false \
 	-Dgallium-opencl=disabled \
 	-Dvulkan-drivers= \
 	-Dshader-cache=true \
-	-Dshared-glapi=true \
+	-Dshared-glapi=enabled \
 	-Dopengl=true \
-	-Dgbm=true \
-	-Degl=true \
+	-Dgbm=enabled \
+	-Degl=enabled \
 	-Dvalgrind=false \
 	-Dlibunwind=false \
 	-Dlmsensors=false \
 	-Dbuild-tests=false \
 	-Dselinux=false \
-	-Dosmesa=none \
-	-Ddri3=false \
+	-Dosmesa=false \
+	-Ddri3=disabled \
 	-Dglx=disabled \
 	-Dglvnd=false \
 	-Dllvm=false \
-	-Dgallium-vdpau=false \
-	-Dgallium-va=false \
-	-Dgallium-xa=false \
-	-Dgles1=false \
-	-Dgles2=true \
+	-Dgallium-vdpau=disabled \
+	-Dgallium-va=disabled \
+	-Dgallium-xa=disabled \
+	-Dgles1=disabled \
+	-Dgles2=enabled \
 	$(MESA_EXTRA)
 
 ifeq ($(CROSS_COMPILING), yes)
@@ -68,18 +73,15 @@ LIBDYLIB=$(PLATFORM)/build/src/egl/libEGL.so
 
 all: .installed-$(PLATFORM)
 
-download: $(TARBALLS_LOCATION)/$(ARCHIVE)
-
-$(TARBALLS_LOCATION)/$(ARCHIVE):
-	cd $(TARBALLS_LOCATION); $(RETRIEVE_TOOL) $(RETRIEVE_TOOL_FLAGS) $(BASE_URL)/$(ARCHIVE)
-
-$(PLATFORM): $(TARBALLS_LOCATION)/$(ARCHIVE) $(DEPS)
+.configured-$(PLATFORM): $(DEPS) | $(TARBALLS_LOCATION)/$(ARCHIVE).$(HASH_TYPE)
 	rm -rf $(PLATFORM)/*; mkdir -p $(PLATFORM)
 	cd $(PLATFORM); $(ARCHIVE_TOOL) $(ARCHIVE_TOOL_FLAGS) $(TARBALLS_LOCATION)/$(ARCHIVE)
 	cd $(PLATFORM); rm -rf build; mkdir -p build
+	cd $(PLATFORM); patch -p1 -i ../01-all-py312-setuptools.patch
 	cd $(PLATFORM); $(CONFIGURE) . build
+	touch $@
 
-$(LIBDYLIB): $(PLATFORM)
+$(LIBDYLIB): .configured-$(PLATFORM)
 	cd $(PLATFORM)/build; $(NATIVEPREFIX)/bin/ninja -v
 
 .installed-$(PLATFORM): $(LIBDYLIB)
@@ -88,7 +90,7 @@ $(LIBDYLIB): $(PLATFORM)
 
 clean:
 	$(MAKE) -C $(PLATFORM) clean
-	rm -f .installed-$(PLATFORM)
+	rm -f .installed-$(PLATFORM) .configured-$(PLATFORM)
 
 distclean:
-	rm -rf $(PLATFORM) .installed-$(PLATFORM)
+	rm -rf $(PLATFORM) .installed-$(PLATFORM) .configured-$(PLATFORM)

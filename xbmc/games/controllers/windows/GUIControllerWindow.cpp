@@ -8,17 +8,19 @@
 
 #include "GUIControllerWindow.h"
 
-#include "ControllerInstaller.h"
 #include "GUIControllerDefines.h"
 #include "GUIControllerList.h"
 #include "GUIFeatureList.h"
 #include "ServiceBroker.h"
+#include "addons/AddonEvents.h"
 #include "addons/AddonManager.h"
 #include "addons/IAddon.h"
+#include "addons/addoninfo/AddonType.h"
 #include "addons/gui/GUIWindowAddonBrowser.h"
 #include "cores/RetroPlayer/guibridge/GUIGameRenderManager.h"
 #include "cores/RetroPlayer/guibridge/GUIGameSettingsHandle.h"
 #include "games/addons/GameClient.h"
+#include "games/controllers/dialogs/ControllerInstaller.h"
 #include "games/controllers/dialogs/GUIDialogIgnoreInput.h"
 #include "guilib/GUIButtonControl.h"
 #include "guilib/GUIControl.h"
@@ -31,7 +33,6 @@
 
 using namespace KODI;
 using namespace GAME;
-using namespace KODI::MESSAGING;
 
 CGUIControllerWindow::CGUIControllerWindow(void)
   : CGUIDialog(WINDOW_DIALOG_GAME_CONTROLLERS, "DialogGameControllers.xml"),
@@ -88,6 +89,11 @@ bool CGUIControllerWindow::OnMessage(CGUIMessage& message)
 
   switch (message.GetMessage())
   {
+    case GUI_MSG_WINDOW_INIT:
+    {
+      m_controllerId = message.GetStringParam();
+      break;
+    }
     case GUI_MSG_CLICKED:
     {
       int controlId = message.GetSenderId();
@@ -192,27 +198,6 @@ bool CGUIControllerWindow::OnMessage(CGUIMessage& message)
   return bHandled;
 }
 
-void CGUIControllerWindow::OnEvent(const ADDON::CRepositoryUpdater::RepositoryUpdated& event)
-{
-  UpdateButtons();
-}
-
-void CGUIControllerWindow::OnEvent(const ADDON::AddonEvent& event)
-{
-  using namespace ADDON;
-
-  if (typeid(event) == typeid(AddonEvents::Enabled) || // also called on install,
-      typeid(event) == typeid(AddonEvents::Disabled) || // not called on uninstall
-      typeid(event) == typeid(AddonEvents::UnInstalled) ||
-      typeid(event) == typeid(AddonEvents::ReInstalled))
-  {
-    if (CServiceBroker::GetAddonMgr().HasType(event.id, ADDON_GAME_CONTROLLER))
-    {
-      UpdateButtons();
-    }
-  }
-}
-
 void CGUIControllerWindow::OnInitWindow(void)
 {
   // Get active game add-on
@@ -223,7 +208,8 @@ void CGUIControllerWindow::OnInitWindow(void)
     {
       ADDON::AddonPtr addon;
       if (CServiceBroker::GetAddonMgr().GetAddon(gameSettingsHandle->GameClientID(), addon,
-                                                 ADDON::ADDON_GAMEDLL, ADDON::OnlyEnabled::YES))
+                                                 ADDON::AddonType::GAMEDLL,
+                                                 ADDON::OnlyEnabled::CHOICE_YES))
         gameClient = std::static_pointer_cast<CGameClient>(addon);
     }
   }
@@ -243,7 +229,7 @@ void CGUIControllerWindow::OnInitWindow(void)
 
   if (!m_controllerList && m_featureList)
   {
-    m_controllerList = new CGUIControllerList(this, m_featureList, m_gameClient);
+    m_controllerList = new CGUIControllerList(this, m_featureList, m_gameClient, m_controllerId);
     if (!m_controllerList->Initialize())
     {
       delete m_controllerList;
@@ -261,8 +247,24 @@ void CGUIControllerWindow::OnInitWindow(void)
   UpdateButtons();
 
   // subscribe to events
-  CServiceBroker::GetRepositoryUpdater().Events().Subscribe(this, &CGUIControllerWindow::OnEvent);
-  CServiceBroker::GetAddonMgr().Events().Subscribe(this, &CGUIControllerWindow::OnEvent);
+  CServiceBroker::GetRepositoryUpdater().Events().Subscribe(
+      this,
+      [this](const ADDON::CRepositoryUpdater::RepositoryUpdated& /*event*/) { UpdateButtons(); });
+  CServiceBroker::GetAddonMgr().Events().Subscribe(
+      this,
+      [this](const ADDON::AddonEvent& event)
+      {
+        using namespace ADDON;
+
+        if (typeid(event) == typeid(AddonEvents::Enabled) || // also called on install,
+            typeid(event) == typeid(AddonEvents::Disabled) || // not called on uninstall
+            typeid(event) == typeid(AddonEvents::UnInstalled) ||
+            typeid(event) == typeid(AddonEvents::ReInstalled))
+        {
+          if (CServiceBroker::GetAddonMgr().HasType(event.addonId, AddonType::GAME_CONTROLLER))
+            UpdateButtons();
+        }
+      });
 }
 
 void CGUIControllerWindow::OnDeinitWindow(int nextWindowID)
@@ -325,9 +327,9 @@ void CGUIControllerWindow::UpdateButtons(void)
   }
   else
   {
-    const bool bEnable =
-        CServiceBroker::GetAddonMgr().GetInstallableAddons(addons, ADDON::ADDON_GAME_CONTROLLER) &&
-        !addons.empty();
+    const bool bEnable = CServiceBroker::GetAddonMgr().GetInstallableAddons(
+                             addons, ADDON::AddonType::GAME_CONTROLLER) &&
+                         !addons.empty();
     CONTROL_ENABLE_ON_CONDITION(CONTROL_GET_MORE, bEnable);
     CONTROL_ENABLE_ON_CONDITION(CONTROL_GET_ALL, bEnable);
   }
@@ -336,12 +338,12 @@ void CGUIControllerWindow::UpdateButtons(void)
 void CGUIControllerWindow::GetMoreControllers(void)
 {
   std::string strAddonId;
-  if (CGUIWindowAddonBrowser::SelectAddonID(ADDON::ADDON_GAME_CONTROLLER, strAddonId, false, true,
-                                            false, true, false) < 0)
+  if (CGUIWindowAddonBrowser::SelectAddonID(ADDON::AddonType::GAME_CONTROLLER, strAddonId, false,
+                                            true, false, true, false) < 0)
   {
     // "Controller profiles"
     // "All available controller profiles are installed."
-    HELPERS::ShowOKDialogText(CVariant{35050}, CVariant{35062});
+    MESSAGING::HELPERS::ShowOKDialogText(CVariant{35050}, CVariant{35062});
     return;
   }
 }
@@ -364,7 +366,7 @@ void CGUIControllerWindow::ShowHelp(void)
 {
   // "Help"
   // <help text>
-  HELPERS::ShowOKDialogText(CVariant{10043}, CVariant{35055});
+  MESSAGING::HELPERS::ShowOKDialogText(CVariant{10043}, CVariant{35055});
 }
 
 void CGUIControllerWindow::ShowButtonCaptureDialog(void)

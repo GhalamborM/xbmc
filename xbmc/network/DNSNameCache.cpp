@@ -8,9 +8,15 @@
 
 #include "DNSNameCache.h"
 
-#include "threads/SingleLock.h"
-#include "utils/StringUtils.h"
+#include "network/Network.h"
 #include "utils/log.h"
+
+#include <cstdint>
+#include <cstring>
+#include <mutex>
+#include <string>
+#include <tuple>
+#include <utility>
 
 #if !defined(TARGET_WINDOWS) && defined(HAS_FILESYSTEM_SMB)
 #include "ServiceBroker.h"
@@ -22,13 +28,76 @@
 #include <netdb.h>
 #include <netinet/in.h>
 
-CDNSNameCache g_DNSCache;
+#if defined(TARGET_FREEBSD)
+#include <sys/socket.h>
+#endif
 
-CCriticalSection CDNSNameCache::m_critical;
+namespace
+{
+bool IsUnusableIPv4Address(uint32_t address)
+{
+  address = ntohl(address);
+  return address == INADDR_ANY || (address >> 24) == 127;
+}
 
-CDNSNameCache::CDNSNameCache(void) = default;
+/*!
+ * \brief Check whether an address can never be used to reach a remote host
+ *
+ * Resolvers do hand out loopback addresses for names that belong to another machine, e.g. an
+ * AAAA record of ::1 for a host whose A record is its real address. RFC 6724 destination
+ * address sorting puts such an address first, so the first result of a lookup cannot be
+ * trusted to be reachable.
+ */
+bool IsUnusableForRemoteHost(const addrinfo* info)
+{
+  switch (info->ai_family)
+  {
+    case AF_INET:
+    {
+      return IsUnusableIPv4Address(
+          reinterpret_cast<const sockaddr_in*>(info->ai_addr)->sin_addr.s_addr);
+    }
+    case AF_INET6:
+    {
+      const in6_addr& address = reinterpret_cast<const sockaddr_in6*>(info->ai_addr)->sin6_addr;
+      if (IN6_IS_ADDR_V4MAPPED(&address))
+      {
+        uint32_t address4;
+        std::memcpy(&address4, &address.s6_addr[12], sizeof(address4));
+        return IsUnusableIPv4Address(address4);
+      }
+      return IN6_IS_ADDR_UNSPECIFIED(&address) || IN6_IS_ADDR_LOOPBACK(&address) ||
+             IN6_IS_ADDR_LINKLOCAL(&address);
+    }
+    default:
+      return true;
+  }
+}
+} // unnamed namespace
 
-CDNSNameCache::~CDNSNameCache(void) = default;
+std::string KODI::NETWORK::SelectDNSAddress(const addrinfo* results)
+{
+  // take the first address that can reach a remote host, but keep an unreachable one as a
+  // fallback so that a name which only resolves to loopback, e.g. "localhost", still works
+  std::string fallback;
+  for (const addrinfo* info = results; info; info = info->ai_next)
+  {
+    std::string address = CNetworkBase::GetIpStr(info->ai_addr);
+    if (address.empty())
+      continue;
+
+    if (IsUnusableForRemoteHost(info))
+    {
+      if (fallback.empty())
+        fallback = std::move(address);
+      continue;
+    }
+
+    return address;
+  }
+
+  return fallback;
+}
 
 bool CDNSNameCache::Lookup(const std::string& strHostName, std::string& strIpAddress)
 {
@@ -36,94 +105,59 @@ bool CDNSNameCache::Lookup(const std::string& strHostName, std::string& strIpAdd
     return false;
 
   // first see if this is already an ip address
-  unsigned long address = inet_addr(strHostName.c_str());
+  in_addr addr4;
+  in6_addr addr6;
   strIpAddress.clear();
 
-  if (address != INADDR_NONE)
+  if (inet_pton(AF_INET, strHostName.c_str(), &addr4) ||
+      inet_pton(AF_INET6, strHostName.c_str(), &addr6))
   {
-    strIpAddress = StringUtils::Format("{}.{}.{}.{}", (address & 0xFF), (address & 0xFF00) >> 8,
-                                       (address & 0xFF0000) >> 16, (address & 0xFF000000) >> 24);
+    strIpAddress = strHostName;
     return true;
   }
 
   // check if there's a custom entry or if it's already cached
-  if(g_DNSCache.GetCached(strHostName, strIpAddress))
+  if (GetCached(strHostName, strIpAddress))
     return true;
-
-#if !defined(TARGET_WINDOWS) && defined(HAS_FILESYSTEM_SMB)
-  // perform netbios lookup (win32 is handling this via gethostbyname)
-  char nmb_ip[100];
-  char line[200];
-  std::vector<std::string> addresses;
-
-  std::string cmd = "nmblookup " + strHostName;
-  FILE* fp = popen(cmd.c_str(), "r");
-  if (fp)
-  {
-    while (fgets(line, sizeof line, fp))
-    {
-      if (sscanf(line, "%99s *<00>\n", nmb_ip))
-      {
-        if (inet_addr(nmb_ip) != INADDR_NONE)
-          addresses.emplace_back(nmb_ip);
-      }
-    }
-    pclose(fp);
-  }
-
-  for (const auto& ip : addresses)
-  {
-    cmd = "nmblookup -A " + ip;
-    fp = popen(cmd.c_str(), "r");
-    if (fp)
-    {
-      while (fgets(line, sizeof line, fp))
-        ;
-      if (pclose(fp) == 0)
-      {
-        strIpAddress = ip;
-        break;
-      }
-    }
-  }
-
-  if (!strIpAddress.empty())
-  {
-    g_DNSCache.Add(strHostName, strIpAddress);
-    return true;
-  }
-#endif
 
   // perform dns lookup
-  struct hostent *host = gethostbyname(strHostName.c_str());
-  if (host && host->h_addr_list[0])
+  addrinfo hints{};
+  addrinfo* res;
+
+  hints.ai_family = AF_UNSPEC;
+  hints.ai_socktype = SOCK_STREAM;
+  hints.ai_flags |= AI_CANONNAME;
+
+  if (getaddrinfo(strHostName.c_str(), nullptr, &hints, &res) == 0)
   {
-    strIpAddress = StringUtils::Format("{}.{}.{}.{}", (unsigned char)host->h_addr_list[0][0],
-                                       (unsigned char)host->h_addr_list[0][1],
-                                       (unsigned char)host->h_addr_list[0][2],
-                                       (unsigned char)host->h_addr_list[0][3]);
-    g_DNSCache.Add(strHostName, strIpAddress);
-    return true;
+    strIpAddress = KODI::NETWORK::SelectDNSAddress(res);
+    freeaddrinfo(res);
+
+    if (!strIpAddress.empty())
+    {
+      Add(strHostName, strIpAddress);
+      return true;
+    }
   }
 
   CLog::Log(LOGERROR, "Unable to lookup host: '{}'", strHostName);
   return false;
 }
 
-bool CDNSNameCache::GetCached(const std::string& strHostName, std::string& strIpAddress)
+bool CDNSNameCache::GetCached(const std::string& strHostName, std::string& strIpAddress) const
 {
-  {
-    CSingleLock lock(m_critical);
+  std::lock_guard lock(m_critical);
 
-    // loop through all DNSname entries and see if strHostName is cached
-    for (const auto& DNSname : g_DNSCache.m_vecDNSNames)
+  if (auto iter = m_hostToIp.find(strHostName); iter != m_hostToIp.end())
+  {
+    if (!iter->second.m_expirationTime ||
+        iter->second.m_expirationTime > std::chrono::steady_clock::now())
     {
-      if (DNSname.m_strHostName == strHostName)
-      {
-        strIpAddress = DNSname.m_strIpAddress;
-        return true;
-      }
+      strIpAddress = iter->second.m_ip;
+      return true;
     }
+    else
+      m_hostToIp.erase(iter);
   }
 
 #if !defined(TARGET_WINDOWS) && defined(HAS_FILESYSTEM_SMB)
@@ -145,12 +179,20 @@ bool CDNSNameCache::GetCached(const std::string& strHostName, std::string& strIp
 
 void CDNSNameCache::Add(const std::string& strHostName, const std::string& strIpAddress)
 {
-  CDNSName dnsName;
-
-  dnsName.m_strHostName = strHostName;
-  dnsName.m_strIpAddress  = strIpAddress;
-
-  CSingleLock lock(m_critical);
-  g_DNSCache.m_vecDNSNames.push_back(dnsName);
+  std::lock_guard lock(m_critical);
+  m_hostToIp.emplace(std::piecewise_construct, std::forward_as_tuple(strHostName),
+                     std::forward_as_tuple(strIpAddress, std::chrono::steady_clock::now() + TTL));
 }
 
+void CDNSNameCache::AddPermanent(const std::string& strHostName, const std::string& strIpAddress)
+{
+  std::lock_guard lock(m_critical);
+  m_hostToIp.emplace(std::piecewise_construct, std::forward_as_tuple(strHostName),
+                     std::forward_as_tuple(strIpAddress, std::nullopt));
+}
+
+CDNSNameCache::CacheEntry::CacheEntry(
+    std::string ip, std::optional<std::chrono::steady_clock::time_point> expirationTime)
+  : m_ip(std::move(ip)), m_expirationTime(expirationTime)
+{
+}

@@ -13,12 +13,14 @@
 #include <string>
 #include <vector>
 
+extern "C"
+{
+#include <libavutil/pixdesc.h>
+}
+
 //******************************************************************************
 // VideoPicture
 //******************************************************************************
-
-VideoPicture::VideoPicture() = default;
-
 VideoPicture::~VideoPicture()
 {
   if (videoBuffer)
@@ -40,9 +42,9 @@ void VideoPicture::Reset()
   iFrameType = 0;
   color_space = AVCOL_SPC_UNSPECIFIED;
   color_range = 0;
-  chroma_position = 0;
+  chroma_position = AVCHROMA_LOC_UNSPECIFIED;
   color_primaries = AVColorPrimaries::AVCOL_PRI_UNSPECIFIED;
-  color_transfer = 0;
+  color_transfer = AVCOL_TRC_UNSPECIFIED;
   colorBits = 8;
   stereoMode.clear();
 
@@ -50,6 +52,9 @@ void VideoPicture::Reset()
   qstride = 0;
   qscale_type = 0;
   pict_type = 0;
+
+  hdrType = StreamHdrType::HDR_TYPE_NONE;
+  doviRpu.reset();
 
   hasDisplayMetadata = false;
   hasLightMetadata = false;
@@ -79,5 +84,37 @@ VideoPicture& VideoPicture::SetParams(const VideoPicture &pic)
   return *this;
 }
 
-VideoPicture::VideoPicture(VideoPicture const&) = default;
-VideoPicture& VideoPicture::operator=(VideoPicture const&) = default;
+bool VideoPicture::IsFullRange(AVColorRange range, AVPixelFormat format)
+{
+  if (range != AVCOL_RANGE_UNSPECIFIED)
+    return range == AVCOL_RANGE_JPEG;
+
+  const AVPixFmtDescriptor* desc = av_pix_fmt_desc_get(format);
+  return desc && (desc->flags & AV_PIX_FMT_FLAG_RGB);
+}
+
+bool VideoPicture::CompareDisplayMetadata(const VideoPicture& pic) const
+{
+  if (this->hasDisplayMetadata != pic.hasDisplayMetadata)
+    return false;
+
+  // both this and pic not has display metadata (e.g. SDR video)
+  // returns true because it is equal and there is no need to compare
+  if (!pic.hasDisplayMetadata)
+    return true;
+
+  // both this and pic has display metadata
+  return this->displayMetadata.max_luminance.num == pic.displayMetadata.max_luminance.num &&
+         this->displayMetadata.max_luminance.den == pic.displayMetadata.max_luminance.den &&
+         this->displayMetadata.min_luminance.num == pic.displayMetadata.min_luminance.num &&
+         this->displayMetadata.min_luminance.den == pic.displayMetadata.min_luminance.den;
+}
+
+bool VideoPicture::IsSameParams(const VideoPicture& pic) const
+{
+  return this->iWidth == pic.iWidth && this->iHeight == pic.iHeight &&
+         this->iDisplayWidth == pic.iDisplayWidth && this->iDisplayHeight == pic.iDisplayHeight &&
+         this->stereoMode == pic.stereoMode && this->color_primaries == pic.color_primaries &&
+         this->color_transfer == pic.color_transfer && this->hdrType == pic.hdrType &&
+         CompareDisplayMetadata(pic);
+}

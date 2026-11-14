@@ -69,9 +69,7 @@ protected:
   ADDON::AddonPtr m_addon;
 
 private:
-  int m_id;
-  InvokerState m_state;
+  int m_id = -1;
+  InvokerState m_state = InvokerStateUninitialized;
   ILanguageInvocationHandler *m_invocationHandler;
 };
-
-typedef std::shared_ptr<ILanguageInvoker> LanguageInvokerPtr;

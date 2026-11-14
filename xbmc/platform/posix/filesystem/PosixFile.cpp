@@ -224,18 +224,18 @@ void CPosixFile::Flush()
     fsync(m_fd);
 }
 
-int CPosixFile::IoControl(EIoControl request, void* param)
+int CPosixFile::IoControl(IOControl request, void* param)
 {
   if (m_fd < 0)
     return -1;
 
-  if (request == IOCTRL_NATIVE)
+  if (request == IOControl::NATIVE)
   {
     if(!param)
       return -1;
     return ioctl(m_fd, ((SNativeIoControl*)param)->request, ((SNativeIoControl*)param)->param);
   }
-  else if (request == IOCTRL_SEEK_POSSIBLE)
+  else if (request == IOControl::SEEK_POSSIBLE)
   {
     if (GetPosition() < 0)
       return -1; // current position is unknown, can't test seeking
@@ -351,6 +351,7 @@ int CPosixFile::Stat(const CURL& url, struct __stat64* buffer)
   ret = statx(dirfd, filename.c_str(), flags, mask, &stxbuf);
   if (ret == 0)
   {
+    *buffer = {};
     buffer->st_mtime = stxbuf.stx_mtime.tv_sec; // modification time
     if (stxbuf.stx_btime.tv_sec != 0)
       buffer->st_ctime = stxbuf.stx_btime.tv_sec; // birth (creation) time

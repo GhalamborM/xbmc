@@ -23,7 +23,7 @@ class CInputStreamProvider
 public:
   CInputStreamProvider(const ADDON::AddonInfoPtr& addonInfo, KODI_HANDLE parentInstance);
 
-  void GetAddonInstance(INSTANCE_TYPE instance_type,
+  void GetAddonInstance(InstanceType instance_type,
                         ADDON::AddonInfoPtr& addonInfo,
                         KODI_HANDLE& parentInstance) override;
 
@@ -81,7 +81,7 @@ public:
   DemuxPacket* ReadDemux() override;
   CDemuxStream* GetStream(int streamId) const override;
   std::vector<CDemuxStream*> GetStreams() const override;
-  void EnableStream(int streamId, bool enable) override;
+  bool EnableStream(int streamId, bool enable) override;
   bool OpenStream(int streamid) override;
 
   int GetNrOfStreams() const override;
@@ -89,7 +89,10 @@ public:
   bool SeekTime(double time, bool backward = false, double* startpts = nullptr) override;
   void AbortDemux() override;
   void FlushDemux() override;
-  void SetVideoResolution(int width, int height) override;
+  void SetVideoResolution(unsigned int width,
+                          unsigned int height,
+                          unsigned int maxWidth,
+                          unsigned int maxHeight) override;
   bool IsRealtime() override;
 
   // IChapter
@@ -97,22 +100,33 @@ public:
   int GetChapter() override;
   int GetChapterCount() override;
   void GetChapterName(std::string& name, int ch = -1) override;
-  int64_t GetChapterPos(int ch = -1) override;
+  std::chrono::milliseconds GetChapterPos(int ch = -1) override;
   bool SeekChapter(int ch) override;
 
 protected:
   static int ConvertVideoCodecProfile(STREAMCODEC_PROFILE profile);
+  static int ConvertAudioCodecProfile(STREAMCODEC_PROFILE profile);
 
   IVideoPlayer* m_player;
 
 private:
+  void DetectScreenResolution();
+
+  unsigned int m_currentVideoWidth{0};
+  unsigned int m_currentVideoHeight{0};
+
   std::vector<std::string> m_fileItemProps;
   INPUTSTREAM_CAPABILITIES m_caps;
 
   int m_streamCount = 0;
 
-  AddonInstance_InputStream m_struct;
   std::shared_ptr<CInputStreamProvider> m_subAddonProvider;
+
+  /*!
+   * This class takes ownership of the `CDemuxStream`s created
+   * in `cb_get_stream_transfer` by storing them in this vector
+   */
+  std::vector<std::unique_ptr<CDemuxStream>> m_streams;
 
   /*!
    * Callbacks from add-on to kodi

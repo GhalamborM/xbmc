@@ -12,7 +12,9 @@
 #include "cores/RetroPlayer/buffers/BaseRenderBufferPool.h"
 #include "cores/RetroPlayer/buffers/video/RenderBufferSysMem.h"
 #include "cores/RetroPlayer/process/RPProcessInfo.h"
+#include "cores/RetroPlayer/shaders/windows/RPWinOutputShader.h"
 
+#include <map>
 #include <memory>
 #include <stdint.h>
 #include <vector>
@@ -24,6 +26,11 @@ struct SwsContext;
 
 namespace KODI
 {
+namespace SHADER
+{
+class CShaderTextureDX;
+} // namespace SHADER
+
 namespace RETRO
 {
 class CRenderContext;
@@ -46,12 +53,12 @@ class CWinRenderBuffer : public CRenderBufferSysMem
 {
 public:
   CWinRenderBuffer(AVPixelFormat pixFormat, DXGI_FORMAT dxFormat);
-  ~CWinRenderBuffer() override = default;
+  ~CWinRenderBuffer() override;
 
   // implementation of IRenderBuffer via CRenderBufferSysMem
   bool UploadTexture() override;
 
-  CD3DTexture* GetTarget() { return m_intermediateTarget.get(); }
+  SHADER::CShaderTextureDX* GetTarget() { return m_intermediateTarget.get(); }
 
 private:
   bool CreateTexture();
@@ -59,19 +66,19 @@ private:
   bool ReleaseTexture();
 
   bool CreateScalingContext();
-  void ScalePixels(uint8_t* source,
+  void ScalePixels(const uint8_t* source,
                    unsigned int sourceStride,
                    uint8_t* target,
                    unsigned int targetStride);
 
-  static AVPixelFormat GetPixFormat(DXGI_FORMAT dxFormat);
+  static AVPixelFormat GetPixFormat();
 
   // Construction parameters
   const AVPixelFormat m_pixFormat;
   const DXGI_FORMAT m_targetDxFormat;
 
   AVPixelFormat m_targetPixFormat;
-  std::unique_ptr<CD3DTexture> m_intermediateTarget;
+  std::unique_ptr<SHADER::CShaderTextureDX> m_intermediateTarget;
 
   SwsContext* m_swsContext = nullptr;
 };
@@ -89,8 +96,8 @@ public:
   IRenderBuffer* CreateRenderBuffer(void* header = nullptr) override;
 
   // DirectX interface
-  bool ConfigureDX(DXGI_FORMAT dxFormat);
-  CRPWinOutputShader* GetShader(SCALINGMETHOD scalingMethod) const;
+  bool ConfigureDX();
+  SHADER::CRPWinOutputShader* GetShader(SCALINGMETHOD scalingMethod) const;
 
 private:
   static const std::vector<SCALINGMETHOD>& GetScalingMethods();
@@ -98,7 +105,7 @@ private:
   void CompileOutputShaders();
 
   DXGI_FORMAT m_targetDxFormat = DXGI_FORMAT_UNKNOWN;
-  std::map<SCALINGMETHOD, std::unique_ptr<CRPWinOutputShader>> m_outputShaders;
+  std::map<SCALINGMETHOD, std::unique_ptr<SHADER::CRPWinOutputShader>> m_outputShaders;
 };
 
 class CRPWinRenderer : public CRPBaseRenderer
@@ -121,12 +128,19 @@ public:
   static const SCALINGMETHOD DEFAULT_SCALING_METHOD = SCALINGMETHOD::NEAREST;
 
 protected:
-  // implementation of CRPBaseRenderer
-  bool ConfigureInternal() override;
-  void RenderInternal(bool clear, uint8_t alpha) override;
+  struct RenderBufferTextures
+  {
+    std::shared_ptr<SHADER::CShaderTextureDX> targetTexture;
+  };
 
-private:
-  void Render(CD3DTexture& target);
+  // Implementation of CRPBaseRenderer
+  bool ConfigureInternal() override;
+  void RenderInternal(uint8_t alpha) override;
+  void FlushInternal() override;
+
+  void Render(CD3DTexture& target, uint8_t alpha);
+
+  std::map<CWinRenderBuffer*, std::unique_ptr<RenderBufferTextures>> m_RBTexturesMap;
 };
 } // namespace RETRO
 } // namespace KODI

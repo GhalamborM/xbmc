@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2005-2018 Team Kodi
+ *  Copyright (C) 2005-2026 Team Kodi
  *  This file is part of Kodi - https://kodi.tv
  *
  *  SPDX-License-Identifier: GPL-2.0-or-later
@@ -13,31 +13,50 @@
 //////////////////////////////////////////////////////////////////////
 
 #include "InfoScanner.h"
+#include "URL.h"
 #include "addons/Scraper.h"
+#include "filesystem/StackDirectory.h"
+#include "utils/XBMCTinyXML.h"
 
 #include <string>
 #include <utility>
+#include <vector>
+
+namespace ADDON
+{
+enum class AddonType;
+}
 
 class CNfoFile
 {
 public:
   virtual ~CNfoFile() { Close(); }
 
-  CInfoScanner::INFO_TYPE Create(const std::string&,
-                                 const ADDON::ScraperPtr&, int episode=-1);
+  CInfoScanner::InfoType Create(const std::string& nfoPath, const ADDON::ScraperPtr& info);
+
+  /*! \brief Re-parse the already loaded document, starting at its nth <movie> element.
+   Only valid after a successful Create(), and only for movie documents - nothing else can hold
+   more than one entry.
+   \param index 1-based index of the <movie> element to parse
+   \return the parse result, NONE if the document holds no such element
+   */
+  CInfoScanner::InfoType Reparse(int index);
+
   template<class T>
-    bool GetDetails(T& details, const char* document=NULL,
-                    bool prioritise=false)
+  bool GetDetails(T& details, const char* document = nullptr, bool prioritise = false) const
   {
-    CXBMCTinyXML doc;
     if (document)
+    {
+      CXBMCTinyXML doc;
       doc.Parse(document, TIXML_ENCODING_UNKNOWN);
-    else if (m_headPos < m_doc.size())
-      doc.Parse(m_doc.substr(m_headPos), TIXML_ENCODING_UNKNOWN);
-    else
+      return details.Load(doc.RootElement(), true, prioritise);
+    }
+
+    const TiXmlElement* root = GetRootElement();
+    if (!root)
       return false;
 
-    return details.Load(doc.RootElement(), true, prioritise);
+    return details.Load(root, true, prioritise);
   }
 
   void Close();
@@ -45,18 +64,37 @@ public:
   ADDON::ScraperPtr GetScraperInfo() { return m_info; }
   const CScraperUrl &ScraperUrl() const { return m_scurl; }
 
-  static int Scrape(ADDON::ScraperPtr& scraper, CScraperUrl& url,
-                    const std::string& content);
+  /*! \brief The bluray playlist given by a <playlist> element, if any.
+   Read from the same (indexed) element as GetDetails(), so multi-version nfos give the playlist
+   belonging to the version that was parsed.
+   \return the playlist number, or -1 if the nfo does not specify one
+   */
+  int GetBlurayPlaylist() const;
 
-  static std::vector<ADDON::ScraperPtr> GetScrapers(ADDON::TYPE type,
-                                                    const ADDON::ScraperPtr& selectedScraper);
+  /*! \brief The parts of a stack given by a <stack> element, if any.
+   Read from the same (indexed) element as GetDetails().
+   \return the parts, empty if the nfo does not describe a stack
+   */
+  std::vector<XFILE::StackPartPlaylist> GetStackParts() const;
 
 private:
+  CInfoScanner::InfoType TryParsing(ADDON::AddonType addonType) const;
+  CInfoScanner::InfoType TryParsing(const CURL& nfoPath, ADDON::ContentType contentType);
+  CInfoScanner::InfoType SearchNfoForScraperUrls(CInfoScanner::InfoType parseResult,
+                                                 const ADDON::ScraperPtr& info);
+  bool SeekToMovieIndex(int index);
+
+  // Returns the root element of m_doc (from m_headPos)
+  const TiXmlElement* GetRootElement() const;
+
   std::string m_doc;
   size_t m_headPos = 0;
+  ADDON::AddonType m_addonType{};
   ADDON::ScraperPtr m_info;
-  ADDON::TYPE m_type = ADDON::ADDON_UNKNOWN;
   CScraperUrl m_scurl;
 
-  int Load(const std::string&);
+  mutable CXBMCTinyXML m_xmlDoc;
+  mutable bool m_xmlParsed = false;
+
+  int Load(const CURL&);
 };

@@ -51,7 +51,7 @@ function check_xbmc_dylib_depends
 EXTERNAL_LIBS=$XBMC_DEPENDS
 
 TARGET_NAME=$FULL_PRODUCT_NAME
-TARGET_CONTENTS=$TARGET_BUILD_DIR/$TARGET_NAME/Contents
+TARGET_CONTENTS=$TARGET_BUILD_DIR
 
 TARGET_BINARY=$TARGET_CONTENTS/MacOS/$APP_NAME
 TARGET_FRAMEWORKS=$TARGET_CONTENTS/Libraries
@@ -64,11 +64,21 @@ mkdir -p "$TARGET_CONTENTS/Resources"
 rm -rf "$TARGET_CONTENTS/Libraries"
 mkdir -p "$TARGET_CONTENTS/Libraries"
 
-echo "Package $TARGET_BUILD_DIR/$APP_NAME"
-cp -f "$TARGET_BUILD_DIR/$APP_NAME" "$TARGET_BINARY"
-
 echo "Creating icon"
-iconutil -c icns --output "$TARGET_CONTENTS/Resources/kodi.icns" "$SRCROOT/tools/darwin/packaging/media/osx/icon.iconset"
+ICON_ROOT="${SOURCE_ROOT:-$SRCROOT}"
+ICON_ICNS="$ICON_ROOT/tools/darwin/packaging/media/osx/kodi.icns"
+ICON_ICONSET="$ICON_ROOT/tools/darwin/packaging/media/osx/icon.iconset"
+
+if [ -f "$ICON_ICNS" ]; then
+  echo "Using bundled icns: $ICON_ICNS"
+  cp -f "$ICON_ICNS" "$TARGET_CONTENTS/Resources/kodi.icns"
+elif [ -d "$ICON_ICONSET" ]; then
+  echo "Falling back to legacy iconset: $ICON_ICONSET"
+  iconutil -c icns --output "$TARGET_CONTENTS/Resources/kodi.icns" "$ICON_ICONSET"
+else
+  echo "ERROR: No macOS icon source found" >&2
+  exit 1
+fi
 
 cp -f "$SRCROOT/xbmc/platform/darwin/osx/Info.plist" "$TARGET_CONTENTS/"
 

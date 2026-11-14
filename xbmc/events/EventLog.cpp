@@ -8,6 +8,7 @@
 
 #include "EventLog.h"
 
+#include "FileItem.h"
 #include "GUIUserMessages.h"
 #include "ServiceBroker.h"
 #include "dialogs/GUIDialogKaiToast.h"
@@ -19,8 +20,8 @@
 #include "profiles/ProfileManager.h"
 #include "settings/Settings.h"
 #include "settings/SettingsComponent.h"
-#include "threads/SingleLock.h"
 
+#include <mutex>
 #include <utility>
 
 std::string CEventLog::EventLevelToString(EventLevel level)
@@ -56,7 +57,7 @@ EventLevel CEventLog::EventLevelFromString(const std::string& level)
   return EventLevel::Information;
 }
 
-Events CEventLog::Get() const
+const Events& CEventLog::Get() const
 {
   return m_events;
 }
@@ -65,7 +66,7 @@ Events CEventLog::Get(EventLevel level, bool includeHigherLevels /* = false */) 
 {
   Events events;
 
-  CSingleLock lock(m_critical);
+  std::unique_lock lock(m_critical);
   for (const auto& eventPtr : m_events)
   {
     if (eventPtr->GetLevel() == level ||
@@ -81,7 +82,7 @@ EventPtr CEventLog::Get(const std::string& eventPtrIdentifier) const
   if (eventPtrIdentifier.empty())
     return EventPtr();
 
-  CSingleLock lock(m_critical);
+  std::unique_lock lock(m_critical);
   const auto& eventPtr = m_eventsMap.find(eventPtrIdentifier);
   if (eventPtr == m_eventsMap.end())
     return EventPtr();
@@ -96,8 +97,8 @@ void CEventLog::Add(const EventPtr& eventPtr)
      (eventPtr->GetLevel() == EventLevel::Information && !CServiceBroker::GetSettingsComponent()->GetSettings()->GetBool(CSettings::SETTING_EVENTLOG_ENABLED_NOTIFICATIONS)))
     return;
 
-  CSingleLock lock(m_critical);
-  if (m_eventsMap.find(eventPtr->GetIdentifier()) != m_eventsMap.end())
+  std::unique_lock lock(m_critical);
+  if (m_eventsMap.contains(eventPtr->GetIdentifier()))
     return;
 
   // store the event
@@ -158,7 +159,7 @@ void CEventLog::Remove(const std::string& eventPtrIdentifier)
   if (eventPtrIdentifier.empty())
     return;
 
-  CSingleLock lock(m_critical);
+  std::unique_lock lock(m_critical);
   const auto& itEvent = m_eventsMap.find(eventPtrIdentifier);
   if (itEvent == m_eventsMap.end())
     return;
@@ -172,7 +173,7 @@ void CEventLog::Remove(const std::string& eventPtrIdentifier)
 
 void CEventLog::Clear()
 {
-  CSingleLock lock(m_critical);
+  std::unique_lock lock(m_critical);
   m_events.clear();
   m_eventsMap.clear();
 }
@@ -194,7 +195,7 @@ bool CEventLog::Execute(const std::string& eventPtrIdentifier)
   if (eventPtrIdentifier.empty())
     return false;
 
-  CSingleLock lock(m_critical);
+  std::unique_lock lock(m_critical);
   const auto& itEvent = m_eventsMap.find(eventPtrIdentifier);
   if (itEvent == m_eventsMap.end())
     return false;
@@ -224,6 +225,11 @@ void CEventLog::ShowFullEventLog(EventLevel level /* = EventLevel::Basic */, boo
 
 void CEventLog::SendMessage(const EventPtr& eventPtr, int message)
 {
+  // Without a GUI (eg. in tests) there is no event log window to tell
+  auto* gui{CServiceBroker::GetGUI()};
+  if (!gui)
+    return;
+
   CGUIMessage msg(GUI_MSG_NOTIFY_ALL, 0, 0, message, 0, XFILE::CEventsDirectory::EventToFileItem(eventPtr));
-  CServiceBroker::GetGUI()->GetWindowManager().SendThreadMessage(msg);
+  gui->GetWindowManager().SendThreadMessage(msg);
 }

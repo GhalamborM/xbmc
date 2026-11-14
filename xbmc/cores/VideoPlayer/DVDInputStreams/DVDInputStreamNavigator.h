@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2005-2018 Team Kodi
+ *  Copyright (C) 2005-2022 Team Kodi
  *  This file is part of Kodi - https://kodi.tv
  *
  *  SPDX-License-Identifier: GPL-2.0-or-later
@@ -13,10 +13,16 @@
 #include "DVDDemuxers/DVDDemux.h"
 #include "DVDInputStream.h"
 #include "DVDInputStreamFile.h"
+#include "DVDStateSerializer.h"
 #include "DllDvdNav.h"
+#include "cores/MenuType.h"
+#include "threads/CriticalSection.h"
 #include "utils/Geometry.h"
+#include "video/VideoInfoTag.h"
 
+#include <chrono>
 #include <string>
+#include <vector>
 
 #define DVD_VIDEO_BLOCKSIZE         DVD_VIDEO_LB_LEN // 2048 bytes
 
@@ -64,7 +70,12 @@ public:
   void OnDown() override;
   void OnLeft() override;
   void OnRight() override;
-  void OnMenu() override;
+
+  /*! \brief Open the Menu
+  * \return true if the menu is successfully opened, false otherwise
+  */
+  bool OnMenu() override;
+
   void OnBack() override;
   void OnNext() override;
   void OnPrevious() override;
@@ -73,9 +84,16 @@ public:
 
   int GetCurrentButton() override;
   int GetTotalButtons() override;
-  bool GetCurrentButtonInfo(CDVDOverlaySpu* pOverlayPicture, CDVDDemuxSPU* pSPU, int iButtonType /* 0 = selection, 1 = action (clicked)*/);
+  bool GetCurrentButtonInfo(CDVDOverlaySpu& pOverlayPicture,
+                            CDVDDemuxSPU* pSPU,
+                            int iButtonType /* 0 = selection, 1 = action (clicked)*/);
 
-  bool HasMenu() override { return true; }
+  /*!
+   * \brief Get the supported menu type
+   * \return The supported menu type
+  */
+  MenuType GetSupportedMenuType() override { return MenuType::NATIVE; }
+
   bool IsInMenu() override { return m_bInMenu; }
   double GetTimeStampCorrection() override { return (double)(m_iVobUnitCorrection * 1000) / 90; }
 
@@ -99,8 +117,8 @@ public:
 
   int GetChapter() override { return m_iPart; } // the current part in the current title
   int GetChapterCount() override { return m_iPartCount; } // the number of parts in the current title
-  void GetChapterName(std::string& name, int idx=-1) override {};
-  int64_t GetChapterPos(int ch=-1) override;
+  void GetChapterName(std::string& name, int idx = -1) override {};
+  std::chrono::milliseconds GetChapterPos(int ch = -1) override;
   bool SeekChapter(int iChapter) override;
 
   CDVDInputStream::IDisplayTime* GetIDisplayTime() override { return this; }
@@ -113,35 +131,39 @@ public:
   bool PosTime(int iTimeInMsec) override; //seek within current pg(c)
 
   std::string GetDVDTitleString();
+
+  /*!
+   * \brief Get the DVD volume ID string. Alternative to the dvd title (since some DVD authors
+    even forget to set it).
+   * \return The DVD volume id
+  */
+  std::string GetDVDVolIdString();
+
   std::string GetDVDSerialString();
 
   void CheckButtons();
 
   VideoStreamInfo GetVideoStreamInfo();
 
+  void SaveCurrentState(const CStreamDetails& details) override;
+  UpdateState UpdateItemFromSavedStates(CFileItem& item, double time, bool& closed) override;
+  void UpdateStack(CFileItem& item) override;
+
 protected:
 
   int ProcessBlock(uint8_t* buffer, int* read);
-
-  /**
-   * XBMC     : the audio stream id we use in xbmc
-   * external : the audio stream id that is used in libdvdnav
-   */
-  int ConvertAudioStreamId_XBMCToExternal(int id);
-  int ConvertAudioStreamId_ExternalToXBMC(int id);
-
-  /**
-   * XBMC     : the subtitle stream id we use in xbmc
-   * external : the subtitle stream id that is used in libdvdnav
-   */
-  int ConvertSubtitleStreamId_XBMCToExternal(int id);
-  int ConvertSubtitleStreamId_ExternalToXBMC(int id);
 
   static void SetAudioStreamName(AudioStreamInfo &info, const audio_attr_t &audio_attributes);
   static void SetSubtitleStreamName(SubtitleStreamInfo &info, const subp_attr_t &subp_attributes);
 
   int GetAngleCount();
   void GetVideoResolution(uint32_t * width, uint32_t * height);
+
+  /*! \brief Provided a pod DVDState struct, fill it with the current dvdnav state
+  * \param[in,out] dvdstate the DVD state struct to be filled
+  * \return true if it was possible to fill the state struct based on the current dvdnav state, false otherwise
+  */
+  bool FillDVDState(DVDState& dvdstate);
 
   DllDvdNav m_dll;
   bool m_bCheckButtons;
@@ -174,6 +196,16 @@ protected:
   uint8_t m_lastblock[DVD_VIDEO_BLOCKSIZE];
   int m_lastevent;
 
+  /*!
+   * \brief Chapters start timestamps in milliseconds, per title. Chapter numbers are 1-based.
+   */
   std::map<int, std::map<int, int64_t>> m_mapTitleChapters;
+
+  /*! DVD state serializer handler */
+  CDVDStateSerializer m_dvdStateSerializer;
+
+  std::chrono::steady_clock::time_point m_startWatchTime{};
+  std::vector<PlaylistInformation> m_playedPlaylists;
+  CCriticalSection m_statesLock;
 };
 

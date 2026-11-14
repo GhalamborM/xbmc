@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2005-2018 Team Kodi
+ *  Copyright (C) 2005-2024 Team Kodi
  *  This file is part of Kodi - https://kodi.tv
  *
  *  SPDX-License-Identifier: GPL-2.0-or-later
@@ -25,15 +25,17 @@ namespace PERIPHERALS
 {
 class CPeripherals;
 
+/*!
+ * \ingroup peripherals
+ */
 class CPeripheralBusCEC : public CPeripheralBus
 {
 public:
   explicit CPeripheralBusCEC(CPeripherals& manager);
   ~CPeripheralBusCEC(void) override;
 
-  /*!
-   * @see PeripheralBus::PerformDeviceScan()
-   */
+  // Implementation of CPeripheralBus
+  void ProcessEvents() override;
   bool PerformDeviceScan(PeripheralScanResults& results) override;
 
 private:

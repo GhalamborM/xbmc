@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2016-2018 Team Kodi
+ *  Copyright (C) 2016-2024 Team Kodi
  *  This file is part of Kodi - https://kodi.tv
  *
  *  SPDX-License-Identifier: GPL-2.0-or-later
@@ -18,6 +18,7 @@ namespace MOUSE
 {
 /*!
  * \ingroup mouse
+ *
  * \brief Interface for handling mouse events
  */
 class IMouseInputHandler
@@ -33,18 +34,32 @@ public:
   virtual std::string ControllerID(void) const = 0;
 
   /*!
-   * \brief A relative pointer has moved
+   * \brief A relative pointer has moved to a new absolute position
    *
-   * \param relpointer   The name of the relative pointer being moved
-   * \param dx           The relative x coordinate of motion
-   * \param dy           The relative y coordinate of motion
+   * \param relpointer The name of the relative pointer being moved
+   * \param positionX The absolute x coordinate of motion
+   * \param positionY The absolute y coordinate of motion
    *
    * The mouse uses a left-handed (graphics) cartesian coordinate system.
    * Positive X is right, positive Y is down.
    *
    * \return True if the event was handled, otherwise false
    */
-  virtual bool OnMotion(const PointerName& relpointer, int dx, int dy) = 0;
+  virtual bool OnPosition(const PointerName& relpointer, int positionX, int positionY) = 0;
+
+  /*!
+   * \brief A relative pointer has moved a relative distance
+   *
+   * \param relpointer The name of the relative pointer being moved
+   * \param differenceX The relative x coordinate of motion
+   * \param differenceY The relative y coordinate of motion
+   *
+   * The mouse uses a left-handed (graphics) cartesian coordinate system.
+   * Positive X is right, positive Y is down.
+   *
+   * \return True if the event was handled, otherwise false
+   */
+  virtual bool OnMotion(const PointerName& relpointer, int differenceX, int differenceY) = 0;
 
   /*!
    * \brief A mouse button has been pressed
@@ -61,6 +76,14 @@ public:
    * \param button      The name of the feature being released
    */
   virtual void OnButtonRelease(const ButtonName& button) = 0;
+
+  /*!
+   * \brief Called at the end of the frame that provided input
+   *
+   * This can be as a result of a pointer update, a button press, or a button
+   * release. All three events will result in a call to OnInputFrame().
+   */
+  virtual void OnInputFrame() = 0;
 };
 } // namespace MOUSE
 } // namespace KODI

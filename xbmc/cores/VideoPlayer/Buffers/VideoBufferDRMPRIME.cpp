@@ -8,7 +8,8 @@
 
 #include "VideoBufferDRMPRIME.h"
 
-#include "threads/SingleLock.h"
+#include <mutex>
+
 
 extern "C"
 {
@@ -49,35 +50,17 @@ std::string GetColorRange(const VideoPicture& picture)
   return "YCbCr limited range";
 }
 
-uint8_t GetEOTF(const VideoPicture& picture)
-{
-  switch (picture.color_transfer)
-  {
-    case AVCOL_TRC_SMPTE2084:
-      return HDMI_EOTF_SMPTE_ST2084;
-    case AVCOL_TRC_ARIB_STD_B67:
-    case AVCOL_TRC_BT2020_10:
-      return HDMI_EOTF_BT_2100_HLG;
-    default:
-      return HDMI_EOTF_TRADITIONAL_GAMMA_SDR;
-  }
-}
-
-const AVMasteringDisplayMetadata* GetMasteringDisplayMetadata(const VideoPicture& picture)
-{
-  return picture.hasDisplayMetadata ? &picture.displayMetadata : nullptr;
-}
-
-const AVContentLightMetadata* GetContentLightMetadata(const VideoPicture& picture)
-{
-  return picture.hasLightMetadata ? &picture.lightMetadata : nullptr;
-}
-
 } // namespace DRMPRIME
 
 CVideoBufferDRMPRIME::CVideoBufferDRMPRIME(int id) : CVideoBuffer(id)
 {
   m_pixFormat = AV_PIX_FMT_DRM_PRIME;
+}
+
+bool CVideoBufferDRMPRIME::IsValid() const
+{
+  AVDRMFrameDescriptor* descriptor = GetDescriptor();
+  return descriptor && descriptor->nb_layers;
 }
 
 CVideoBufferDRMPRIMEFFmpeg::CVideoBufferDRMPRIMEFFmpeg(IVideoBufferPool& pool, int id)
@@ -102,21 +85,15 @@ void CVideoBufferDRMPRIMEFFmpeg::Unref()
   av_frame_unref(m_pFrame);
 }
 
-bool CVideoBufferDRMPRIMEFFmpeg::IsValid() const
-{
-  AVDRMFrameDescriptor* descriptor = GetDescriptor();
-  return descriptor && descriptor->nb_layers;
-}
-
 CVideoBufferPoolDRMPRIMEFFmpeg::~CVideoBufferPoolDRMPRIMEFFmpeg()
 {
   for (auto buf : m_all)
     delete buf;
 }
 
-CVideoBuffer* CVideoBufferPoolDRMPRIMEFFmpeg::Get()
+CVideoBufferDRMPRIMEFFmpeg* CVideoBufferPoolDRMPRIMEFFmpeg::Get()
 {
-  CSingleLock lock(m_critSection);
+  std::unique_lock lock(m_critSection);
 
   CVideoBufferDRMPRIMEFFmpeg* buf = nullptr;
   if (!m_free.empty())
@@ -140,7 +117,7 @@ CVideoBuffer* CVideoBufferPoolDRMPRIMEFFmpeg::Get()
 
 void CVideoBufferPoolDRMPRIMEFFmpeg::Return(int id)
 {
-  CSingleLock lock(m_critSection);
+  std::unique_lock lock(m_critSection);
 
   m_all[id]->Unref();
   auto it = m_used.begin();

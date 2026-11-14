@@ -10,7 +10,8 @@
 
 #include "OptionalsReg.h"
 #include "cores/RetroPlayer/process/RPProcessInfo.h"
-#include "cores/RetroPlayer/rendering/VideoRenderers/RPRendererDMA.h"
+#include "cores/RetroPlayer/rendering/VideoRenderers/RPRendererDMAOpenGLES.h"
+#include "cores/RetroPlayer/rendering/VideoRenderers/RPRendererFBO.h"
 #include "cores/RetroPlayer/rendering/VideoRenderers/RPRendererOpenGLES.h"
 #include "cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodecDRMPRIME.h"
 #include "cores/VideoPlayer/VideoRenderers/HwDecRender/RendererDRMPRIMEGLES.h"
@@ -47,8 +48,9 @@ bool CWinSystemWaylandEGLContextGLES::InitWindowSystem()
   CDVDVideoCodecDRMPRIME::Register();
   CRendererDRMPRIMEGLES::Register();
 
-  RETRO::CRPProcessInfo::RegisterRendererFactory(new RETRO::CRendererFactoryDMA);
+  RETRO::CRPProcessInfo::RegisterRendererFactory(new RETRO::CRendererFactoryDMAOpenGLES);
   RETRO::CRPProcessInfo::RegisterRendererFactory(new RETRO::CRendererFactoryOpenGLES);
+  RETRO::CRPProcessInfo::RegisterRendererFactory(new RETRO::CRendererFactoryFBO);
 
   bool general, deepColor;
   m_vaapiProxy.reset(WAYLAND::VaapiProxyCreate());

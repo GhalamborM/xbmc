@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2005-2018 Team Kodi
+ *  Copyright (C) 2005-2024 Team Kodi
  *  This file is part of Kodi - https://kodi.tv
  *
  *  SPDX-License-Identifier: GPL-2.0-or-later
@@ -10,17 +10,21 @@
 
 #include "ActionIDs.h"
 #include "interfaces/builtins/Builtins.h"
+#include "utils/Map.h"
 #include "utils/StringUtils.h"
 #include "utils/log.h"
 
-#include <map>
+#include <string_view>
+
+using namespace KODI;
+using namespace ACTION;
 
 namespace
 {
-using ActionName = std::string;
+using ActionName = std::string_view;
 using ActionID = unsigned int;
 
-static const std::map<ActionName, ActionID> ActionMappings = {
+constexpr auto ActionMappings = make_map<ActionName, ActionID>({
     {"left", ACTION_MOVE_LEFT},
     {"right", ACTION_MOVE_RIGHT},
     {"up", ACTION_MOVE_UP},
@@ -47,11 +51,17 @@ static const std::map<ActionName, ActionID> ActionMappings = {
     {"bigstepback", ACTION_BIG_STEP_BACK},
     {"chapterorbigstepforward", ACTION_CHAPTER_OR_BIG_STEP_FORWARD},
     {"chapterorbigstepback", ACTION_CHAPTER_OR_BIG_STEP_BACK},
+    {"chapterorsceneorbigstepforward", ACTION_CHAPTER_OR_SCENE_OR_BIG_STEP_FORWARD},
+    {"chapterorsceneorbigstepback", ACTION_CHAPTER_OR_SCENE_OR_BIG_STEP_BACK},
     {"osd", ACTION_SHOW_OSD},
     {"showsubtitles", ACTION_SHOW_SUBTITLES},
     {"nextsubtitle", ACTION_NEXT_SUBTITLE},
+    {"previoussubtitle", ACTION_PREV_SUBTITLE},
     {"browsesubtitle", ACTION_BROWSE_SUBTITLE},
     {"cyclesubtitle", ACTION_CYCLE_SUBTITLE},
+    {"dialogselectvideo", ACTION_DIALOG_SELECT_VIDEO},
+    {"dialogselectaudio", ACTION_DIALOG_SELECT_AUDIO},
+    {"dialogselectsubtitle", ACTION_DIALOG_SELECT_SUBTITLE},
     {"playerdebug", ACTION_PLAYER_DEBUG},
     {"playerdebugvideo", ACTION_PLAYER_DEBUG_VIDEO},
     {"codecinfo", ACTION_PLAYER_PROCESS_INFO},
@@ -112,6 +122,8 @@ static const std::map<ActionName, ActionID> ActionMappings = {
     {"smallstepback", ACTION_SMALL_STEP_BACK},
     {"fastforward", ACTION_PLAYER_FORWARD},
     {"rewind", ACTION_PLAYER_REWIND},
+    {"tempoup", ACTION_PLAYER_INCREASE_TEMPO},
+    {"tempodown", ACTION_PLAYER_DECREASE_TEMPO},
     {"play", ACTION_PLAYER_PLAY},
     {"playpause", ACTION_PLAYER_PLAYPAUSE},
     {"switchplayer", ACTION_SWITCH_PLAYER},
@@ -249,14 +261,15 @@ static const std::map<ActionName, ActionID> ActionMappings = {
 
     // Do nothing / error action
     {"error", ACTION_ERROR},
-    {"noop", ACTION_NOOP}};
+    {"noop", ACTION_NOOP},
+});
 } // namespace
 
 void CActionTranslator::GetActions(std::vector<std::string>& actionList)
 {
   actionList.reserve(ActionMappings.size());
   for (auto& actionMapping : ActionMappings)
-    actionList.push_back(actionMapping.first);
+    actionList.emplace_back(actionMapping.first);
 }
 
 bool CActionTranslator::IsAnalog(unsigned int actionID)

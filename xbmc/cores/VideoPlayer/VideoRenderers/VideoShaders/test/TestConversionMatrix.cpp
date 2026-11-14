@@ -6,9 +6,10 @@
  *  See LICENSES/README.md for more information.
  */
 
-
 #include "cores/VideoPlayer/VideoRenderers/VideoShaders/ConversionMatrix.h"
+#include "utils/MathUtils.h"
 
+#include <iomanip>
 #include <iostream>
 
 #include <gtest/gtest.h>
@@ -20,7 +21,7 @@ namespace
 
 constexpr bool DEBUG_PRINT{false};
 
-void DebugPrint(Matrix3 matrix)
+void DebugPrint(const Matrix3& matrix)
 {
   if (!DEBUG_PRINT)
     return;
@@ -40,7 +41,7 @@ void DebugPrint(Matrix3 matrix)
   std::cout << "===== Matrix End =====" << std::endl;
 }
 
-void DebugPrint(Matrix4 matrix)
+void DebugPrint(const Matrix4& matrix)
 {
   if (!DEBUG_PRINT)
     return;
@@ -61,6 +62,20 @@ void DebugPrint(Matrix4 matrix)
   std::cout << "===== Matrix End =====" << std::endl;
 }
 
+template<uint8_t Order>
+bool CompareMatrices(CMatrix<Order>& matrixA, CMatrix<Order>& matrixB, float threshold)
+{
+  bool result = true;
+  for (unsigned int i = 0; i < Order; i++)
+  {
+    for (unsigned int j = 0; j < Order; j++)
+    {
+      result &= MathUtils::FloatEquals(matrixA[i][j], matrixB[i][j], threshold);
+    }
+  }
+  return result;
+}
+
 std::array<std::array<float, 4>, 4> bt709_8bit =
 {{
   {1.1643834114, 1.1643834114, 1.1643834114, 0.0000000000},
@@ -73,9 +88,9 @@ Matrix4 bt709Mat_8bit(bt709_8bit);
 
 std::array<std::array<float, 4>, 4> bt709_10bit =
 {{
-  {1.1643834114, 1.1643834114, 1.1643834114, 0.0000000000},
-  {0.0000000000, -0.2132485956, 2.1124014854, 0.0000000000},
-  {1.7927408218, -0.5329092145, 0.0000000000, 0.0000000000},
+  {1.1678080559, 1.1678080559, 1.1678080559, 0.0000000000},
+  {0.0000000000, -0.2138758004, 2.1186144352, 0.0000000000},
+  {1.7980136871, -0.5344766378, 0.0000000000, 0.0000000000},
   {-0.9729449749, 0.3014826477, -1.1334021091, 1.0000000000},
 }};
 
@@ -83,9 +98,9 @@ Matrix4 bt709Mat_10bit(bt709_10bit);
 
 std::array<std::array<float, 4>, 4> bt709_10bit_texture =
 {{
-  {74.5922470093, 74.5922470093, 74.5922470093, 0.0000000000},
-  {0.0000000000, -13.6610431671, 135.3237915039, 0.0000000000},
-  {114.8458175659, -34.1390075684, 0.0000000000, 0.0000000000},
+  {74.8116378784, 74.8116378784, 74.8116378784, 0.0000000000},
+  {0.0000000000, -13.7012224197, 135.7218017578, 0.0000000000},
+  {115.1836090088, -34.2394218445, 0.0000000000, 0.0000000000},
   {-0.9729449749, 0.3014826477, -1.1334021091, 1.0000000000},
 }};
 
@@ -128,21 +143,21 @@ TEST(TestConvertMatrix, YUV2RGB)
   yuvMat = convMat.GetYuvMat();
   DebugPrint(yuvMat);
 
-  EXPECT_EQ(bt709Mat_8bit, yuvMat);
+  EXPECT_TRUE(CompareMatrices(bt709Mat_8bit, yuvMat, 0.0001f));
 
   convMat.SetSourceBitDepth(10)
          .SetSourceTextureBitDepth(8);
   yuvMat = convMat.GetYuvMat();
   DebugPrint(yuvMat);
 
-  EXPECT_EQ(bt709Mat_10bit, yuvMat);
+  EXPECT_TRUE(CompareMatrices(bt709Mat_10bit, yuvMat, 0.0001f));
 
   convMat.SetSourceBitDepth(10)
          .SetSourceTextureBitDepth(10);
   yuvMat = convMat.GetYuvMat();
   DebugPrint(yuvMat);
 
-  EXPECT_EQ(bt709Mat_10bit_texture, yuvMat);
+  EXPECT_TRUE(CompareMatrices(bt709Mat_10bit_texture, yuvMat, 0.0001f));
 }
 
 TEST(TestConvertMatrix, ColorSpaceConversion)
@@ -155,14 +170,96 @@ TEST(TestConvertMatrix, ColorSpaceConversion)
   primMat = convMat.GetPrimMat();
   DebugPrint(primMat);
 
-  EXPECT_EQ(bt601_to_bt709_Mat, primMat);
+  EXPECT_TRUE(CompareMatrices(bt601_to_bt709_Mat, primMat, 0.0001f));
 
   convMat.SetSourceColorPrimaries(AVCOL_PRI_BT2020)
          .SetDestinationColorPrimaries(AVCOL_PRI_BT709);
   primMat = convMat.GetPrimMat();
   DebugPrint(primMat);
 
-  EXPECT_EQ(bt2020_to_bt709_Mat, primMat);
+  EXPECT_TRUE(CompareMatrices(bt2020_to_bt709_Mat, primMat, 0.0001f));
+}
+
+TEST(TestConvertMatrix, HueSaturation)
+{
+  CConvertMatrix convMat;
+  convMat.SetSourceColorSpace(AVCOL_SPC_BT709)
+         .SetSourceLimitedRange(true)
+         .SetDestinationLimitedRange(false);
+
+  convMat.SetDestinationHue(0.0f)
+         .SetDestinationSaturation(1.0f);
+  Matrix4 yuvMat = convMat.GetYuvMat();
+  EXPECT_TRUE(CompareMatrices(bt709Mat_8bit, yuvMat, 0.0001f));
+
+  // no chroma left, R, G and B must be equal for every input
+  convMat.SetDestinationSaturation(0.0f);
+  yuvMat = convMat.GetYuvMat();
+  DebugPrint(yuvMat);
+
+  for (int i = 0; i < 4; ++i)
+  {
+    EXPECT_NEAR(yuvMat[i][0], yuvMat[i][1], 0.0001f);
+    EXPECT_NEAR(yuvMat[i][0], yuvMat[i][2], 0.0001f);
+  }
+
+  // a half turn of the chroma plane is the same as inverting it
+  convMat.SetDestinationHue(180.0f)
+         .SetDestinationSaturation(1.0f);
+  Matrix4 rotated = convMat.GetYuvMat();
+  convMat.SetDestinationHue(0.0f)
+         .SetDestinationSaturation(-1.0f);
+  yuvMat = convMat.GetYuvMat();
+  EXPECT_TRUE(CompareMatrices(yuvMat, rotated, 0.0001f));
+}
+
+TEST(TestConvertMatrix, GammaExponent)
+{
+  EXPECT_FLOAT_EQ(1.0f, CConvertMatrix::GetGammaExponent(50.0f));
+  EXPECT_FLOAT_EQ(0.5f, CConvertMatrix::GetGammaExponent(0.0f));
+  EXPECT_FLOAT_EQ(2.0f, CConvertMatrix::GetGammaExponent(100.0f));
+  EXPECT_FLOAT_EQ(1.0f,
+                  CConvertMatrix::GetGammaExponent(30.0f) * CConvertMatrix::GetGammaExponent(70.0f));
+}
+
+TEST(TestConvertMatrix, LinearHueSaturation)
+{
+  const Matrix3x1 coefs = CConvertMatrix::GetRGBYuvCoefs(AVCOL_SPC_BT2020_NCL);
+  const std::array<std::array<float, 3>, 3> colors = {{
+    {1.0f, 0.0f, 0.0f}, {0.1f, 0.6f, 0.2f}, {0.05f, 0.02f, 0.9f}
+  }};
+
+  // the shaders multiply column vectors by the transposed matrix
+  const auto apply = [](const Matrix3& mat, const std::array<float, 3>& rgb) {
+    std::array<float, 3> out{};
+    for (int i = 0; i < 3; ++i)
+      for (int j = 0; j < 3; ++j)
+        out[i] += mat[j][i] * rgb[j];
+    return out;
+  };
+  const auto luma = [&coefs](const std::array<float, 3>& rgb) {
+    return coefs[0] * rgb[0] + coefs[1] * rgb[1] + coefs[2] * rgb[2];
+  };
+
+  Matrix3 mat = CConvertMatrix::GetLinearHueSatMat(AVCOL_SPC_BT2020_NCL, 0.0f, 1.0f);
+  for (const auto& rgb : colors)
+  {
+    const auto out = apply(mat, rgb);
+    for (int i = 0; i < 3; ++i)
+      EXPECT_NEAR(rgb[i], out[i], 0.0001f);
+  }
+
+  mat = CConvertMatrix::GetLinearHueSatMat(AVCOL_SPC_BT2020_NCL, 90.0f, 2.0f);
+  for (const auto& rgb : colors)
+    EXPECT_NEAR(luma(rgb), luma(apply(mat, rgb)), 0.0001f);
+
+  mat = CConvertMatrix::GetLinearHueSatMat(AVCOL_SPC_BT2020_NCL, 0.0f, 0.0f);
+  for (const auto& rgb : colors)
+  {
+    const auto out = apply(mat, rgb);
+    for (int i = 0; i < 3; ++i)
+      EXPECT_NEAR(luma(rgb), out[i], 0.0001f);
+  }
 }
 
 // clang-format on

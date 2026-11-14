@@ -8,6 +8,7 @@
 
 #include "GUIFeatureButton.h"
 
+#include "ServiceBroker.h"
 #include "games/controllers/windows/GUIControllerDefines.h"
 #include "guilib/GUIMessage.h"
 #include "guilib/WindowIDs.h"
@@ -23,7 +24,9 @@ CGUIFeatureButton::CGUIFeatureButton(const CGUIButtonControl& buttonTemplate,
                                      IConfigurationWizard* wizard,
                                      const CPhysicalFeature& feature,
                                      unsigned int index)
-  : CGUIButtonControl(buttonTemplate), m_feature(feature), m_wizard(wizard)
+  : CGUIButtonControl(buttonTemplate),
+    m_feature(feature),
+    m_wizard(wizard)
 {
   // Initialize CGUIButtonControl
   SetLabel(m_feature.Label());
@@ -43,14 +46,12 @@ bool CGUIFeatureButton::DoPrompt(const std::string& strPrompt,
                                  const std::string& strFeature,
                                  CEvent& waitEvent)
 {
-  using namespace MESSAGING;
-
   bool bInterrupted = false;
 
   if (!HasFocus())
   {
     CGUIMessage msgFocus(GUI_MSG_SETFOCUS, GetID(), GetID());
-    CApplicationMessenger::GetInstance().SendGUIMessage(msgFocus, WINDOW_INVALID, false);
+    CServiceBroker::GetAppMessenger()->SendGUIMessage(msgFocus, WINDOW_INVALID, false);
   }
 
   CGUIMessage msgLabel(GUI_MSG_LABEL_SET, GetID(), GetID());
@@ -70,7 +71,7 @@ bool CGUIFeatureButton::DoPrompt(const std::string& strPrompt,
       strLabel = StringUtils::Format(strPrompt, strFeature, secondsRemaining);
 
     msgLabel.SetLabel(strLabel);
-    CApplicationMessenger::GetInstance().SendGUIMessage(msgLabel, WINDOW_INVALID, false);
+    CServiceBroker::GetAppMessenger()->SendGUIMessage(msgLabel, WINDOW_INVALID, false);
 
     waitEvent.Reset();
     bInterrupted = waitEvent.Wait(1000ms); // Wait 1 second
@@ -81,7 +82,7 @@ bool CGUIFeatureButton::DoPrompt(const std::string& strPrompt,
 
   // Reset label
   msgLabel.SetLabel(m_feature.Label());
-  CApplicationMessenger::GetInstance().SendGUIMessage(msgLabel, WINDOW_INVALID, false);
+  CServiceBroker::GetAppMessenger()->SendGUIMessage(msgLabel, WINDOW_INVALID, false);
 
   return bInterrupted;
 }

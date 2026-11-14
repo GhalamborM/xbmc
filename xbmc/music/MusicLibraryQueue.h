@@ -8,10 +8,10 @@
 
 #pragma once
 
-#include "FileItem.h"
+#include "addons/Scraper.h"
+#include "jobs/JobQueue.h"
 #include "settings/LibExportSettings.h"
 #include "threads/CriticalSection.h"
-#include "utils/JobManager.h"
 
 #include <map>
 #include <set>
@@ -59,18 +59,11 @@ public:
   void ScanLibrary(const std::string& strDirectory, int flags = 0, bool showProgress = true);
 
   /*!
-   \brief Enqueue an album scraping job fetching additional album data.
-   \param[in] strDirectory Virtual path that identifies which albums to process or "" (empty string) for all albums
-   \param[in] refresh Whether or not to refresh data for albums that have previously been scraped
+   \brief Enqueue a scraping job fetching additional album or artist data.
+   \param[in] content ALBUMS or ARTISTS
+   \param[in] strDirectory Virtual path or empty string
   */
-  void StartAlbumScan(const std::string& strDirectory, bool refresh = false);
-
-  /*!
-   \brief Enqueue an artist scraping job fetching additional artist data.
-   \param[in] strDirectory Virtual path that identifies which artists to process or "" (empty string) for all artists
-   \param[in] refresh Whether or not to refresh data for artists that have previously been scraped
-   */
-  void StartArtistScan(const std::string& strDirectory, bool refresh = false);
+  void StartScan(ADDON::ContentType content, const std::string& strDirectory, bool refresh = false);
 
   /*!
    \brief Check if a library scan or cleaning is in progress.
@@ -88,13 +81,6 @@ public:
    \param[in] showDialog Show a model progress dialog while cleaning. Default is false.
    */
   void CleanLibrary(bool showDialog = false);
-
-  /*!
-   \brief Executes a library cleaning with a modal dialog.
-   However UI rendering of dialog is on same thread as the cleaning process, so mouse movement
-   is stilted and opportunities to cancel the process limited
-   */
-  void CleanLibraryModal();
 
   /*!
    \brief Adds the given job to the queue.
@@ -138,6 +124,5 @@ private:
   CCriticalSection m_critical;
 
   bool m_modal = false;
-  bool m_exporting = false;
   bool m_cleaning = false;
 };

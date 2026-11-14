@@ -11,6 +11,7 @@
 
 #include "ConvolutionKernels.h"
 #include "ServiceBroker.h"
+#include "rendering/GLExtensions.h"
 #include "rendering/RenderSystem.h"
 #include "utils/GLUtils.h"
 #include "utils/log.h"
@@ -30,11 +31,8 @@ BaseVideoFilterShader::BaseVideoFilterShader()
 {
   m_width = 1;
   m_height = 1;
-  m_hStepXY = 0;
   m_stepX = 0;
   m_stepY = 0;
-  m_sourceTexUnit = 0;
-  m_hSourceTex = 0;
   m_stretch = 0.0f;
 
   VertexShader()->LoadSource("gl_videofilter_vertex.glsl");
@@ -51,15 +49,17 @@ BaseVideoFilterShader::~BaseVideoFilterShader()
 // ConvolutionFilterShader - base class for video filter shaders
 //////////////////////////////////////////////////////////////////////
 
-ConvolutionFilterShader::ConvolutionFilterShader(ESCALINGMETHOD method, bool stretch, GLSLOutput *output)
+ConvolutionFilterShader::ConvolutionFilterShader(ESCALINGMETHOD method,
+                                                 bool stretch,
+                                                 bool gammaCorrection,
+                                                 GLSLOutput* output)
 {
   m_method = method;
-  m_kernelTex1 = 0;
 
   std::string shadername;
   std::string defines;
 
-  m_floattex = CServiceBroker::GetRenderSystem()->IsExtSupported("GL_ARB_texture_float");
+  m_floattex = CGLExtensions::IsExtensionSupported(CGLExtensions::ARB_texture_float);
 
   if (m_method == VS_SCALINGMETHOD_CUBIC_B_SPLINE ||
       m_method == VS_SCALINGMETHOD_CUBIC_MITCHELL ||
@@ -97,13 +97,19 @@ ConvolutionFilterShader::ConvolutionFilterShader(ESCALINGMETHOD method, bool str
   else
     defines += "#define XBMC_STRETCH 0\n";
 
+  if (gammaCorrection)
+    defines += "#define KODI_GAMMA_LINEARIZATION_FAST\n";
+
   // get defines from the output stage if used
   m_glslOutput = output;
   if (m_glslOutput) {
     defines += m_glslOutput->GetDefines();
   }
 
-  CLog::Log(LOGDEBUG, "GL: ConvolutionFilterShader: using {} defines:\n{}", shadername, defines);
+  CLog::Log(LOGDEBUG, "GL: using scaling method: {}",
+            fmt::formatter<ESCALINGMETHOD>::ToString(m_method));
+  CLog::Log(LOGDEBUG, "GL: using shader: {}", shadername);
+
   PixelShader()->LoadSource(shadername, defines);
   PixelShader()->AppendSource("gl_output.glsl");
 }

@@ -8,11 +8,11 @@
 
 #include "PlayListURL.h"
 
+#include "FileItem.h"
 #include "filesystem/File.h"
 #include "utils/StringUtils.h"
 #include "utils/URIUtils.h"
 
-using namespace PLAYLIST;
 using namespace XFILE;
 
 // example url file
@@ -21,14 +21,17 @@ using namespace XFILE;
 //[InternetShortcut]
 //URL=http://msdn2.microsoft.com/en-us/library/ms812698.aspx
 
+namespace KODI::PLAYLIST
+{
+
 CPlayListURL::CPlayListURL(void) = default;
 
 CPlayListURL::~CPlayListURL(void) = default;
 
 bool CPlayListURL::Load(const std::string& strFileName)
 {
-  char szLine[4096];
   std::string strLine;
+  strLine.reserve(1024);
 
   Clear();
 
@@ -42,22 +45,17 @@ bool CPlayListURL::Load(const std::string& strFileName)
     return false;
   }
 
-  while (file.ReadString(szLine, 1024))
+  while (file.ReadLine(strLine))
   {
-    strLine = szLine;
     StringUtils::RemoveCRLF(strLine);
 
     if (StringUtils::StartsWith(strLine, "[InternetShortcut]"))
     {
-      if (file.ReadString(szLine,1024))
+      if (file.ReadLine(strLine))
       {
-        strLine  = szLine;
         StringUtils::RemoveCRLF(strLine);
         if (StringUtils::StartsWith(strLine, "URL="))
-        {
-          CFileItemPtr newItem(new CFileItem(strLine.substr(4), false));
-          Add(newItem);
-        }
+          Add(std::make_shared<CFileItem>(strLine.substr(4), false));
       }
     }
   }
@@ -66,3 +64,4 @@ bool CPlayListURL::Load(const std::string& strFileName)
   return true;
 }
 
+} // namespace KODI::PLAYLIST

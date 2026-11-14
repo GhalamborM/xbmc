@@ -13,6 +13,7 @@
 #include "GUIImage.h"
 #include "GUIInfoManager.h"
 #include "GUIListLabel.h"
+#include "ServiceBroker.h"
 #include "utils/XBMCTinyXML.h"
 
 using namespace KODI::GUILIB;
@@ -20,37 +21,29 @@ using namespace KODI::GUILIB;
 CGUIListItemLayout::CGUIListItemLayout()
 : m_group(0, 0, 0, 0, 0, 0)
 {
-  m_width = 0;
-  m_height = 0;
-  m_focused = false;
-  m_invalidated = true;
   m_group.SetPushUpdates(true);
 }
 
 CGUIListItemLayout::CGUIListItemLayout(const CGUIListItemLayout& from)
+  : CGUIListItemLayout(from, nullptr)
+{
+}
+
+CGUIListItemLayout::CGUIListItemLayout(const CGUIListItemLayout& from, CGUIControl* control)
   : m_group(from.m_group),
     m_width(from.m_width),
     m_height(from.m_height),
     m_focused(from.m_focused),
-    m_invalidated(from.m_invalidated),
     m_condition(from.m_condition),
     m_isPlaying(from.m_isPlaying),
     m_infoUpdateMillis(from.m_infoUpdateMillis)
 {
-  m_infoUpdateTimeout.Set(m_infoUpdateMillis);
-}
-
-CGUIListItemLayout::CGUIListItemLayout(const CGUIListItemLayout &from, CGUIControl *control)
-: m_group(from.m_group), m_isPlaying(from.m_isPlaying)
-{
-  m_width = from.m_width;
-  m_height = from.m_height;
-  m_focused = from.m_focused;
-  m_condition = from.m_condition;
-  m_infoUpdateMillis = from.m_infoUpdateMillis;
-  m_infoUpdateTimeout.Set(m_infoUpdateMillis);
-  m_invalidated = true;
   m_group.SetParentControl(control);
+  m_infoUpdateTimeout.Set(m_infoUpdateMillis);
+
+  // m_group was just created, cloned controls with resources must be allocated
+  // before use
+  m_group.AllocResources();
 }
 
 bool CGUIListItemLayout::IsAnimating(ANIMATION_TYPE animType)
@@ -70,13 +63,12 @@ float CGUIListItemLayout::Size(ORIENTATION orientation) const
 
 void CGUIListItemLayout::Process(CGUIListItem *item, int parentID, unsigned int currentTime, CDirtyRegionList &dirtyregions)
 {
-  if (m_invalidated)
+  if (m_invalidated.exchange(false))
   { // need to update our item
-    m_invalidated = false;
     // could use a dynamic cast here if RTTI was enabled.  As it's not,
     // let's use a static cast with a virtual base function
     CFileItem *fileItem = item->IsFileItem() ? static_cast<CFileItem*>(item) : new CFileItem(*item);
-    m_isPlaying.Update(item);
+    m_isPlaying.Update(INFO::DEFAULT_CONTEXT, item);
     m_group.SetInvalid();
     m_group.UpdateInfo(fileItem);
     // delete our temporary fileitem
@@ -87,7 +79,7 @@ void CGUIListItemLayout::Process(CGUIListItem *item, int parentID, unsigned int 
   }
   else if (m_infoUpdateTimeout.IsTimePast())
   {
-    m_isPlaying.Update(item);
+    m_isPlaying.Update(INFO::DEFAULT_CONTEXT, item);
     m_group.UpdateInfo(item);
 
     m_infoUpdateTimeout.Set(m_infoUpdateMillis);
@@ -121,6 +113,8 @@ void CGUIListItemLayout::SetWidth(float width)
     m_group.EnlargeWidth(width - m_width);
     m_width = width;
     SetInvalid();
+    if (m_sizeChangeOwner)
+      m_sizeChangeOwner->SetInvalid();
   }
 }
 
@@ -131,6 +125,8 @@ void CGUIListItemLayout::SetHeight(float height)
     m_group.EnlargeHeight(height - m_height);
     m_height = height;
     SetInvalid();
+    if (m_sizeChangeOwner)
+      m_sizeChangeOwner->SetInvalid();
   }
 }
 
@@ -151,7 +147,7 @@ bool CGUIListItemLayout::MoveRight()
 
 bool CGUIListItemLayout::CheckCondition()
 {
-  return !m_condition || m_condition->Get();
+  return !m_condition || m_condition->Get(INFO::DEFAULT_CONTEXT);
 }
 
 void CGUIListItemLayout::LoadControl(TiXmlElement *child, CGUIControlGroup *group)
@@ -189,7 +185,7 @@ void CGUIListItemLayout::LoadLayout(TiXmlElement *layout, int context, bool focu
   unsigned int infoupdatemillis = 0;
   layout->QueryUnsignedAttribute("infoupdate", &infoupdatemillis);
   if (infoupdatemillis > 0)
-    m_infoUpdateMillis = infoupdatemillis;
+    m_infoUpdateMillis = std::chrono::milliseconds(infoupdatemillis);
 
   m_infoUpdateTimeout.Set(m_infoUpdateMillis);
   m_isPlaying.Parse("listitem.isplaying", context);
@@ -229,7 +225,7 @@ void CGUIListItemLayout::CreateListControlLayouts(float width, float height, boo
   }
   CGUIImage *image = new CGUIImage(0, 0, 8, 0, iconWidth, texHeight, CTextureInfo(""));
   image->SetInfo(GUIINFO::CGUIInfoLabel("$INFO[ListItem.Icon]", "", m_group.GetParentID()));
-  image->SetAspectRatio(CAspectRatio::AR_KEEP);
+  image->SetAspectRatio(CAspectRatio::KEEP);
   m_group.AddControl(image);
   float x = iconWidth + labelInfo.offsetX + 10;
   CGUIListLabel *label = new CGUIListLabel(0, 0, x, labelInfo.offsetY, width - x - 18, height, labelInfo, GUIINFO::CGUIInfoLabel("$INFO[ListItem.Label]", "", m_group.GetParentID()), CGUIControl::FOCUS);
@@ -243,6 +239,11 @@ void CGUIListItemLayout::CreateListControlLayouts(float width, float height, boo
 void CGUIListItemLayout::FreeResources(bool immediately)
 {
   m_group.FreeResources(immediately);
+}
+
+void CGUIListItemLayout::AssignDepth()
+{
+  m_group.AssignDepth();
 }
 
 #ifdef _DEBUG

@@ -1,34 +1,29 @@
-include ../../Makefile.include
-DEPS= ../../Makefile.include Makefile
+include ../../Makefile.include TAGLIB-VERSION ../../download-files.include
+DEPS = ../../Makefile.include Makefile TAGLIB-VERSION ../../download-files.include \
+                                       001-cmake-pdb-debug.patch
 
-LIBNAME=taglib
-VERSION=1.12
-SOURCE=$(LIBNAME)-$(VERSION)
-ARCHIVE=$(LIBNAME)-$(VERSION).tar.gz
-
-LIBDYLIB=$(PLATFORM)/build/$(LIBNAME)/libtag.a
+LIBDYLIB=$(PLATFORM)/build/$(LIBNAME)/$(BYPRODUCT)
 all: .installed-$(PLATFORM)
 
-$(TARBALLS_LOCATION)/$(ARCHIVE):
-	cd $(TARBALLS_LOCATION); $(RETRIEVE_TOOL) $(RETRIEVE_TOOL_FLAGS) $(BASE_URL)/$(ARCHIVE)
-
-$(PLATFORM): $(TARBALLS_LOCATION)/$(ARCHIVE) $(DEPS)
+.configured-$(PLATFORM): $(DEPS) | $(TARBALLS_LOCATION)/$(ARCHIVE).$(HASH_TYPE)
 	rm -rf $(PLATFORM); mkdir -p $(PLATFORM)
 	cd $(PLATFORM); $(ARCHIVE_TOOL) $(ARCHIVE_TOOL_FLAGS) $(TARBALLS_LOCATION)/$(ARCHIVE)
 	cd $(PLATFORM); rm -rf build; mkdir -p build
-	cd $(PLATFORM)/build; $(CMAKE) -DCMAKE_LIBRARY_PATH=$(TOOLCHAIN)/lib/$(HOST) -DCMAKE_CXX_FLAGS="$(CXXFLAGS) -std=c++11" -DBUILD_SHARED_LIBS=OFF ..
+	cd $(PLATFORM); patch -p1 -i ../001-cmake-pdb-debug.patch
+	cd $(PLATFORM)/build; $(CMAKE) -DBUILD_SHARED_LIBS=OFF -DBUILD_EXAMPLES=OFF -DBUILD_TESTING=OFF -DBUILD_BINDINGS=OFF -DCMAKE_BUILD_TYPE=Debug ..
+	touch $@
 
-$(LIBDYLIB): $(PLATFORM)
+$(LIBDYLIB): .configured-$(PLATFORM)
 	$(MAKE) -C $(PLATFORM)/build
 	touch $@
+
 .installed-$(PLATFORM): $(LIBDYLIB)
 	$(MAKE) -C $(PLATFORM)/build install
-	rm -f $(PREFIX)/lib/libtag_c.*
 	touch $@
 
 clean:
 	$(MAKE) -C $(PLATFORM)/build clean
-	rm -f .installed-$(PLATFORM)
+	rm -f .installed-$(PLATFORM) .configured-$(PLATFORM)
 
 distclean::
-	rm -rf $(PLATFORM) .installed-$(PLATFORM)
+	rm -rf $(PLATFORM) .installed-$(PLATFORM) .configured-$(PLATFORM)

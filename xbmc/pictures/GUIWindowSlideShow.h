@@ -10,12 +10,16 @@
 
 #include "SlideShowPicture.h"
 #include "guilib/GUIDialog.h"
+#include "interfaces/IAnnouncer.h"
+#include "interfaces/ISlideShowDelegate.h"
+#include "threads/CriticalSection.h"
 #include "threads/Event.h"
 #include "threads/Thread.h"
-#include "utils/SortUtils.h"
 
+#include <map>
 #include <memory>
 #include <set>
+#include <string>
 
 class CFileItemList;
 class CVariant;
@@ -29,70 +33,92 @@ public:
   ~CBackgroundPicLoader() override;
 
   void Create(CGUIWindowSlideShow *pCallback);
-  void LoadPic(int iPic, int iSlideNumber, const std::string &strFileName, const int maxWidth, const int maxHeight);
+  void LoadPic(int iPic,
+               int iSlideNumber,
+               const std::string& strFileName,
+               const int maxWidth,
+               const int maxHeight,
+               bool checkMotion);
   bool IsLoading() { return m_isLoading; }
   int SlideNumber() const { return m_iSlideNumber; }
   int Pic() const { return m_iPic; }
 
 private:
   void Process() override;
-  int m_iPic;
-  int m_iSlideNumber;
+  int m_iPic = 0;
+  int m_iSlideNumber = 0;
   std::string m_strFileName;
-  int m_maxWidth;
-  int m_maxHeight;
+  int m_maxWidth = 0;
+  int m_maxHeight = 0;
+  bool m_checkMotion = false;
 
   CEvent m_loadPic;
-  bool m_isLoading;
+  bool m_isLoading = false;
 
-  CGUIWindowSlideShow *m_pCallback;
+  CGUIWindowSlideShow* m_pCallback = nullptr;
 };
 
-class CGUIWindowSlideShow : public CGUIDialog
+class CGUIWindowSlideShow : public CGUIDialog,
+                            public ISlideShowDelegate,
+                            public ANNOUNCEMENT::IAnnouncer
 {
 public:
   CGUIWindowSlideShow(void);
-  ~CGUIWindowSlideShow() override = default;
+  ~CGUIWindowSlideShow() override;
+
+  // Implementation of ISlideShowDelegate
+  void Add(const CFileItem* picture) override;
+  bool IsPlaying() const override;
+  void Select(const std::string& picture) override;
+  void GetSlideShowContents(CFileItemList& list) override;
+  std::shared_ptr<const CFileItem> GetCurrentSlide() override;
+  void StartSlideShow() override;
+  void PlayPicture() override;
+  bool InSlideShow() const override;
+  int NumSlides() const override;
+  int CurrentSlide() const override;
+  bool IsPaused() const override { return m_bPause; }
+  bool IsShuffled() const override { return m_bShuffled; }
+  void Reset() override;
+  void RunSlideShow(const std::string& strPath,
+                    bool bRecursive = false,
+                    bool bRandom = false,
+                    bool bNotRandom = false,
+                    const std::string& beginSlidePath = "",
+                    bool startSlideShow = true,
+                    SortBy method = SortBy::LABEL,
+                    SortOrder order = SortOrder::ASCENDING,
+                    SortAttribute sortAttributes = SortAttributeNone,
+                    const std::string& strExtensions = "") override;
+  void AddFromPath(const std::string& strPath,
+                   bool bRecursive,
+                   SortBy method = SortBy::LABEL,
+                   SortOrder order = SortOrder::ASCENDING,
+                   SortAttribute sortAttributes = SortAttributeNone,
+                   const std::string& strExtensions = "") override;
+  void Shuffle() override;
+  int GetDirection() const override { return m_iDirection; }
+
+  // implementation of IAnnouncer
+  void Announce(ANNOUNCEMENT::AnnouncementFlag flag,
+                const std::string& sender,
+                const std::string& message,
+                const CVariant& data) override;
 
   bool OnMessage(CGUIMessage& message) override;
-  EVENT_RESULT OnMouseEvent(const CPoint &point, const CMouseEvent &event) override;
-  bool OnAction(const CAction &action) override;
+  EVENT_RESULT OnMouseEvent(const CPoint& point, const KODI::MOUSE::CMouseEvent& event) override;
+  bool OnAction(const CAction& action) override;
   void Render() override;
   void RenderEx() override;
-  void Process(unsigned int currentTime, CDirtyRegionList &regions) override;
+  void Process(unsigned int currentTime, CDirtyRegionList& regions) override;
   void OnDeinitWindow(int nextWindowID) override;
 
-  void Reset();
-  void Add(const CFileItem *picture);
-  bool IsPlaying() const;
-  void Select(const std::string& strPicture);
-  void GetSlideShowContents(CFileItemList &list);
-  std::shared_ptr<const CFileItem> GetCurrentSlide();
-  void RunSlideShow(const std::string &strPath, bool bRecursive = false,
-                    bool bRandom = false, bool bNotRandom = false,
-                    const std::string &beginSlidePath="", bool startSlideShow = true,
-                    SortBy method = SortByLabel,
-                    SortOrder order = SortOrderAscending,
-                    SortAttribute sortAttributes = SortAttributeNone,
-                    const std::string &strExtensions="");
-  void AddFromPath(const std::string &strPath, bool bRecursive,
-                   SortBy method = SortByLabel,
-                   SortOrder order = SortOrderAscending,
-                   SortAttribute sortAttributes = SortAttributeNone,
-                   const std::string &strExtensions="");
-  void StartSlideShow();
-  bool InSlideShow() const;
   void OnLoadPic(int iPic,
                  int iSlideNumber,
                  const std::string& strFileName,
                  std::unique_ptr<CTexture> pTexture,
-                 bool bFullSize);
-  int NumSlides() const;
-  int CurrentSlide() const;
-  void Shuffle();
-  bool IsPaused() const { return m_bPause; }
-  bool IsShuffled() const { return m_bShuffled; }
-  int GetDirection() const { return m_iDirection; }
+                 bool bFullSize,
+                 const std::string& motionClip);
 
   static void RunSlideShow(const std::vector<std::string>& paths, int start = 0);
 
@@ -102,11 +128,17 @@ private:
   void SetDirection(int direction); // -1: rewind, 1: forward
 
   typedef std::set<std::string> path_set;  // set to track which paths we're adding
-  void AddItems(const std::string &strPath, path_set *recursivePaths,
-                SortBy method = SortByLabel,
-                SortOrder order = SortOrderAscending,
+  void AddItems(const std::string& strPath,
+                path_set* recursivePaths,
+                SortBy method = SortBy::LABEL,
+                SortOrder order = SortOrder::ASCENDING,
                 SortAttribute sortAttributes = SortAttributeNone);
   bool PlayVideo();
+  bool PlayMotion();
+  void EndMotion();
+  void CloseMotionClip();
+  bool IsShowingVideo() const;
+  std::string GetMotionClip(const CFileItem& item) const;
   CSlideShowPic::DISPLAY_EFFECT GetDisplayEffect(int iSlideNumber) const;
   void RenderPause();
   void RenderErrorMessage();
@@ -139,17 +171,23 @@ private:
   bool m_bPause;
   bool m_bPlayingVideo;
   int m_iVideoSlide = -1;
+  bool m_bPlayingMotion = false;
+  std::string m_motionClip;
+  int m_iMotionSlide = -1;
+  int m_iMotionClipsSlide = -1;
+  mutable CCriticalSection m_motionClipsSection;
+  std::map<std::string, std::string, std::less<>> m_motionClips; // picture path -> clip path
   bool m_bErrorMessage;
 
   std::vector<CFileItemPtr> m_slides;
 
-  CSlideShowPic m_Image[2];
+  std::unique_ptr<CSlideShowPic> m_Image[2];
 
   int m_iCurrentPic;
   // background loader
   std::unique_ptr<CBackgroundPicLoader> m_pBackgroundLoader;
   int m_iLastFailedNextSlide;
   bool m_bLoadNextPic;
-  RESOLUTION m_Resolution;
+  RESOLUTION m_Resolution = RES_INVALID;
   CPoint m_firstGesturePoint;
 };

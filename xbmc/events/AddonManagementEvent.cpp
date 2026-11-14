@@ -8,9 +8,12 @@
 
 #include "AddonManagementEvent.h"
 
+#include "ServiceBroker.h"
 #include "addons/gui/GUIDialogAddonInfo.h"
 #include "filesystem/AddonsDirectory.h"
-#include "guilib/LocalizeStrings.h"
+#include "filesystem/AddonsPaths.h"
+#include "resources/LocalizeStrings.h"
+#include "resources/ResourcesComponent.h"
 #include "utils/URIUtils.h"
 
 CAddonManagementEvent::CAddonManagementEvent(const ADDON::AddonPtr& addon,
@@ -58,7 +61,7 @@ std::string CAddonManagementEvent::GetExecutionLabel() const
   if (!executionLabel.empty())
     return executionLabel;
 
-  return g_localizeStrings.Get(24139);
+  return CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(24139);
 }
 
 bool CAddonManagementEvent::Execute() const
@@ -66,7 +69,8 @@ bool CAddonManagementEvent::Execute() const
   if (!CanExecute())
     return false;
 
-  CFileItemPtr addonItem = XFILE::CAddonsDirectory::FileItemFromAddon(m_addon, URIUtils::AddFileToFolder("addons://", m_addon->ID()));
+  CFileItemPtr addonItem = XFILE::CAddonsDirectory::FileItemFromAddon(
+      m_addon, URIUtils::AddFileToFolder(KODI::ADDONS::ROOT, m_addon->ID()));
   if (addonItem == nullptr)
     return false;
 

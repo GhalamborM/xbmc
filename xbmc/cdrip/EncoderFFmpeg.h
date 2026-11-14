@@ -33,13 +33,12 @@ public:
   bool Close() override;
 
 private:
-  static int avio_write_callback(void* opaque, uint8_t* buf, int buf_size);
+  static int avio_write_callback(void* opaque, const uint8_t* buf, int buf_size);
   static int64_t avio_seek_callback(void* opaque, int64_t offset, int whence);
 
   void SetTag(const std::string& tag, const std::string& value);
   bool WriteFrame();
   AVSampleFormat GetInputFormat(int inBitsPerSample);
-  std::string FFmpegErrorToString(int err);
 
   AVFormatContext* m_formatCtx{nullptr};
   AVCodecContext* m_codecCtx{nullptr};
@@ -55,7 +54,6 @@ private:
    * For others a typical size is a cache page, e.g. 4kb.
    */
   static constexpr size_t BUFFER_SIZE = 4096;
-  uint8_t* m_bcBuffer{nullptr};
 
   unsigned int m_neededFrames{0};
   size_t m_neededBytes{0};

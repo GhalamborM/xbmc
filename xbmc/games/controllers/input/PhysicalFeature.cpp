@@ -8,14 +8,19 @@
 
 #include "PhysicalFeature.h"
 
+#include "ServiceBroker.h"
 #include "games/controllers/Controller.h"
 #include "games/controllers/ControllerDefinitions.h"
 #include "games/controllers/ControllerTranslator.h"
-#include "guilib/LocalizeStrings.h"
+#include "input/keyboard/KeyboardTranslator.h"
+#include "resources/LocalizeStrings.h"
+#include "resources/ResourcesComponent.h"
 #include "utils/XMLUtils.h"
 #include "utils/log.h"
 
 #include <sstream>
+
+#include <tinyxml2.h>
 
 using namespace KODI;
 using namespace GAME;
@@ -53,10 +58,12 @@ std::string CPhysicalFeature::CategoryLabel() const
   std::string categoryLabel;
 
   if (m_categoryLabelId >= 0 && m_controller != nullptr)
-    categoryLabel = g_localizeStrings.GetAddonString(m_controller->ID(), m_categoryLabelId);
+    categoryLabel = CServiceBroker::GetResourcesComponent().GetLocalizeStrings().GetAddonString(
+        m_controller->ID(), m_categoryLabelId);
 
   if (categoryLabel.empty())
-    categoryLabel = g_localizeStrings.Get(m_categoryLabelId);
+    categoryLabel =
+        CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(m_categoryLabelId);
 
   return categoryLabel;
 }
@@ -66,15 +73,16 @@ std::string CPhysicalFeature::Label() const
   std::string label;
 
   if (m_labelId >= 0 && m_controller != nullptr)
-    label = g_localizeStrings.GetAddonString(m_controller->ID(), m_labelId);
+    label = CServiceBroker::GetResourcesComponent().GetLocalizeStrings().GetAddonString(
+        m_controller->ID(), m_labelId);
 
   if (label.empty())
-    label = g_localizeStrings.Get(m_labelId);
+    label = CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(m_labelId);
 
   return label;
 }
 
-bool CPhysicalFeature::Deserialize(const TiXmlElement* pElement,
+bool CPhysicalFeature::Deserialize(const tinyxml2::XMLElement* pElement,
                                    const CController* controller,
                                    FEATURE_CATEGORY category,
                                    int categoryLabelId)
@@ -94,7 +102,7 @@ bool CPhysicalFeature::Deserialize(const TiXmlElement* pElement,
     return false;
   }
 
-  // Cagegory was obtained from parent XML node
+  // Category was obtained from parent XML node
   m_category = category;
   m_categoryLabelId = categoryLabelId;
 
@@ -145,7 +153,7 @@ bool CPhysicalFeature::Deserialize(const TiXmlElement* pElement,
     }
     else
     {
-      m_keycode = CControllerTranslator::TranslateKeysym(strSymbol);
+      m_keycode = KEYBOARD::CKeyboardTranslator::TranslateKeysym(strSymbol);
       if (m_keycode == XBMCK_UNKNOWN)
       {
         CLog::Log(LOGERROR, "<{}> tag - attribute \"{}\" is invalid: \"{}\"", strType,

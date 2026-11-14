@@ -3,50 +3,26 @@
 # -------
 # Finds the DBUS library
 #
-# This will define the following variables::
+# This will define the following target:
 #
-# DBUS_FOUND - system has DBUS
-# DBUS_INCLUDE_DIRS - the DBUS include directory
-# DBUS_LIBRARIES - the DBUS libraries
-# DBUS_DEFINITIONS - the DBUS definitions
-#
-# and the following imported targets::
-#
-#   DBus::DBus   - The DBUS library
+#   ${APP_NAME_LC}::DBus   - The DBUS library
 
-if(PKG_CONFIG_FOUND)
-  pkg_check_modules(PC_DBUS dbus-1 QUIET)
-endif()
+if(NOT TARGET ${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME})
+  include(cmake/scripts/common/ModuleHelpers.cmake)
 
-find_path(DBUS_INCLUDE_DIR NAMES dbus/dbus.h
-                           PATH_SUFFIXES dbus-1.0
-                           PATHS ${PC_DBUS_INCLUDE_DIR})
-find_path(DBUS_ARCH_INCLUDE_DIR NAMES dbus/dbus-arch-deps.h
-                                PATH_SUFFIXES dbus-1.0/include
-                                PATHS ${PC_DBUS_LIBDIR}
-                                      /usr/lib/${CMAKE_LIBRARY_ARCHITECTURE})
-find_library(DBUS_LIBRARY NAMES dbus-1
-                          PATHS ${PC_DBUS_LIBDIR})
+  set(${CMAKE_FIND_PACKAGE_NAME}_MODULE_LC dbus-1)
+  set(${${CMAKE_FIND_PACKAGE_NAME}_MODULE_LC}_DISABLE_VERSION ON)
 
-set(DBUS_VERSION ${PC_DBUS_VERSION})
+  SETUP_BUILD_VARS()
 
-include(FindPackageHandleStandardArgs)
-find_package_handle_standard_args(DBus
-                                  REQUIRED_VARS DBUS_LIBRARY DBUS_INCLUDE_DIR DBUS_ARCH_INCLUDE_DIR
-                                  VERSION_VAR DBUS_VERSION)
+  SETUP_FIND_SPECS()
 
-if(DBUS_FOUND)
-  set(DBUS_LIBRARIES ${DBUS_LIBRARY})
-  set(DBUS_INCLUDE_DIRS ${DBUS_INCLUDE_DIR} ${DBUS_ARCH_INCLUDE_DIR})
-  set(DBUS_DEFINITIONS -DHAS_DBUS=1)
+  SEARCH_EXISTING_PACKAGES()
 
-  if(NOT TARGET DBus::DBus)
-    add_library(DBus::DBus UNKNOWN IMPORTED)
-    set_target_properties(DBus::DBus PROPERTIES
-                                   IMPORTED_LOCATION "${DBUS_LIBRARY}"
-                                   INTERFACE_INCLUDE_DIRECTORIES "${DBUS_INCLUDE_DIR}"
-                                   INTERFACE_COMPILE_DEFINITIONS HAS_DBUS=1)
+  if(${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME}_FOUND)
+    add_library(${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME} ALIAS PkgConfig::${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME})
+
+    set(${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_COMPILE_DEFINITIONS HAS_DBUS)
+    ADD_TARGET_COMPILE_DEFINITION()
   endif()
 endif()
-
-mark_as_advanced(DBUS_INCLUDE_DIR DBUS_LIBRARY)

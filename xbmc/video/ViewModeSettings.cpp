@@ -8,9 +8,13 @@
 
 #include "ViewModeSettings.h"
 
+#include "ServiceBroker.h"
 #include "cores/VideoSettings.h"
-#include "guilib/LocalizeStrings.h"
+#include "resources/LocalizeStrings.h"
+#include "resources/ResourcesComponent.h"
 #include "settings/lib/SettingDefinitions.h"
+#include "windowing/GraphicContext.h"
+#include "windowing/WinSystem.h"
 
 struct ViewModeProperties
 {
@@ -39,6 +43,14 @@ static const ViewModeProperties viewModes[] =
 };
 
 #define NUMBER_OF_VIEW_MODES (sizeof(viewModes) / sizeof(viewModes[0]))
+
+static bool Offerable(const ViewModeProperties& mode)
+{
+  if (!CServiceBroker::GetWinSystem()->GetGfxContext().IsRasterShapeStated())
+    return true;
+
+  return CViewModeSettings::SurvivesStatedShape(mode.viewMode);
+}
 
 /** Gets the index of a view mode
  *
@@ -69,7 +81,7 @@ int CViewModeSettings::GetNextQuickCycleViewMode(int viewMode)
   // Find the next quick cycle view mode
   for (size_t i = GetViewModeIndex(viewMode) + 1; i < NUMBER_OF_VIEW_MODES; i++)
   {
-    if (!viewModes[i].hideFromQuickCycle)
+    if (!viewModes[i].hideFromQuickCycle && Offerable(viewModes[i]))
       return viewModes[i].viewMode;
   }
 
@@ -90,13 +102,19 @@ int CViewModeSettings::GetViewModeStringIndex(int viewMode)
  */
 void CViewModeSettings::ViewModesFiller(const std::shared_ptr<const CSetting>& setting,
                                         std::vector<IntegerSettingOption>& list,
-                                        int& current,
-                                        void* data)
+                                        int& current)
 {
   // Add all appropriate view modes to the list control
   for (const auto &item : viewModes)
   {
-    if (!item.hideFromList)
-      list.emplace_back(g_localizeStrings.Get(item.stringIndex), item.viewMode);
+    if (!item.hideFromList && Offerable(item))
+      list.emplace_back(
+          CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(item.stringIndex),
+          item.viewMode);
   }
+}
+
+bool CViewModeSettings::SurvivesStatedShape(int viewMode)
+{
+  return viewMode == ViewModeNormal || viewMode == ViewModeCustom;
 }

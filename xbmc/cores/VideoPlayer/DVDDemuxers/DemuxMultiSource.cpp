@@ -42,14 +42,15 @@ void CDemuxMultiSource::Dispose()
 
 }
 
-void CDemuxMultiSource::EnableStream(int64_t demuxerId, int id, bool enable)
+bool CDemuxMultiSource::EnableStream(int64_t demuxerId, int id, bool enable)
 {
   auto iter = m_demuxerMap.find(demuxerId);
   if (iter != m_demuxerMap.end())
   {
     DemuxPtr demuxer = iter->second;
-    demuxer->EnableStream(demuxerId, id, enable);
+    return demuxer->EnableStream(demuxerId, id, enable);
   }
+  return false;
 }
 
 void CDemuxMultiSource::Flush()
@@ -138,7 +139,7 @@ bool CDemuxMultiSource::Open(const std::shared_ptr<CDVDInputStream>& pInput)
 
       m_demuxerMap[demuxer->GetDemuxerId()] = demuxer;
       m_DemuxerToInputStreamMap[demuxer] = *iter;
-      m_demuxerQueue.push(std::make_pair(-1.0, demuxer));
+      m_demuxerQueue.emplace(-1.0, demuxer);
       ++iter;
     }
   }
@@ -175,7 +176,7 @@ DemuxPacket* CDemuxMultiSource::Read()
       readTime = packet->dts;
     else
       readTime = packet->pts;
-    m_demuxerQueue.push(std::make_pair(readTime, currentDemuxer));
+    m_demuxerQueue.emplace(readTime, currentDemuxer);
   }
   else
   {
@@ -188,7 +189,7 @@ DemuxPacket* CDemuxMultiSource::Read()
                   __FUNCTION__, CURL::GetRedacted(currentDemuxer->GetFileName()));
       }
       else    //maybe add an error counter?
-        m_demuxerQueue.push(std::make_pair(-1.0, currentDemuxer));
+        m_demuxerQueue.emplace(-1.0, currentDemuxer);
     }
   }
 
@@ -203,7 +204,7 @@ bool CDemuxMultiSource::SeekTime(double time, bool backwards, double* startpts)
   {
     if (iter.second->SeekTime(time, false, startpts))
     {
-      demuxerQueue.push(std::make_pair(*startpts, iter.second));
+      demuxerQueue.emplace(*startpts, iter.second);
       CLog::Log(LOGDEBUG, "{} - starting demuxer from: {:f}", __FUNCTION__, time);
       ret = true;
     }
@@ -228,7 +229,7 @@ void CDemuxMultiSource::SetMissingStreamDetails(const DemuxPtr& demuxer)
     {
       stream->flags = static_cast<StreamFlags>(info.flag);
     }
-    if (stream->language.empty())
+    if (stream->language.IsEmpty())
     {
       stream->language = info.language;
     }

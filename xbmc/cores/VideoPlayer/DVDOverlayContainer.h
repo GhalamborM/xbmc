@@ -19,7 +19,6 @@ class CDVDDemuxSPU;
 class CDVDOverlayContainer : public CCriticalSection
 {
 public:
-  CDVDOverlayContainer();
   virtual ~CDVDOverlayContainer();
 
   /*!
@@ -34,12 +33,17 @@ public:
   *
   * \param pPicture pointer to the overlay to be evaluated and possibly added to the collection
   */
-  void ProcessAndAddOverlayIfValid(CDVDOverlay* pPicture);
+  void ProcessAndAddOverlayIfValid(const std::shared_ptr<CDVDOverlay>& pPicture);
 
   VecOverlays* GetOverlays(); // get the first overlay in this fifo
   bool ContainsOverlayType(DVDOverlayType type);
 
   void Clear(); // clear the fifo and delete all overlays
+
+  /*
+   * \brief Delete all overlays except disc menus, which are not redrawn until they change.
+   */
+  void ClearSubtitles();
 
   /*
    * \brief Flush the overlays.
@@ -48,13 +52,14 @@ public:
 
   void CleanUp(double pts); // validates all overlays against current pts
   size_t GetSize();
+  size_t GetSubtitleSize(); // number of overlays that are not disc menus
 
   void UpdateOverlayInfo(const std::shared_ptr<CDVDInputStreamNavigator>& pStream,
                          CDVDDemuxSPU* pSpu,
                          int iAction);
 
 private:
-  VecOverlaysIter Remove(VecOverlaysIter itOverlay); // removes a specific overlay
+  VecOverlays::iterator Remove(VecOverlays::iterator itOverlay); // removes a specific overlay
 
   VecOverlays m_overlays;
 };

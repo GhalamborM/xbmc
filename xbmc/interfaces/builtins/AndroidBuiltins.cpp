@@ -8,6 +8,7 @@
 
 #include "AndroidBuiltins.h"
 
+#include "ServiceBroker.h"
 #include "messaging/ApplicationMessenger.h"
 
 /*! \brief Launch an android system activity.
@@ -15,12 +16,17 @@
  *  \details params[0] = package
  *           params[1] = intent (optional)
  *           params[2] = datatype (optional)
- *           params[2] = dataURI (optional)
+ *           params[3] = dataURI (optional)
+ *           params[4] = flags (optional)
+ *           params[5] = extras (optional)
+ *           params[6] = action (optional)
+ *           params[7] = category (optional)
+ *           params[8] = className (optional)
  */
 static int LaunchAndroidActivity(const std::vector<std::string>& params)
 {
-  KODI::MESSAGING::CApplicationMessenger::GetInstance().PostMsg(
-    TMSG_START_ANDROID_ACTIVITY, -1, -1, nullptr, "", params);
+  CServiceBroker::GetAppMessenger()->PostMsg(TMSG_START_ANDROID_ACTIVITY, -1, -1, nullptr, "",
+                                             params);
 
   return 0;
 }
@@ -37,21 +43,31 @@ static int LaunchAndroidActivity(const std::vector<std::string>& params)
 ///     Function,
 ///     Description }
 ///   \table_row2_l{
-///     <b>`StartAndroidActivity(package\,[intent\,dataType\,dataURI])`</b>
+///     <b>`StartAndroidActivity(package\,[intent\,dataType\,dataURI\,flags\,extras\,action\,category\,className])`</b>
 ///     ,
 ///     Launch an Android native app with the given package name. Optional parms
-///     (in order): intent\, dataType\, dataURI.
+///     (in order): intent\, dataType\, dataURI\, flags\, extras\, action\,
+///     category\, className.
 ///     @param[in] package
 ///     @param[in] intent (optional)
 ///     @param[in] datatype (optional)
 ///     @param[in] dataURI (optional)
+///     @param[in] flags (optional)
+///     @param[in] extras (optional)
+///     @param[in] action (optional)
+///     @param[in] category (optional)
+///     @param[in] className (optional)
+///     <p><hr>
+///     @skinning_v20 Added parameters `flags`\,`extras`\,`action`\,`category`\,`className`.
+///     <p>
 ///   }
 /// \table_end
 ///
 
 CBuiltins::CommandMap CAndroidBuiltins::GetOperations() const
 {
-  return {
-           {"startandroidactivity",    {"Launch an Android native app with the given package name.  Optional parms (in order): intent, dataType, dataURI.", 1, LaunchAndroidActivity}}
-         };
+  return {{"startandroidactivity",
+           {"Launch an Android native app with the given package name.  Optional parms (in order): "
+            "intent, dataType, dataURI, flags, extras, action, category, className.",
+            1, LaunchAndroidActivity}}};
 }

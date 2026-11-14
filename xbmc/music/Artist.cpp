@@ -11,7 +11,9 @@
 #include "ServiceBroker.h"
 #include "settings/AdvancedSettings.h"
 #include "settings/SettingsComponent.h"
+#include "utils/ArtTypes.h"
 #include "utils/Fanart.h"
+#include "utils/StringUtils.h"
 #include "utils/XMLUtils.h"
 
 #include <algorithm>
@@ -62,6 +64,7 @@ void CArtist::MergeScrapedArtist(const CArtist& source, bool override /* = true 
     art = source.art;
 
   discography = source.discography;
+  videolinks = source.videolinks;
 }
 
 
@@ -133,6 +136,24 @@ bool CArtist::Load(const TiXmlElement *artist, bool append, bool prioritise)
     node = node->NextSiblingElement("album");
   }
 
+  //song video links
+  const TiXmlElement* songurls = artist->FirstChildElement("videourl");
+  if (songurls)
+    videolinks.clear();
+  while (songurls)
+  {
+    if (songurls->FirstChild())
+    {
+      ArtistVideoLinks videoLink;
+      XMLUtils::GetString(songurls, "title", videoLink.title);
+      XMLUtils::GetString(songurls, "musicbrainztrackid", videoLink.mbTrackID);
+      XMLUtils::GetString(songurls, "url", videoLink.videoURL);
+      XMLUtils::GetString(songurls, "thumburl", videoLink.thumbURL);
+      videolinks.emplace_back(std::move(videoLink));
+    }
+    songurls = songurls->NextSiblingElement("videourl");
+  }
+
   // Support old style <fanart></fanart> for backwards compatibility of old nfo files and scrapers
   const TiXmlElement *fanart2 = artist->FirstChildElement("fanart");
   if (fanart2)
@@ -150,7 +171,8 @@ bool CArtist::Load(const TiXmlElement *artist, bool append, bool prioritise)
     fanart.Unpack();
     // Append fanart to other image URLs
     for (unsigned int i = 0; i < fanart.GetNumFanarts(); i++)
-      thumbURL.AddParsedUrl(fanart.GetImageURL(i), "fanart", fanart.GetPreviewURL(i));
+      thumbURL.AddParsedUrl(fanart.GetImageURL(i), KODI::ART::TYPE::FANART,
+                            fanart.GetPreviewURL(i));
   }
 
  // Current artwork  - thumb, fanart etc. (the chosen art, not the lists of those available)
@@ -174,6 +196,8 @@ bool CArtist::Save(TiXmlNode *node, const std::string &tag, const std::string& s
 
   // we start with a <tag> tag
   TiXmlElement artistElement(tag.c_str());
+  if (tag == "artist")
+    artistElement.SetAttribute("version", 0);
   TiXmlNode *artist = node->InsertEndChild(artistElement);
 
   if (!artist) return false;
@@ -218,6 +242,16 @@ bool CArtist::Save(TiXmlNode *node, const std::string &tag, const std::string& s
     XMLUtils::SetString(node, "year", it.strYear);
     XMLUtils::SetString(node, "musicbrainzreleasegroupid", it.strReleaseGroupMBID);
   }
+  // song video links
+  for (const auto& it : videolinks)
+  {
+    TiXmlElement videolinkElement("videourl");
+    TiXmlNode* node = artist->InsertEndChild(videolinkElement);
+    XMLUtils::SetString(node, "title", it.title);
+    XMLUtils::SetString(node, "musicbrainztrackid", it.mbTrackID);
+    XMLUtils::SetString(node, "url", it.videoURL);
+    XMLUtils::SetString(node, "thumburl", it.thumbURL);
+  }
 
   return true;
 }
@@ -237,3 +271,8 @@ void CArtist::SetDateNew(const std::string& strDateNew)
   dateNew.SetFromDBDateTime(strDateNew);
 }
 
+bool CMusicRole::operator==(const CMusicRole& a) const
+{
+  return StringUtils::EqualsNoCase(m_strRole, a.m_strRole) &&
+         StringUtils::EqualsNoCase(m_strArtist, a.m_strArtist);
+}

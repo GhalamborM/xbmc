@@ -1,71 +1,65 @@
 -include ../../Makefile.include
-DEPS = Makefile
+include CROSSGUID-VERSION
+DEPS = Makefile CROSSGUID-VERSION ../../download-files.include \
+                                  001-fix-unused-function.patch \
+                                  002-disable-Wall-error.patch \
+                                  004-cmake-install.patch
 
-# lib name, version
-LIBNAME=crossguid
-VERSION=8f399e8bd4
-SOURCE=$(LIBNAME)-$(VERSION)
-ARCHIVE=$(SOURCE).tar.gz
-
+CMAKE_OPTIONS=-DCROSSGUID_TESTS=OFF \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DDISABLE_WALL=ON
 
 ifeq ($(CROSS_COMPILING), yes)
   DEPS += ../../Makefile.include
-  CXXFLAGS += -std=c++11
 else
-  CXXFLAGS += -std=c++11
   ROOT_DIR := $(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
-
   ifeq ($(PLATFORM),)
+    # crossguid uses string_view and requires c++17
+    CXXFLAGS += -std=c++17
     PLATFORM = native
     TARBALLS_LOCATION = $(ROOT_DIR)
-    BASE_URL := http://mirrors.kodi.tv/build-deps/sources
-    RETRIEVE_TOOL := curl -Ls --create-dirs -f -O
-    ARCHIVE_TOOL := tar --strip-components=1 -xf
+    BASE_URL ?= https://mirrors.kodi.tv/build-deps/sources
+    RETRIEVE_TOOL := curl
+    RETRIEVE_TOOL_FLAGS := -LsS --create-dirs --retry 10 --retry-connrefused -o
+    ARCHIVE_TOOL := tar
+    ARCHIVE_TOOL_FLAGS := --strip-components=1 -xf
+    CMAKE := cmake
+    CMAKE_OPTIONS := -DCMAKE_INSTALL_PREFIX=$(PREFIX) -DCMAKE_INSTALL_LIBDIR=lib $(CMAKE_OPTIONS)
+    HASH_TOOL = sha512sum
+    HASH_TOOL_FLAGS = -c --status
   endif
 endif
 
+LIBDYLIB=$(PLATFORM)/$(BYPRODUCT)
 
-# define specifying the native GUID implementation to use
-GUID_PLATFORM_DEFINE=GUID_LIBUUID
-ifeq ($(OS),osx)
-	GUID_PLATFORM_DEFINE=GUID_CFUUID
-endif
-ifeq ($(OS),darwin_embedded)
-	GUID_PLATFORM_DEFINE=GUID_CFUUID
-endif
-
-LIBDYLIB=$(PLATFORM)/lib$(LIBNAME).a
+include ../../download-files.include
 
 .PHONY: .installed-native
 
 all: .installed-$(PLATFORM)
 
-$(TARBALLS_LOCATION)/$(ARCHIVE):
-	cd $(TARBALLS_LOCATION); $(RETRIEVE_TOOL) $(RETRIEVE_TOOL_FLAGS) $(BASE_URL)/$(ARCHIVE)
-
-$(PLATFORM): $(TARBALLS_LOCATION)/$(ARCHIVE) $(DEPS)
+.configured-$(PLATFORM): $(DEPS) | $(TARBALLS_LOCATION)/$(ARCHIVE).$(HASH_TYPE)
 ifeq ($(PREFIX),)
 	@echo
 	@echo "ERROR: please set PREFIX to the kodi install path e.g. make PREFIX=/usr/local"
 	@exit 1
 endif
-	rm -rf $(PLATFORM); mkdir -p $(PLATFORM)
+	rm -rf $(PLATFORM); mkdir -p $(PLATFORM)/build
 	cd $(PLATFORM); $(ARCHIVE_TOOL) $(ARCHIVE_TOOL_FLAGS) $(TARBALLS_LOCATION)/$(ARCHIVE)
+	cd $(PLATFORM); patch -p1 -i ../001-fix-unused-function.patch
+	cd $(PLATFORM); patch -p1 -i ../002-disable-Wall-error.patch
+	cd $(PLATFORM); patch -p1 -i ../003-add-cstdint-include.patch
+	cd $(PLATFORM); patch -p1 -i ../004-cmake-install.patch
+	cd $(PLATFORM)/build; $(CMAKE) $(CMAKE_OPTIONS) ..
+	touch $@
 
-$(LIBDYLIB): $(PLATFORM)
-	cd $(PLATFORM); $(CXX) -c guid.cpp -o guid.o $(CXXFLAGS) -D$(GUID_PLATFORM_DEFINE)
-	cd $(PLATFORM); $(AR) rvs lib$(LIBNAME).a guid.o
-
-.installed-$(PLATFORM): $(LIBDYLIB)
-	@[ -d $(PREFIX)/include ] || mkdir -p $(PREFIX)/include
-	@[ -d $(PREFIX)/lib ] || mkdir $(PREFIX)/lib
-	cp $(PLATFORM)/guid.h $(PREFIX)/include/
-	cp $(LIBDYLIB) $(PREFIX)/lib/
+.installed-$(PLATFORM): .configured-$(PLATFORM)
+	$(MAKE) -C $(PLATFORM)/build install
 	touch $@
 
 clean:
-	rm -rf $(PLATFORM) .installed-$(PLATFORM)
+	$(MAKE) -C $(PLATFORM)/build clean
+	rm -f .installed-$(PLATFORM) .configured-$(PLATFORM)
 
-distclean::
-	rm -rf $(PLATFORM) .installed-$(PLATFORM)
-
+distclean:
+	rm -rf $(PLATFORM) .installed-$(PLATFORM) .configured-$(PLATFORM)

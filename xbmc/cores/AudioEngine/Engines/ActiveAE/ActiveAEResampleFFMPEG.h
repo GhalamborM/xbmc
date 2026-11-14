@@ -27,8 +27,15 @@ public:
   const char *GetName() override { return "ActiveAEResampleFFMPEG"; }
   CActiveAEResampleFFMPEG();
   ~CActiveAEResampleFFMPEG() override;
-  bool Init(SampleConfig dstConfig, SampleConfig srcConfig, bool upmix, bool normalize, double centerMix,
-            CAEChannelInfo *remapLayout, AEQuality quality, bool force_resample) override;
+  bool Init(SampleConfig dstConfig,
+            SampleConfig srcConfig,
+            bool upmix,
+            bool normalize,
+            double centerMix,
+            CAEChannelInfo* remapLayout,
+            AEQuality quality,
+            bool force_resample,
+            float sublevel) override;
   int Resample(uint8_t **dst_buffer, int dst_samples, uint8_t **src_buffer, int src_samples, double ratio) override;
   int64_t GetDelay(int64_t base) override;
   int GetBufferedSamples() override;
@@ -40,6 +47,8 @@ public:
 protected:
   bool m_loaded;
   bool m_doesResample;
+  double m_compensationRemainder = 0.0;
+  int64_t m_compensationInput = 0;
   uint64_t m_src_chan_layout, m_dst_chan_layout;
   int m_src_rate, m_dst_rate;
   int m_src_channels, m_dst_channels;

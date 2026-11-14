@@ -10,6 +10,7 @@
 
 #include "ServiceBroker.h"
 #include "addons/AddonManager.h"
+#include "addons/addoninfo/AddonType.h"
 #include "addons/gui/GUIDialogAddonSettings.h"
 #include "cores/RetroPlayer/guibridge/GUIGameRenderManager.h"
 #include "cores/RetroPlayer/guibridge/GUIGameSettingsHandle.h"
@@ -35,7 +36,8 @@ bool CDialogGameAdvancedSettings::OnMessage(CGUIMessage& message)
       {
         ADDON::AddonPtr addon;
         if (CServiceBroker::GetAddonMgr().GetAddon(gameSettingsHandle->GameClientID(), addon,
-                                                   ADDON::ADDON_GAMEDLL, ADDON::OnlyEnabled::YES))
+                                                   ADDON::AddonType::GAMEDLL,
+                                                   ADDON::OnlyEnabled::CHOICE_YES))
         {
           gameSettingsHandle.reset();
           CGUIDialogAddonSettings::ShowForAddon(addon);

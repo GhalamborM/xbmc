@@ -8,6 +8,9 @@
 
 #include "GameLoop.h"
 
+#include "utils/log.h"
+
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 
@@ -15,121 +18,286 @@ using namespace KODI;
 using namespace RETRO;
 using namespace std::chrono_literals;
 
-#define DEFAULT_FPS 60 // In case fps is 0 (shouldn't happen)
-#define FOREVER_MS (7 * 24 * 60 * 60 * 1000) // 1 week is large enough
+namespace
+{
+// Default FPS value in case fps is 0 (which shouldn't happen)
+constexpr double DEFAULT_FPS = 60.0;
 
-CGameLoop::CGameLoop(IGameLoopCallback* callback, double fps)
+// Duration to sleep while the game loop is paused
+constexpr auto PAUSE_SLEEP = 5s;
+
+// How many frames the loop may fall behind before it gives up the deficit
+// rather than trying to run them back to back
+constexpr unsigned int MAX_FRAME_DEFICIT = 2;
+
+double ToMs(std::chrono::duration<double> duration)
+{
+  return duration.count() * 1000.0;
+}
+} // namespace
+
+CGameLoop::CGameLoop(IGameLoopCallback* callback, double fps, CDisplayPacing* displayPacing)
   : CThread("GameLoop"),
     m_callback(callback),
-    m_fps(fps ? fps : DEFAULT_FPS),
-    m_speedFactor(0.0),
-    m_lastFrameMs(0.0),
-    m_adjustTime(0.0)
+    m_displayPacing(displayPacing),
+    m_fps(fps != 0.0 ? fps : DEFAULT_FPS)
 {
 }
 
 CGameLoop::~CGameLoop()
 {
+  // Ensure the game loop is stopped when the object is destroyed
   Stop();
 }
 
 void CGameLoop::Start()
 {
+  m_quiesceRequested.store(false);
+  m_quiescedEvent.Reset();
+  // Start the thread by invoking the base class's Create method
   Create();
+}
+
+void CGameLoop::Quiesce()
+{
+  m_quiesceRequested.store(true);
+  m_sleepEvent.Set();
+  while (IsRunning() && !m_quiescedEvent.Wait(100ms))
+  {
+  }
 }
 
 void CGameLoop::Stop()
 {
+  // Request to stop the thread
   StopThread(false);
+
+  // Wake up the thread if it's waiting on the sleep event
   m_sleepEvent.Set();
+
+  // Wait until the thread is fully stopped
   StopThread(true);
 }
 
 void CGameLoop::SetSpeed(double speedFactor)
 {
-  m_speedFactor = speedFactor;
+  // Set the new speed factor
+  m_speedFactor.store(speedFactor);
 
+  // Wake up the thread to apply the new speed immediately
   m_sleepEvent.Set();
+}
+
+void CGameLoop::SetFrameRate(double fps)
+{
+  m_fps.store(fps != 0.0 ? fps : DEFAULT_FPS);
 }
 
 void CGameLoop::PauseAsync()
 {
+  // Pause the game loop asynchronously by setting speed to 0
   SetSpeed(0.0);
 }
 
 void CGameLoop::Process(void)
 {
+  // Main game loop that runs until the thread is requested to stop
   while (!m_bStop)
   {
-    if (m_speedFactor == 0.0)
+    if (m_quiesceRequested.load())
     {
-      m_lastFrameMs = 0.0;
-      m_sleepEvent.Wait(5000ms);
+      StopPacing();
+      m_quiescedEvent.Set();
+      m_sleepEvent.Wait(PAUSE_SLEEP);
+      continue;
+    }
+
+    // If the speed factor has changed, reset the last frame time and update
+    // the loop speed factor
+    const double speed = m_speedFactor.load();
+    if (m_loopSpeedFactor != speed)
+    {
+      // Reset last frame time
+      m_lastFrameUs = std::chrono::microseconds::zero();
+
+      // Update loop speed factor
+      m_loopSpeedFactor = speed;
+    }
+
+    // If the game is paused, wait before checking again
+    if (m_loopSpeedFactor == 0.0)
+    {
+      StopPacing();
+
+      // Wait for a long duration if paused
+      m_sleepEvent.Wait(PAUSE_SLEEP);
     }
     else
     {
-      if (m_speedFactor > 0.0)
-        m_callback->FrameEvent();
-      else if (m_speedFactor < 0.0)
+      // If it's the first frame or after a reset, set the last frame time to
+      // the current time
+      if (m_lastFrameUs == std::chrono::microseconds::zero())
+        m_lastFrameUs = NowUs();
+
+      if (m_loopSpeedFactor == 1.0 && PaceToDisplay())
+        continue;
+      StopPacing();
+
+      // Trigger the appropriate callback depending on the direction of time
+      // (forward or rewind)
+      if (m_loopSpeedFactor > 0.0)
+        RunFrame();
+      else if (m_loopSpeedFactor < 0.0)
         m_callback->RewindEvent();
 
-      if (m_lastFrameMs > 0.0)
+      // Calculate the time for the next frame by adding the frame duration to
+      // the last frame time
+      const std::chrono::microseconds nextFrameUs = m_lastFrameUs + FrameTimeUs();
+
+      // Update the last frame time to ensure accurate timing for the next loop
+      // iteration
+      m_lastFrameUs = nextFrameUs;
+
+      // Calculate how much time to sleep before the next frame should be processed
+      std::chrono::microseconds sleepTimeUs = (nextFrameUs - NowUs());
+
+      // A frame that overruns leaves the loop behind, and the deficit is
+      // carried into the next one so that ordinary jitter averages out to the
+      // right rate. A long stall is not jitter: opening a game leaves hundreds
+      // of milliseconds owed, and carrying that makes the loop repay it by
+      // running frames back to back with no sleep at all, which the player sees
+      // as the game fast-forwarding. Past a few frames, give the deficit up and
+      // carry on from now -- those frames are late whatever happens, and
+      // running them early does not make them less so.
+      if (-sleepTimeUs > FrameTimeUs() * MAX_FRAME_DEFICIT)
       {
-        m_lastFrameMs += FrameTimeMs();
-        m_adjustTime = m_lastFrameMs - NowMs();
-      }
-      else
-      {
-        m_lastFrameMs = NowMs();
-        m_adjustTime = 0.0;
+        m_lastFrameUs = NowUs();
+        sleepTimeUs = std::chrono::microseconds::zero();
       }
 
-      // Calculate sleep time
-      double sleepTimeMs = SleepTimeMs();
-
-      // Sleep at least 1 ms to avoid sleeping forever
-      while (sleepTimeMs > 1.0)
-      {
-        m_sleepEvent.Wait(std::chrono::milliseconds(static_cast<unsigned int>(sleepTimeMs)));
-
-        if (m_bStop)
-          break;
-
-        // Speed may have changed, update sleep time
-        sleepTimeMs = SleepTimeMs();
-      }
+      // Only sleep if there is time left before the next frame
+      if (sleepTimeUs > std::chrono::microseconds::zero())
+        m_sleepEvent.Wait(sleepTimeUs);
     }
   }
+
+  // Notify the callback that the loop has finished processing
+  m_callback->EndEvent();
 }
 
-double CGameLoop::FrameTimeMs() const
+bool CGameLoop::PaceToDisplay()
 {
-  if (m_speedFactor != 0.0)
-    return 1000.0 / m_fps / std::abs(m_speedFactor);
-  else
-    return 1000.0 / m_fps / 1.0;
+  if (m_displayPacing == nullptr || !m_displayPacing->Enabled())
+    return false;
+
+  using Clock = CDisplayPacing::Clock;
+  const Clock::time_point now = Clock::now();
+
+  const Clock::duration interval = m_displayPacing->Interval(now);
+  if (interval == Clock::duration::zero())
+  {
+    if (PacingChanged(PacingState::NO_INTERVAL))
+      CLog::Log(LOGINFO, "RetroPlayer[PACING]: Not pacing, the display's refresh rate isn't "
+                         "known or the screen isn't taking frames");
+    return false;
+  }
+
+  const double refreshRate = 1s / std::chrono::duration<double>(interval);
+  const double rate = refreshRate / m_fps.load();
+  if (std::abs(rate - 1.0) > m_displayPacing->MaxRateDifference())
+  {
+    if (PacingChanged(PacingState::RATE_TOO_FAR))
+      CLog::Log(LOGINFO,
+                "RetroPlayer[PACING]: Not pacing, the screen's {:.3f} Hz is too far from the "
+                "game's {:.3f} fps",
+                refreshRate, m_fps.load());
+    return false;
+  }
+
+  // Started this long before the screen takes it, a frame is ready in time.
+  // One that can't be gains nothing from waiting for the screen.
+  const Clock::duration lead = m_frameCost + m_displayPacing->Margin();
+  if (lead >= interval)
+  {
+    if (PacingChanged(PacingState::FRAME_TOO_SLOW))
+      CLog::Log(LOGINFO,
+                "RetroPlayer[PACING]: Not pacing, a {:.1f} ms frame and the {:.1f} ms margin "
+                "don't fit in a {:.1f} ms refresh",
+                ToMs(m_frameCost), ToMs(m_displayPacing->Margin()), ToMs(interval));
+    return false;
+  }
+
+  if (PacingChanged(PacingState::PACED))
+    CLog::Log(LOGINFO,
+              "RetroPlayer[PACING]: Pacing the game to the screen's {:.3f} Hz at {:.2f}% speed",
+              refreshRate, rate * 100.0);
+
+  // One frame for each one the screen takes. The renderer hasn't taken the
+  // last one yet if the next take is still the one it was run for.
+  Clock::time_point take = m_displayPacing->NextTake(now);
+  if (m_lastPacedTake != Clock::time_point{} && take - m_lastPacedTake < interval / 2)
+    take = m_lastPacedTake + interval;
+
+  const Clock::time_point start = take - lead;
+  if (start > now && m_sleepEvent.Wait(start - now))
+    return true; // Woken by a change, such as of speed; look again
+
+  RunFrame();
+
+  m_lastPacedTake = take;
+  m_displayPacing->SetPlaybackRate(rate);
+  m_displayPacing->SetPaced(true);
+
+  // The timer carries on from here if pacing stops
+  m_lastFrameUs = NowUs();
+
+  return true;
 }
 
-double CGameLoop::SleepTimeMs() const
+void CGameLoop::RunFrame()
 {
-  // Calculate next frame time
-  const double nextFrameMs = m_lastFrameMs + FrameTimeMs();
+  using Clock = CDisplayPacing::Clock;
 
-  // Calculate sleep time
-  double sleepTimeMs = (nextFrameMs - NowMs()) + m_adjustTime;
+  const Clock::time_point begin = Clock::now();
+  m_callback->FrameEvent();
+  const Clock::duration cost = Clock::now() - begin;
 
-  // Reset adjust time
-  m_adjustTime = 0.0;
-
-  // Positive or zero
-  sleepTimeMs = (sleepTimeMs >= 0.0 ? sleepTimeMs : 0.0);
-
-  return sleepTimeMs;
+  // Follow the slowest recent frame, letting it go slowly, so that one quick
+  // frame doesn't make the next start too late. Timed whether or not it was
+  // paced, so that a slow frame which stops pacing is forgotten again.
+  m_frameCost = std::max(cost, m_frameCost - m_frameCost / 64);
 }
 
-double CGameLoop::NowMs() const
+void CGameLoop::StopPacing()
 {
-  return std::chrono::duration<double, std::milli>(
-             std::chrono::steady_clock::now().time_since_epoch())
-      .count();
+  if (m_displayPacing == nullptr || m_lastPacedTake == CDisplayPacing::Clock::time_point{})
+    return;
+
+  m_lastPacedTake = {};
+  m_displayPacing->SetPlaybackRate(1.0);
+  m_displayPacing->SetPaced(false);
+}
+
+bool CGameLoop::PacingChanged(PacingState state)
+{
+  if (state == m_pacingState)
+    return false;
+
+  m_pacingState = state;
+  return true;
+}
+
+std::chrono::microseconds CGameLoop::FrameTimeUs() const
+{
+  // Calculate the duration of one frame in microseconds based on the FPS and
+  // speed factor
+  const double factor = m_loopSpeedFactor != 0.0 ? std::abs(m_loopSpeedFactor) : 1.0;
+  return std::chrono::duration_cast<std::chrono::microseconds>(1s / m_fps.load() / factor);
+}
+
+std::chrono::microseconds CGameLoop::NowUs() const
+{
+  // Get the current time in microseconds since the steady clock epoch
+  return std::chrono::duration_cast<std::chrono::microseconds>(
+      std::chrono::steady_clock::now().time_since_epoch());
 }

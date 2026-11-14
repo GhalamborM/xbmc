@@ -22,15 +22,15 @@ class CSettingsValueXmlSerializer : public ISettingsValueSerializer
 {
 public:
   CSettingsValueXmlSerializer() = default;
-  ~CSettingsValueXmlSerializer() = default;
+  ~CSettingsValueXmlSerializer() override = default;
 
   // implementation of ISettingsValueSerializer
   std::string SerializeValues(const CSettingsManager* settingsManager) const override;
+  static bool SerializeSetting(TiXmlNode* parent, const std::shared_ptr<CSetting>& setting);
 
 private:
   void SerializeSection(TiXmlNode* parent, const std::shared_ptr<CSettingSection>& section) const;
   void SerializeCategory(TiXmlNode* parent,
                          const std::shared_ptr<CSettingCategory>& category) const;
   void SerializeGroup(TiXmlNode* parent, const std::shared_ptr<CSettingGroup>& group) const;
-  void SerializeSetting(TiXmlNode* parent, const std::shared_ptr<CSetting>& setting) const;
 };

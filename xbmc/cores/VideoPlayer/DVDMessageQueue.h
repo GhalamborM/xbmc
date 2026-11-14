@@ -19,16 +19,11 @@
 
 struct DVDMessageListItem
 {
-  DVDMessageListItem(std::shared_ptr<CDVDMsg> msg, int prio)
+  DVDMessageListItem(std::shared_ptr<CDVDMsg> msg, int prio) : message(std::move(msg))
   {
-    message = std::move(msg);
     priority = prio;
   }
-  DVDMessageListItem()
-  {
-    message = NULL;
-    priority = 0;
-  }
+  DVDMessageListItem() { priority = 0; }
   DVDMessageListItem(const DVDMessageListItem&) = delete;
   ~DVDMessageListItem() = default;
 
@@ -70,26 +65,33 @@ public:
    * priority,  minimum priority to get, outputs returned packets priority
    */
   MsgQueueReturnCode Get(std::shared_ptr<CDVDMsg>& pMsg,
-                         unsigned int iTimeoutInMilliSeconds,
+                         std::chrono::milliseconds timeout,
                          int& priority);
-  MsgQueueReturnCode Get(std::shared_ptr<CDVDMsg>& pMsg, unsigned int iTimeoutInMilliSeconds)
+  MsgQueueReturnCode Get(std::shared_ptr<CDVDMsg>& pMsg, std::chrono::milliseconds timeout)
   {
     int priority = 0;
-    return Get(pMsg, iTimeoutInMilliSeconds, priority);
+    return Get(pMsg, timeout, priority);
   }
 
   int GetDataSize() const { return m_iDataSize; }
-  int GetTimeSize() const;
+  double GetTimeSize() const;
   unsigned GetPacketCount(CDVDMsg::Message type);
   bool ReceivedAbortRequest() { return m_bAbortRequest; }
   void WaitUntilEmpty();
 
   // non messagequeue related functions
   bool IsFull() const { return GetLevel() == 100; }
-  int GetLevel() const;
+
+  /*!
+   * \brief Get the current queue level.
+   *
+   * \param dataLevel If true, return the data-based level.
+   * \return Queue level as a percentage.
+   */
+  int GetLevel(bool dataLevel = false) const;
 
   void SetMaxDataSize(int iMaxDataSize) { m_iMaxDataSize = iMaxDataSize; }
-  void SetMaxTimeSize(double sec) { m_TimeSize  = 1.0 / std::max(1.0, sec); }
+  void SetMaxTimeSize(double sec) { m_TimeSize = 1.0 / sec; }
   int GetMaxDataSize() const { return m_iMaxDataSize; }
   double GetMaxTimeSize() const { return m_TimeSize; }
   bool IsInited() const { return m_bInitialized; }
@@ -103,7 +105,7 @@ private:
   CEvent m_hEvent;
   mutable CCriticalSection m_section;
 
-  std::atomic<bool> m_bAbortRequest;
+  std::atomic<bool> m_bAbortRequest = false;
   bool m_bInitialized;
   bool m_drain = false;
 

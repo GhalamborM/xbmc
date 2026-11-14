@@ -22,7 +22,7 @@ extern "C" {
 class CAEStreamInfo
 {
 public:
-  double GetDuration(bool paPlayer = false) const;
+  double GetDuration() const;
   bool operator==(const CAEStreamInfo& info) const;
 
   enum DataType
@@ -45,7 +45,7 @@ public:
   bool m_dataIsLE = true;
   unsigned int m_dtsPeriod = 0;
   unsigned int m_repeat = 0;
-  unsigned int m_ac3FrameSize = 0;
+  unsigned int m_frameSize = 0;
 };
 
 class CAEStreamParser
@@ -65,7 +65,7 @@ public:
   // unsigned int GetDTSBlocks() const { return m_dtsBlocks; }
   unsigned int GetDTSPeriod() const { return m_info.m_dtsPeriod; }
   unsigned int GetEAC3BlocksDiv() const { return m_info.m_repeat; }
-  enum CAEStreamInfo::DataType const GetDataType() const { return m_info.m_type; }
+  enum CAEStreamInfo::DataType GetDataType() const { return m_info.m_type; }
   bool IsLittleEndian() const { return m_info.m_dataIsLE; }
   unsigned int GetBufferSize() const { return m_bufferSize; }
   CAEStreamInfo& GetStreamInfo() { return m_info; }
@@ -84,6 +84,7 @@ private:
   ParseFunc m_syncFunc;
   bool m_hasSync = false;
 
+  unsigned int m_skipCount = 0;
   unsigned int m_coreSize = 0;         /* core size for dtsHD */
   unsigned int m_dtsBlocks = 0;
   unsigned int m_fsize = 0;

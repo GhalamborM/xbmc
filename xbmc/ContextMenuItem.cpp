@@ -7,11 +7,14 @@
  */
 
 #include "ContextMenuItem.h"
-#include "addons/AddonManager.h"
-#include "addons/ContextMenuAddon.h"
-#include "addons/IAddon.h"
+
+#include "FileItem.h"
 #include "GUIInfoManager.h"
+#include "addons/AddonManager.h"
+#include "addons/IAddon.h"
 #include "guilib/GUIComponent.h"
+#include "resources/LocalizeStrings.h"
+#include "resources/ResourcesComponent.h"
 #ifdef HAS_PYTHON
 #include "interfaces/generic/ScriptInvocationManager.h"
 #include "interfaces/python/ContextItemAddonInvoker.h"
@@ -20,6 +23,28 @@
 #include "ServiceBroker.h"
 #include "utils/StringUtils.h"
 
+std::string CStaticContextMenuAction::GetLabel(const CFileItem& item) const
+{
+  return CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(m_label);
+}
+
+CContextMenuItem::CContextMenuItem(CGroup groupData)
+  : m_label(std::move(groupData.label)),
+    m_parent(std::move(groupData.parent)),
+    m_groupId(std::move(groupData.groupId)),
+    m_addonId(std::move(groupData.addonId))
+{
+}
+
+CContextMenuItem::CContextMenuItem(CItem itemData)
+  : m_label(std::move(itemData.label)),
+    m_parent(std::move(itemData.parent)),
+    m_library(std::move(itemData.library)),
+    m_addonId(std::move(itemData.addonId)),
+    m_args(std::move(itemData.args)),
+    m_visibilityCondition(std::move(itemData.condition))
+{
+}
 
 bool CContextMenuItem::IsVisible(const CFileItem& item) const
 {
@@ -28,7 +53,7 @@ bool CContextMenuItem::IsVisible(const CFileItem& item) const
     m_infoBool = CServiceBroker::GetGUI()->GetInfoManager().Register(m_visibilityCondition, 0);
     m_infoBoolRegistered = true;
   }
-  return IsGroup() || (m_infoBool && m_infoBool->Get(&item));
+  return IsGroup() || (m_infoBool && m_infoBool->Get(INFO::DEFAULT_CONTEXT, &item));
 }
 
 bool CContextMenuItem::IsParentOf(const CContextMenuItem& other) const
@@ -41,22 +66,26 @@ bool CContextMenuItem::IsGroup() const
   return !m_groupId.empty();
 }
 
-bool CContextMenuItem::Execute(const CFileItemPtr& item) const
+bool CContextMenuItem::HasParent() const
+{
+  return !m_parent.empty();
+}
+
+bool CContextMenuItem::Execute(const std::shared_ptr<CFileItem>& item) const
 {
   if (!item || m_library.empty() || IsGroup())
     return false;
 
   ADDON::AddonPtr addon;
-  if (!CServiceBroker::GetAddonMgr().GetAddon(m_addonId, addon, ADDON::ADDON_UNKNOWN,
-                                              ADDON::OnlyEnabled::YES))
+  if (!CServiceBroker::GetAddonMgr().GetAddon(m_addonId, addon, ADDON::OnlyEnabled::CHOICE_YES))
     return false;
 
   bool reuseLanguageInvoker = false;
-  if (addon->ExtraInfo().find("reuselanguageinvoker") != addon->ExtraInfo().end())
+  if (addon->ExtraInfo().contains("reuselanguageinvoker"))
     reuseLanguageInvoker = addon->ExtraInfo().at("reuselanguageinvoker") == "true";
 
 #ifdef HAS_PYTHON
-  LanguageInvokerPtr invoker(new CContextItemAddonInvoker(&CServiceBroker::GetXBPython(), item));
+  auto invoker = std::make_shared<CContextItemAddonInvoker>(&CServiceBroker::GetXBPython(), item);
   return (CScriptInvocationManager::GetInstance().ExecuteAsync(m_library, invoker, addon, m_args, reuseLanguageInvoker) != -1);
 #else
   return false;
@@ -83,28 +112,4 @@ std::string CContextMenuItem::ToString() const
   else
     return StringUtils::Format("CContextMenuItem[item, parent={}, library={}, addon={}]", m_parent,
                                m_library, m_addonId);
-}
-
-CContextMenuItem CContextMenuItem::CreateGroup(const std::string& label, const std::string& parent,
-    const std::string& groupId, const std::string& addonId)
-{
-  CContextMenuItem menuItem;
-  menuItem.m_label = label;
-  menuItem.m_parent = parent;
-  menuItem.m_groupId = groupId;
-  menuItem.m_addonId = addonId;
-  return menuItem;
-}
-
-CContextMenuItem CContextMenuItem::CreateItem(const std::string& label, const std::string& parent,
-    const std::string& library, const std::string& condition, const std::string& addonId, const std::vector<std::string>& args)
-{
-  CContextMenuItem menuItem;
-  menuItem.m_label = label;
-  menuItem.m_parent = parent;
-  menuItem.m_library = library;
-  menuItem.m_visibilityCondition = condition;
-  menuItem.m_addonId = addonId;
-  menuItem.m_args = args;
-  return menuItem;
 }

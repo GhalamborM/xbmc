@@ -90,17 +90,6 @@ std::string CLocale::ToString() const
   return locale;
 }
 
-std::string CLocale::ToStringLC() const
-{
-  if (!m_valid)
-    return "";
-
-  std::string locale = ToString();
-  StringUtils::ToLower(locale);
-
-  return locale;
-}
-
 std::string CLocale::ToShortString() const
 {
   if (!m_valid)
@@ -175,22 +164,22 @@ std::string CLocale::FindBestMatch(const std::set<std::string>& locales) const
   return bestMatch;
 }
 
-std::string CLocale::FindBestMatch(const std::unordered_map<std::string, std::string>& locales) const
+std::string CLocale::FindBestMatch(const LocalizedStringsMap& locales) const
 {
   std::string bestMatch = "";
   int bestMatchRank = -1;
 
-  for (auto const& locale : locales)
+  for (auto const& [locale, _] : locales)
   {
     // check if there is an exact match
-    if (Equals(locale.first))
-      return locale.first;
+    if (Equals(locale))
+      return locale;
 
-    int matchRank = GetMatchRank(locale.first);
+    int matchRank = GetMatchRank(locale);
     if (matchRank > bestMatchRank)
     {
       bestMatchRank = matchRank;
-      bestMatch = locale.first;
+      bestMatch = locale;
     }
   }
 
@@ -224,7 +213,7 @@ bool CLocale::ParseLocale(const std::string &locale, std::string &language, std:
   if (pos != std::string::npos)
   {
     modifier = tmp.substr(pos + 1);
-    tmp = tmp.substr(0, pos);
+    tmp.resize(pos);
   }
 
   // look for the codeset after .
@@ -232,7 +221,7 @@ bool CLocale::ParseLocale(const std::string &locale, std::string &language, std:
   if (pos != std::string::npos)
   {
     codeset = tmp.substr(pos + 1);
-    tmp = tmp.substr(0, pos);
+    tmp.resize(pos);
   }
 
   // look for the codeset after _
@@ -241,7 +230,7 @@ bool CLocale::ParseLocale(const std::string &locale, std::string &language, std:
   {
     territory = tmp.substr(pos + 1);
     StringUtils::ToUpper(territory);
-    tmp = tmp.substr(0, pos);
+    tmp.resize(pos);
   }
 
   // what remains is the language

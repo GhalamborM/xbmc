@@ -1,14 +1,10 @@
-include ../../Makefile.include.in
+include ../../Makefile.include.in ../../native/autoconf/AUTOCONF-VERSION
 PREFIX=$(CURDIR)/../../pre-build-deps
 PLATFORM=native
 TARBALLS_LOCATION=$(PREFIX)
 RETRIEVE_TOOL=curl
 ARCHIVE_TOOL=tar
-# lib name, version
-LIBNAME=autoconf
-VERSION=2.71
-SOURCE=$(LIBNAME)-$(VERSION)
-ARCHIVE=$(SOURCE).tar.xz
+DEPS = ../../Makefile.include.in Makefile ../../native/autoconf/AUTOCONF-VERSION
 
 export PATH:=$(CURDIR)/../../pre-build-deps/bin:$(PATH)
 
@@ -21,7 +17,7 @@ all: $(PREFIX)/bin/$(LIBNAME)
 
 $(TARBALLS_LOCATION)/$(ARCHIVE):
 	mkdir -p $(TARBALLS_LOCATION)
-	cd $(TARBALLS_LOCATION); $(RETRIEVE_TOOL) $(RETRIEVE_TOOL_FLAGS) $(BASE_URL)/$(ARCHIVE)
+	cd $(TARBALLS_LOCATION); $(RETRIEVE_TOOL) $(RETRIEVE_TOOL_FLAGS) $(ARCHIVE) $(BASE_URL)/$(ARCHIVE)
 
 $(PLATFORM): $(TARBALLS_LOCATION)/$(ARCHIVE) $(DEPS)
 	-rm -rf $(PLATFORM)/*; mkdir -p $(PLATFORM)

@@ -16,8 +16,9 @@
 //
 //
 
-#ifdef HAS_DVD_DRIVE
+#ifdef HAS_OPTICAL_DRIVE
 
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <utility>
@@ -32,36 +33,62 @@ namespace XFILE
 
 class CSetting;
 
-enum AutoCDAction
+enum class AutoCDAction : uint8_t
 {
-  AUTOCD_NONE = 0,
-  AUTOCD_PLAY,
-  AUTOCD_RIP
+  NONE = 0,
+  PLAY,
+  RIP
+};
+
+enum class AutoDVDAction : uint8_t
+{
+  NONE = 0,
+  PLAY,
+  BROWSE
 };
 
 namespace MEDIA_DETECT
 {
+
+struct PlayDiscOptions
+{
+  bool bypassSettings{false};
+  bool startFromBeginning{false};
+  bool forceSelection{false};
+};
+
 class CAutorun
 {
 public:
   CAutorun();
   virtual ~CAutorun();
   static bool CanResumePlayDVD(const std::string& path);
-  static bool PlayDisc(const std::string& path="", bool bypassSettings = false, bool startFromBeginning = false);
+  static bool PlayDisc(const std::string& path, const PlayDiscOptions& options);
   static bool PlayDiscAskResume(const std::string& path="");
   bool IsEnabled() const;
   void Enable();
   void Disable();
   void HandleAutorun();
-  static void ExecuteAutorun(const std::string& path = "", bool bypassSettings = false, bool ignoreplaying = true, bool startFromBeginning = false);
+
+  /*! \brief Execute the autorun. Used for example to automatically rip cds or play optical discs
+    * @param path the path for the item (e.g. the disc path)
+    * @return true if some action was executed, false otherwise
+    */
+  static bool ExecuteAutorun(const std::string& path);
 
   static void SettingOptionAudioCdActionsFiller(const std::shared_ptr<const CSetting>& setting,
                                                 std::vector<IntegerSettingOption>& list,
-                                                int& current,
-                                                void* data);
+                                                int& current);
+  static void SettingOptionVideoDiscActionsFiller(const std::shared_ptr<const CSetting>& setting,
+                                                  std::vector<IntegerSettingOption>& list,
+                                                  int& current);
 
 protected:
-  static bool RunDisc(XFILE::IDirectory* pDir, const std::string& strDrive, int& nAddedToPlaylist, bool bRoot, bool bypassSettings, bool startFromBeginning);
+  static bool RunDisc(XFILE::IDirectory* pDir,
+                      const std::string& strDrive,
+                      int& nAddedToPlaylist,
+                      bool bRoot,
+                      const PlayDiscOptions& options);
   bool m_bEnable;
 };
 }

@@ -12,6 +12,7 @@
 #include <string>
 
 class CGUIListItem;
+class CGUIInfoManager;
 
 namespace INFO
 {
@@ -25,19 +26,20 @@ public:
   InfoBool(const std::string &expression, int context, unsigned int &refreshCounter);
   virtual ~InfoBool() = default;
 
-  virtual void Initialize() {}
+  virtual void Initialize(CGUIInfoManager* infoMgr) { m_infoMgr = infoMgr; }
 
   /*! \brief Get the value of this info bool
    This is called to update (if dirty) and fetch the value of the info bool
+   \param contextWindow the context (window id) where this condition is being evaluated
    \param item the item used to evaluate the bool
    */
-  inline bool Get(const CGUIListItem *item = NULL)
+  inline bool Get(int contextWindow, const CGUIListItem* item = nullptr)
   {
     if (item && m_listItemDependent)
-      Update(item);
+      Update(contextWindow, item);
     else if (m_refreshCounter != m_parentRefreshCounter || m_refreshCounter == 0)
     {
-      Update(NULL);
+      Update(contextWindow, nullptr);
       m_refreshCounter = m_parentRefreshCounter;
     }
     return m_value;
@@ -62,19 +64,19 @@ public:
   /*! \brief Update the value of this info bool
    This is called if and only if the info bool is dirty, allowing it to update it's current value
    */
-  virtual void Update(const CGUIListItem* item) {}
+  virtual void Update(int contextWindow, const CGUIListItem* item) {}
 
   const std::string &GetExpression() const { return m_expression; }
   bool ListItemDependent() const { return m_listItemDependent; }
 protected:
-
-  bool m_value;                ///< current value
+  bool m_value = false; ///< current value
   int m_context;               ///< contextual information to go with the condition
-  bool m_listItemDependent;    ///< do not cache if a listitem pointer is given
+  bool m_listItemDependent = false; ///< do not cache if a listitem pointer is given
   std::string  m_expression;   ///< original expression
+  CGUIInfoManager* m_infoMgr;
 
 private:
-  unsigned int m_refreshCounter;
+  unsigned int m_refreshCounter = 0;
   unsigned int &m_parentRefreshCounter;
 };
 

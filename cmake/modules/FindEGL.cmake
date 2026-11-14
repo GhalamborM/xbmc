@@ -3,46 +3,70 @@
 # -------
 # Finds the EGL library
 #
-# This will define the following variables::
+# This will define the following target:
 #
-# EGL_FOUND - system has EGL
-# EGL_INCLUDE_DIRS - the EGL include directory
-# EGL_LIBRARIES - the EGL libraries
-# EGL_DEFINITIONS - the EGL definitions
-#
-# and the following imported targets::
-#
-#   EGL::EGL   - The EGL library
+#   ${APP_NAME_LC}::EGL   - The EGL library
 
-if(PKG_CONFIG_FOUND)
-  pkg_check_modules(PC_EGL egl QUIET)
-endif()
+if(NOT TARGET ${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME})
+  find_package(PkgConfig ${SEARCH_QUIET})
+  if(PKG_CONFIG_FOUND)
+    pkg_check_modules(PC_EGL egl ${SEARCH_QUIET})
+  endif()
 
-find_path(EGL_INCLUDE_DIR EGL/egl.h
-                          PATHS ${PC_EGL_INCLUDEDIR})
+  find_path(EGL_INCLUDE_DIR EGL/egl.h
+                            HINTS ${PC_EGL_INCLUDEDIR})
 
-find_library(EGL_LIBRARY NAMES EGL egl
-                         PATHS ${PC_EGL_LIBDIR})
+  find_library(EGL_LIBRARY NAMES EGL egl
+                           HINTS ${PC_EGL_LIBDIR})
+  if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
+    # Emscripten exposes EGL as a link name instead of a filesystem library.
+    set(EGL_LIBRARY EGL)
+  endif()
 
-set(EGL_VERSION ${PC_EGL_VERSION})
+  set(EGL_VERSION ${PC_EGL_VERSION})
 
-include(FindPackageHandleStandardArgs)
-find_package_handle_standard_args(EGL
-                                  REQUIRED_VARS EGL_LIBRARY EGL_INCLUDE_DIR
-                                  VERSION_VAR EGL_VERSION)
+  if(NOT VERBOSE_FIND)
+     set(${CMAKE_FIND_PACKAGE_NAME}_FIND_QUIETLY TRUE)
+   endif()
 
-if(EGL_FOUND)
-  set(EGL_LIBRARIES ${EGL_LIBRARY})
-  set(EGL_INCLUDE_DIRS ${EGL_INCLUDE_DIR})
-  set(EGL_DEFINITIONS -DHAS_EGL=1)
+  if(NOT CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
+    include(FindPackageHandleStandardArgs)
+    find_package_handle_standard_args(EGL
+                                      REQUIRED_VARS EGL_LIBRARY EGL_INCLUDE_DIR
+                                      VERSION_VAR EGL_VERSION)
+  endif()
 
-  if(NOT TARGET EGL::EGL)
-    add_library(EGL::EGL UNKNOWN IMPORTED)
-    set_target_properties(EGL::EGL PROPERTIES
-                                   IMPORTED_LOCATION "${EGL_LIBRARY}"
-                                   INTERFACE_INCLUDE_DIRECTORIES "${EGL_INCLUDE_DIR}"
-                                   INTERFACE_COMPILE_DEFINITIONS HAS_EGL=1)
+  if(EGL_FOUND OR CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
+    if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
+      add_library(${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME} INTERFACE IMPORTED)
+      set_target_properties(${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME} PROPERTIES
+                                        INTERFACE_LINK_LIBRARIES "EGL"
+                                        INTERFACE_COMPILE_DEFINITIONS HAS_EGL)
+    else()
+      list(APPEND GL_INTERFACES_LIST egl egl-pb)
+      set(GL_INTERFACES_LIST ${GL_INTERFACES_LIST} PARENT_SCOPE)
+
+      set(CMAKE_REQUIRED_INCLUDES "${EGL_INCLUDE_DIR}")
+      include(CheckIncludeFiles)
+      check_include_files("EGL/egl.h;EGL/eglext.h;EGL/eglext_angle.h" HAVE_EGLEXTANGLE)
+      unset(CMAKE_REQUIRED_INCLUDES)
+
+      if(${EGL_LIBRARY} MATCHES ".+\.so$")
+        add_library(${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME} SHARED IMPORTED)
+      else()
+        add_library(${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME} UNKNOWN IMPORTED)
+      endif()
+
+      set_target_properties(${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME} PROPERTIES
+                                        IMPORTED_LOCATION "${EGL_LIBRARY}"
+                                        INTERFACE_INCLUDE_DIRECTORIES "${EGL_INCLUDE_DIR}"
+                                        INTERFACE_COMPILE_DEFINITIONS HAS_EGL
+                                        IMPORTED_NO_SONAME TRUE)
+
+      if(HAVE_EGLEXTANGLE)
+        set_property(TARGET ${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME} APPEND PROPERTY
+                                                                          INTERFACE_COMPILE_DEFINITIONS HAVE_EGLEXTANGLE)
+      endif()
+    endif()
   endif()
 endif()
-
-mark_as_advanced(EGL_INCLUDE_DIR EGL_LIBRARY)

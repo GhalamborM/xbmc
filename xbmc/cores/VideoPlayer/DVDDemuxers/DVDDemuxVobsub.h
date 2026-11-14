@@ -35,18 +35,16 @@ public:
   std::vector<CDemuxStream*> GetStreams() const override;
   int GetNrOfStreams() const override { return m_Streams.size(); }
   std::string GetFileName() override { return m_Filename; }
-  void EnableStream(int id, bool enable) override;
+  bool EnableStream(int id, bool enable) override;
 
 private:
   class CStream
     : public CDemuxStreamSubtitle
   {
   public:
-    explicit CStream(CDVDDemuxVobsub* parent)
-      : m_discard(false), m_parent(parent)
-    {}
+    explicit CStream(CDVDDemuxVobsub* parent) : m_parent(parent) {}
 
-    bool m_discard;
+    bool m_discard = false;
     CDVDDemuxVobsub* m_parent;
   };
 
@@ -83,6 +81,6 @@ private:
   bool ParseLangIdx(SState& state, std::string& line);
   bool ParseDelay(SState& state, std::string& line);
   bool ParseId(SState& state, std::string& line);
-  bool ParseExtra(SState& state, std::string& line);
+  bool ParseExtra(SState& state, const std::string& line);
   bool ParseTimestamp(SState& state, std::string& line);
 };

@@ -9,30 +9,35 @@
 #include "DirectoryNodeAlbumRecentlyAdded.h"
 
 #include "FileItem.h"
-#include "guilib/LocalizeStrings.h"
+#include "FileItemList.h"
+#include "ServiceBroker.h"
+#include "music/Album.h"
 #include "music/MusicDatabase.h"
+#include "resources/LocalizeStrings.h"
+#include "resources/ResourcesComponent.h"
 #include "utils/StringUtils.h"
 
 using namespace XFILE::MUSICDATABASEDIRECTORY;
 
-CDirectoryNodeAlbumRecentlyAdded::CDirectoryNodeAlbumRecentlyAdded(const std::string& strName, CDirectoryNode* pParent)
-  : CDirectoryNode(NODE_TYPE_ALBUM_RECENTLY_ADDED, strName, pParent)
+CDirectoryNodeAlbumRecentlyAdded::CDirectoryNodeAlbumRecentlyAdded(const std::string& strName,
+                                                                   CDirectoryNode* pParent)
+  : CDirectoryNode(NodeType::ALBUM_RECENTLY_ADDED, strName, pParent)
 {
 
 }
 
-NODE_TYPE CDirectoryNodeAlbumRecentlyAdded::GetChildType() const
+NodeType CDirectoryNodeAlbumRecentlyAdded::GetChildType() const
 {
-  if (GetName()=="-1")
-    return NODE_TYPE_ALBUM_RECENTLY_ADDED_SONGS;
+  if (GetName() == "-1")
+    return NodeType::ALBUM_RECENTLY_ADDED_SONGS;
 
-  return NODE_TYPE_DISC;
+  return NodeType::DISC;
 }
 
 std::string CDirectoryNodeAlbumRecentlyAdded::GetLocalizedName() const
 {
   if (GetID() == -1)
-    return g_localizeStrings.Get(15102); // All Albums
+    return CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(15102); // All Albums
   CMusicDatabase db;
   if (db.Open())
     return db.GetAlbumById(GetID());
@@ -45,16 +50,15 @@ bool CDirectoryNodeAlbumRecentlyAdded::GetContent(CFileItemList& items) const
   if (!musicdatabase.Open())
     return false;
 
-  VECALBUMS albums;
+  std::vector<CAlbum> albums;
   if (!musicdatabase.GetRecentlyAddedAlbums(albums))
   {
     musicdatabase.Close();
     return false;
   }
 
-  for (int i=0; i<(int)albums.size(); ++i)
+  for (const CAlbum& album : albums)
   {
-    CAlbum& album=albums[i];
     std::string strDir = StringUtils::Format("{}{}/", BuildPath(), album.idAlbum);
     CFileItemPtr pItem(new CFileItem(strDir, album));
     items.Add(pItem);

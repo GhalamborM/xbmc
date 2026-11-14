@@ -34,24 +34,24 @@ public:
     else
     {
       bpp = 4;
-      palette = {};
+      palette.clear();
     }
 
-    palette_colors = src.palette_colors;
-    linesize       = sub_w * bpp;
-    x              = sub_x;
-    y              = sub_y;
-    width          = sub_w;
-    height         = sub_h;
-    source_width   = src.source_width;
-    source_height  = src.source_height;
+    linesize = sub_w * bpp;
+    x = sub_x;
+    y = sub_y;
+    width = sub_w;
+    height = sub_h;
+    source_width = src.source_width;
+    source_height = src.source_height;
+    m_isHDROverlay = src.m_isHDROverlay;
 
-    data = std::vector<uint8_t>(sub_h * linesize);
+    pixels.resize(static_cast<size_t>(sub_h) * linesize);
 
     uint8_t* s = src.data_at(sub_x, sub_y);
-    uint8_t* t = data.data();
+    uint8_t* t = pixels.data();
 
-    for(int row = 0;row < sub_h; ++row)
+    for (int row = 0; row < sub_h; ++row)
     {
       memcpy(t, s, linesize);
       s += src.linesize;
@@ -63,27 +63,24 @@ public:
 
   ~CDVDOverlayImage() override = default;
 
-  CDVDOverlayImage* Clone() override
+  std::shared_ptr<CDVDOverlay> Clone() override
   {
-    return new CDVDOverlayImage(*this);
+    return std::make_shared<CDVDOverlayImage>(*this);
   }
 
   uint8_t* data_at(int sub_x, int sub_y) const
   {
-    int bpp;
-    if (!palette.empty())
-      bpp = 1;
-    else
-      bpp = 4;
-    return const_cast<uint8_t*>(&data[(sub_y - y) * linesize + (sub_x - x) * bpp]);
+    const int bpp = palette.empty() ? 4 : 1;
+    return const_cast<uint8_t*>(pixels.data() + ((sub_y - y) * linesize + (sub_x - x) * bpp));
   }
 
-  std::vector<uint8_t> data;
-  int linesize{0};
-
+  std::vector<uint8_t> pixels;
   std::vector<uint32_t> palette;
-  int palette_colors{0};
 
+  // pixels are already HDR, matching video's colorimetry
+  bool m_isHDROverlay{false};
+
+  int linesize{0};
   int x{0};
   int y{0};
   int width{0};

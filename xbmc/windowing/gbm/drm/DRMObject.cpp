@@ -36,7 +36,7 @@ CDRMObject::CDRMObject(int fd) : m_fd(fd)
 std::string CDRMObject::GetTypeName() const
 {
   auto name = std::find_if(DrmModeObjectTypes.begin(), DrmModeObjectTypes.end(),
-                           [this](auto& p) { return p.first == m_type; });
+                           [this](const auto& p) { return p.first == m_type; });
   if (name != DrmModeObjectTypes.end())
     return name->second;
 
@@ -46,17 +46,17 @@ std::string CDRMObject::GetTypeName() const
 std::string CDRMObject::GetPropertyName(uint32_t propertyId) const
 {
   auto prop = std::find_if(m_propsInfo.begin(), m_propsInfo.end(),
-                           [&propertyId](auto& p) { return p->prop_id == propertyId; });
+                           [&propertyId](const auto& p) { return p->prop_id == propertyId; });
   if (prop != m_propsInfo.end())
     return prop->get()->name;
 
   return "invalid property";
 }
 
-uint32_t CDRMObject::GetPropertyId(const std::string& name) const
+uint32_t CDRMObject::GetPropertyId(std::string_view name) const
 {
   auto property = std::find_if(m_propsInfo.begin(), m_propsInfo.end(),
-                               [&name](auto& prop) { return prop->name == name; });
+                               [&name](const auto& prop) { return prop->name == name; });
 
   if (property != m_propsInfo.end())
     return property->get()->prop_id;
@@ -80,51 +80,105 @@ bool CDRMObject::GetProperties(uint32_t id, uint32_t type)
   return true;
 }
 
-//! @todo: improve with c++17
-std::tuple<bool, uint64_t> CDRMObject::GetPropertyValue(const std::string& name,
-                                                        const std::string& valueName) const
+std::optional<uint64_t> CDRMObject::GetPropertyEnumValue(std::string_view name,
+                                                         std::string_view valueName) const
 {
   auto property = std::find_if(m_propsInfo.begin(), m_propsInfo.end(),
-                               [&name](auto& prop) { return prop->name == name; });
+                               [&name](const auto& prop) { return prop->name == name; });
 
   if (property == m_propsInfo.end())
-    return std::make_tuple(false, 0);
+    return {};
 
   auto prop = property->get();
 
   if (!static_cast<bool>(drm_property_type_is(prop, DRM_MODE_PROP_ENUM)))
-    return std::make_tuple(false, 0);
+    return {};
 
   for (int j = 0; j < prop->count_enums; j++)
   {
     if (prop->enums[j].name != valueName)
       continue;
 
-    return std::make_tuple(true, prop->enums[j].value);
+    return std::make_optional<uint64_t>(prop->enums[j].value);
   }
 
-  return std::make_tuple(false, 0);
+  return {};
 }
 
-bool CDRMObject::SetProperty(const std::string& name, uint64_t value)
+std::optional<uint64_t> CDRMObject::GetPropertyValue(std::string_view name) const
+{
+  auto property =
+      std::ranges::find_if(m_propsInfo, [&name](const auto& prop) { return prop->name == name; });
+
+  if (property == m_propsInfo.end())
+    return {};
+
+  return m_props->prop_values[std::ranges::distance(m_propsInfo.begin(), property)];
+}
+
+bool CDRMObject::CachePropertyValue(uint32_t propertyId, uint64_t value)
+{
+  for (size_t i = 0; i < m_propsInfo.size(); i++)
+  {
+    if (m_propsInfo[i]->prop_id == propertyId)
+    {
+      m_props->prop_values[i] = value;
+      return true;
+    }
+  }
+  return false;
+}
+
+std::optional<std::pair<uint64_t, uint64_t>> CDRMObject::GetRangePropertyLimits(
+    std::string_view name) const
+{
+  auto property =
+      std::ranges::find_if(m_propsInfo, [&name](const auto& prop) { return prop->name == name; });
+
+  if (property == m_propsInfo.end())
+    return {};
+
+  auto prop = property->get();
+
+  if (!static_cast<bool>(drm_property_type_is(prop, DRM_MODE_PROP_RANGE)))
+    return {};
+
+  if (prop->count_values != 2)
+    return {};
+
+  return std::make_pair(prop->values[0], prop->values[1]);
+}
+
+bool CDRMObject::SetProperty(std::string_view name, uint64_t value)
 {
   auto property = std::find_if(m_propsInfo.begin(), m_propsInfo.end(),
-                               [&name](auto& prop) { return prop->name == name; });
+                               [&name](const auto& prop) { return prop->name == name; });
 
   if (property != m_propsInfo.end())
   {
-    int ret = drmModeObjectSetProperty(m_fd, m_id, m_type, property->get()->prop_id, value);
-    if (ret == 0)
-      return true;
+    if (drmModeObjectSetProperty(m_fd, m_id, m_type, property->get()->prop_id, value))
+      return false;
+    return CachePropertyValue(property->get()->prop_id, value);
   }
 
   return false;
 }
 
-bool CDRMObject::SupportsProperty(const std::string& name)
+std::optional<bool> CDRMObject::IsPropertyImmutable(std::string_view name) const
+{
+  auto property =
+      std::ranges::find_if(m_propsInfo, [&name](const auto& prop) { return prop->name == name; });
+
+  if (property == m_propsInfo.end())
+    return {};
+
+  return static_cast<bool>(drm_property_type_is(property->get(), DRM_MODE_PROP_IMMUTABLE));
+}
+
+bool CDRMObject::SupportsProperty(std::string_view name)
 {
   auto property = std::find_if(m_propsInfo.begin(), m_propsInfo.end(),
-                               [&name](auto& prop) { return prop->name == name; });
+                               [&name](const auto& prop) { return prop->name == name; });
 
   if (property != m_propsInfo.end())
     return true;

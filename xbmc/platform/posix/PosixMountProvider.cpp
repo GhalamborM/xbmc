@@ -9,6 +9,7 @@
 #include "PosixMountProvider.h"
 
 #include "utils/RegExp.h"
+#include "utils/StringUtils.h"
 #include "utils/URIUtils.h"
 #include "utils/log.h"
 
@@ -25,7 +26,7 @@ void CPosixMountProvider::Initialize()
   CLog::Log(LOGDEBUG, "Selected Posix mount as storage provider");
 }
 
-void CPosixMountProvider::GetDrives(VECSOURCES &drives)
+void CPosixMountProvider::GetDrives(std::vector<CMediaSource>& drives)
 {
   std::vector<std::string> result;
 
@@ -94,7 +95,7 @@ std::vector<std::string> CPosixMountProvider::GetDiskUsage()
   FILE* pipe = popen("df -h", "r");
 #endif
 
-  static const char* excludes[] = {"rootfs","devtmpfs","tmpfs","none","/dev/loop", "udev", NULL};
+  static const char* excludes[] = {"rootfs","devtmpfs","tmpfs","none","efivarfs","systemd-1","/dev/loop", "udev", NULL};
 
   if (pipe)
   {
@@ -124,7 +125,10 @@ bool CPosixMountProvider::Eject(const std::string& mountpath)
 #if !defined(TARGET_DARWIN_EMBEDDED)
   // just go ahead and try to umount the disk
   // if it does umount, life is good, if not, no loss.
-  std::string cmd = "umount \"" + mountpath + "\"";
+  // Single quoted, as the mount point can be named after a volume label the shell must not expand
+  std::string quotedPath{mountpath};
+  StringUtils::Replace(quotedPath, "'", "'\\''");
+  std::string cmd = "umount '" + quotedPath + "'";
   int status = system(cmd.c_str());
 
   if (status == 0)
@@ -136,7 +140,7 @@ bool CPosixMountProvider::Eject(const std::string& mountpath)
 
 bool CPosixMountProvider::PumpDriveChangeEvents(IStorageEventsCallback *callback)
 {
-  VECSOURCES drives;
+  std::vector<CMediaSource> drives;
   GetRemovableDrives(drives);
   bool changed = drives.size() != m_removableLength;
   m_removableLength = drives.size();

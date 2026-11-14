@@ -8,8 +8,24 @@
 
 #include "VideoSettings.h"
 
+#include "XBDateTime.h"
 #include "threads/CriticalSection.h"
-#include "threads/SingleLock.h"
+
+#include <mutex>
+
+void CVideoSettings::DeclareAspect(float ratio, float detectedNow)
+{
+  m_declaredAspect = ratio;
+  m_declaredOn = CDateTime::GetCurrentDateTime().GetAsDBDateTime();
+  m_detectedWhenDeclared = detectedNow;
+}
+
+void CVideoSettings::ClearDeclaredAspect()
+{
+  m_declaredAspect = 0.0f;
+  m_declaredOn.clear();
+  m_detectedWhenDeclared = 0.0f;
+}
 
 CVideoSettings::CVideoSettings()
 {
@@ -23,10 +39,14 @@ CVideoSettings::CVideoSettings()
   m_AudioStream = -1;
   m_SubtitleStream = -1;
   m_SubtitleDelay = 0.0f;
+  m_subtitleVerticalPosition = 0;
+  m_subtitleVerticalPositionSave = false;
   m_SubtitleOn = true;
   m_Brightness = 50.0f;
   m_Contrast = 50.0f;
-  m_Gamma = 20.0f;
+  m_Hue = 50.0f;
+  m_Saturation = 50.0f;
+  m_Gamma = 50.0f;
   m_Sharpness = 0.0f;
   m_NoiseReduction = 0;
   m_PostProcess = false;
@@ -36,7 +56,7 @@ CVideoSettings::CVideoSettings()
   m_StereoMode = 0;
   m_StereoInvert = false;
   m_VideoStream = -1;
-  m_ToneMapMethod = VS_TONEMAPMETHOD_REINHARD;
+  m_ToneMapMethod = VS_TONEMAPMETHOD_OFF;
   m_ToneMapParam = 1.0f;
   m_Orientation = 0;
   m_CenterMixLevel = 0;
@@ -57,6 +77,10 @@ bool CVideoSettings::operator!=(const CVideoSettings &right) const
   if (m_SubtitleOn != right.m_SubtitleOn) return true;
   if (m_Brightness != right.m_Brightness) return true;
   if (m_Contrast != right.m_Contrast) return true;
+  if (m_Hue != right.m_Hue)
+    return true;
+  if (m_Saturation != right.m_Saturation)
+    return true;
   if (m_Gamma != right.m_Gamma) return true;
   if (m_Sharpness != right.m_Sharpness) return true;
   if (m_NoiseReduction != right.m_NoiseReduction) return true;
@@ -71,6 +95,8 @@ bool CVideoSettings::operator!=(const CVideoSettings &right) const
   if (m_ToneMapParam != right.m_ToneMapParam) return true;
   if (m_Orientation != right.m_Orientation) return true;
   if (m_CenterMixLevel != right.m_CenterMixLevel) return true;
+  if (m_declaredAspect != right.m_declaredAspect)
+    return true;
   return false;
 }
 
@@ -84,43 +110,50 @@ CVideoSettingsLocked::CVideoSettingsLocked(CVideoSettings &vs, CCriticalSection 
 
 void CVideoSettingsLocked::SetSubtitleStream(int stream)
 {
-  CSingleLock lock(m_critSection);
+  std::unique_lock lock(m_critSection);
   m_videoSettings.m_SubtitleStream = stream;
 }
 
 void CVideoSettingsLocked::SetSubtitleVisible(bool visible)
 {
-  CSingleLock lock(m_critSection);
+  std::unique_lock lock(m_critSection);
   m_videoSettings.m_SubtitleOn = visible;
 }
 
 void CVideoSettingsLocked::SetAudioStream(int stream)
 {
-  CSingleLock lock(m_critSection);
+  std::unique_lock lock(m_critSection);
   m_videoSettings.m_AudioStream = stream;
 }
 
 void CVideoSettingsLocked::SetVideoStream(int stream)
 {
-  CSingleLock lock(m_critSection);
+  std::unique_lock lock(m_critSection);
   m_videoSettings.m_VideoStream = stream;
 }
 
 void CVideoSettingsLocked::SetAudioDelay(float delay)
 {
-  CSingleLock lock(m_critSection);
+  std::unique_lock lock(m_critSection);
   m_videoSettings.m_AudioDelay = delay;
 }
 
 void CVideoSettingsLocked::SetSubtitleDelay(float delay)
 {
-  CSingleLock lock(m_critSection);
+  std::unique_lock lock(m_critSection);
   m_videoSettings.m_SubtitleDelay = delay;
+}
+
+void CVideoSettingsLocked::SetSubtitleVerticalPosition(int value, bool save)
+{
+  std::unique_lock lock(m_critSection);
+  m_videoSettings.m_subtitleVerticalPosition = value;
+  m_videoSettings.m_subtitleVerticalPositionSave = save;
 }
 
 void CVideoSettingsLocked::SetViewMode(int mode, float zoom, float par, float shift, bool stretch)
 {
-  CSingleLock lock(m_critSection);
+  std::unique_lock lock(m_critSection);
   m_videoSettings.m_ViewMode = mode;
   m_videoSettings.m_CustomZoomAmount = zoom;
   m_videoSettings.m_CustomPixelRatio = par;
@@ -130,6 +163,6 @@ void CVideoSettingsLocked::SetViewMode(int mode, float zoom, float par, float sh
 
 void CVideoSettingsLocked::SetVolumeAmplification(float amp)
 {
-  CSingleLock lock(m_critSection);
+  std::unique_lock lock(m_critSection);
   m_videoSettings.m_VolumeAmplification = amp;
 }

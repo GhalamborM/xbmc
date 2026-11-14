@@ -15,6 +15,8 @@ extern "C" {
 #include <libavutil/avutil.h>
 }
 
+#include <memory>
+
 class CDVDOverlaySpu;
 class CDVDOverlayText;
 
@@ -27,10 +29,9 @@ public:
   OverlayMessage Decode(DemuxPacket* pPacket) override;
   void Reset() override;
   void Flush() override;
-  CDVDOverlay* GetOverlay() override;
+  std::shared_ptr<CDVDOverlay> GetOverlay() override;
 
 private:
-  void Dispose() override;
   AVCodecContext* m_pCodecContext;
   AVSubtitle      m_Subtitle;
   int             m_SubtitleIndex;
@@ -39,4 +40,6 @@ private:
 
   int             m_width;
   int             m_height;
+  std::shared_ptr<CDVDOverlay> m_pendingOverlay;
+  bool m_loggedStereoSplit{false};
 };

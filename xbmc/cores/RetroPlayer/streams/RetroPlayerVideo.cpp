@@ -17,11 +17,10 @@ using namespace KODI;
 using namespace RETRO;
 
 CRetroPlayerVideo::CRetroPlayerVideo(CRPRenderManager& renderManager, CRPProcessInfo& processInfo)
-  : m_renderManager(renderManager), m_processInfo(processInfo)
+  : m_renderManager(renderManager),
+    m_processInfo(processInfo)
 {
   CLog::Log(LOGDEBUG, "RetroPlayer[VIDEO]: Initializing video");
-
-  m_renderManager.Initialize();
 }
 
 CRetroPlayerVideo::~CRetroPlayerVideo()
@@ -29,7 +28,6 @@ CRetroPlayerVideo::~CRetroPlayerVideo()
   CLog::Log(LOGDEBUG, "RetroPlayer[VIDEO]: Deinitializing video");
 
   CloseStream();
-  m_renderManager.Deinitialize();
 }
 
 bool CRetroPlayerVideo::OpenStream(const StreamProperties& properties)
@@ -46,19 +44,21 @@ bool CRetroPlayerVideo::OpenStream(const StreamProperties& properties)
   const AVPixelFormat pixfmt = videoProperties.pixfmt;
   const unsigned int nominalWidth = videoProperties.nominalWidth;
   const unsigned int nominalHeight = videoProperties.nominalHeight;
+  const float nominalDisplayAspectRatio = videoProperties.nominalDisplayAspectRatio;
   const unsigned int maxWidth = videoProperties.maxWidth;
   const unsigned int maxHeight = videoProperties.maxHeight;
-  // const float pixelAspectRatio = videoProperties.pixelAspectRatio; //! @todo
 
-  CLog::Log(LOGDEBUG,
-            "RetroPlayer[VIDEO]: Creating video stream - format {}, nominal {}x{}, max {}x{}",
-            CRenderTranslator::TranslatePixelFormat(pixfmt), nominalWidth, nominalHeight, maxWidth,
-            maxHeight);
+  CLog::Log(
+      LOGDEBUG,
+      "RetroPlayer[VIDEO]: Creating video stream - format {}, nominal {}x{} ({} DAR), max {}x{}",
+      CRenderTranslator::TranslatePixelFormat(pixfmt), nominalWidth, nominalHeight,
+      nominalDisplayAspectRatio, maxWidth, maxHeight);
 
   m_processInfo.SetVideoPixelFormat(pixfmt);
   m_processInfo.SetVideoDimensions(nominalWidth, nominalHeight); // Report nominal height for now
 
-  if (m_renderManager.Configure(pixfmt, nominalWidth, nominalHeight, maxWidth, maxHeight))
+  if (m_renderManager.Configure(pixfmt, nominalWidth, nominalHeight, nominalDisplayAspectRatio,
+                                maxWidth, maxHeight))
     m_bOpen = true;
 
   return m_bOpen;
@@ -70,11 +70,14 @@ bool CRetroPlayerVideo::GetStreamBuffer(unsigned int width,
 {
   VideoStreamBuffer& videoBuffer = static_cast<VideoStreamBuffer&>(buffer);
 
+  // The buffer is an optional optimisation, and acquiring one can cost more
+  // than emulating the frame. A client that is refused one draws into its own
+  // memory instead.
+  if (!m_bVideoEnabled)
+    return false;
+
   if (m_bOpen)
-  {
-    return m_renderManager.GetVideoBuffer(width, height, videoBuffer.pixfmt, videoBuffer.data,
-                                          videoBuffer.size);
-  }
+    return m_renderManager.GetVideoBuffer(width, height, videoBuffer);
 
   return false;
 }
@@ -83,7 +86,7 @@ void CRetroPlayerVideo::AddStreamData(const StreamPacket& packet)
 {
   const VideoStreamPacket& videoPacket = static_cast<const VideoStreamPacket&>(packet);
 
-  if (m_bOpen)
+  if (m_bOpen && m_bVideoEnabled)
   {
     unsigned int orientationDegCCW = 0;
     switch (videoPacket.rotation)
@@ -102,7 +105,7 @@ void CRetroPlayerVideo::AddStreamData(const StreamPacket& packet)
     }
 
     m_renderManager.AddFrame(videoPacket.data, videoPacket.size, videoPacket.width,
-                             videoPacket.height, orientationDegCCW);
+                             videoPacket.height, videoPacket.displayAspectRatio, orientationDegCCW);
   }
 }
 
@@ -112,7 +115,6 @@ void CRetroPlayerVideo::CloseStream()
   {
     CLog::Log(LOGDEBUG, "RetroPlayer[VIDEO]: Closing video stream");
 
-    m_renderManager.Flush();
     m_bOpen = false;
   }
 }

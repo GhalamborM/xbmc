@@ -6,21 +6,183 @@
  *  See LICENSES/README.md for more information.
  */
 #include "FFmpegImage.h"
-#include "utils/log.h"
+
+#include "ServiceBroker.h"
 #include "cores/FFmpeg.h"
 #include "guilib/Texture.h"
+#include "settings/AdvancedSettings.h"
+#include "settings/Settings.h"
+#include "settings/SettingsComponent.h"
+#include "utils/log.h"
 
 #include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstdint>
+#include <cstring>
 
 extern "C"
 {
-#include <libavformat/avformat.h>
-#include <libavutil/imgutils.h>
 #include <libavcodec/avcodec.h>
+#include <libavformat/avformat.h>
 #include <libavutil/avutil.h>
-#include <libswscale/swscale.h>
+#include <libavutil/display.h>
+#include <libavutil/imgutils.h>
 #include <libavutil/pixdesc.h>
+#include <libswscale/swscale.h>
 }
+
+namespace
+{
+// Read the frame size out of a JPEG's own header. The image demuxers leave codecpar
+// dimensions unset and avformat_find_stream_info() would decode a whole frame to fill them in,
+// which is the allocation we want to size correctly in the first place.
+bool JpegDimensions(const uint8_t* data, size_t size, unsigned int& width, unsigned int& height)
+{
+  size_t pos = 2; // past the SOI marker
+  while (pos + 4 <= size)
+  {
+    if (data[pos] != 0xFF)
+    {
+      pos++;
+      continue;
+    }
+    const uint8_t marker = data[pos + 1];
+    if (marker == 0xFF) // fill byte
+    {
+      pos++;
+      continue;
+    }
+    pos += 2;
+    // markers that carry no payload
+    if (marker == 0x01 || (marker >= 0xD0 && marker <= 0xD9))
+      continue;
+    if (pos + 2 > size)
+      return false;
+    const size_t length = (static_cast<size_t>(data[pos]) << 8) | data[pos + 1];
+    // SOF0..SOF15, less the three codes in that range that are not frame headers
+    if (marker >= 0xC0 && marker <= 0xCF && marker != 0xC4 && marker != 0xC8 && marker != 0xCC)
+    {
+      if (pos + 7 > size)
+        return false;
+      height = (static_cast<unsigned int>(data[pos + 3]) << 8) | data[pos + 4];
+      width = (static_cast<unsigned int>(data[pos + 5]) << 8) | data[pos + 6];
+      return width > 0 && height > 0;
+    }
+    if (length < 2)
+      return false;
+    pos += length;
+  }
+  return false;
+}
+
+constexpr size_t DISPLAY_MATRIX_SIZE = 9;
+// by counter-clockwise quarter turns, unmirrored then mirrored
+constexpr unsigned int ORIENTATIONS[2][4] = {{1, 8, 3, 6}, {2, 7, 4, 5}};
+
+// EXIF orientation (1-8) of a display matrix, 0 if unknown
+unsigned int OrientationFromDisplayMatrix(const int32_t* displayMatrix)
+{
+  std::array<int32_t, DISPLAY_MATRIX_SIZE> matrix{};
+  std::copy_n(displayMatrix, matrix.size(), matrix.begin());
+
+  // a negative determinant means the image is mirrored
+  const bool flipped{static_cast<int64_t>(matrix[0]) * matrix[4] -
+                         static_cast<int64_t>(matrix[1]) * matrix[3] <
+                     0};
+  if (flipped)
+    av_display_matrix_flip(matrix.data(), 1, 0);
+
+  const double rotation{av_display_rotation_get(matrix.data())};
+  if (std::isnan(rotation))
+    return 0;
+
+  const int quarterTurns{(static_cast<int>(std::lround(rotation / 90.0)) % 4 + 4) % 4};
+  return ORIENTATIONS[flipped ? 1 : 0][quarterTurns];
+}
+
+// decodes a single-packet still with a decoder of its own
+bool DecodeStill(const AVCodecParameters* params, const AVPacket* pkt, AVFrame* frame)
+{
+  const AVCodec* codec{avcodec_find_decoder(params->codec_id)};
+  if (!codec)
+    return false;
+
+  AVCodecContext* ctx{avcodec_alloc_context3(codec)};
+  const bool decoded{ctx && avcodec_parameters_to_context(ctx, params) >= 0 &&
+                     avcodec_open2(ctx, codec, nullptr) >= 0 &&
+                     avcodec_send_packet(ctx, pkt) >= 0 && avcodec_send_packet(ctx, nullptr) >= 0 &&
+                     avcodec_receive_frame(ctx, frame) >= 0};
+  avcodec_free_context(&ctx);
+  return decoded;
+}
+
+// black frame in the tile's pixel format; image overlays (iovl) need not be
+// fully covered, and their fill colour is not applied
+AVFrame* AllocCanvas(const AVFrame* tile, int width, int height)
+{
+  AVFrame* canvas{av_frame_alloc()};
+  if (!canvas)
+    return nullptr;
+
+  canvas->format = tile->format;
+  canvas->width = width;
+  canvas->height = height;
+  canvas->color_range = tile->color_range;
+  canvas->color_primaries = tile->color_primaries;
+  canvas->color_trc = tile->color_trc;
+  canvas->colorspace = tile->colorspace;
+  canvas->chroma_location = tile->chroma_location;
+  if (av_frame_get_buffer(canvas, 0) < 0)
+  {
+    av_frame_free(&canvas);
+    return nullptr;
+  }
+
+  const std::array<ptrdiff_t, 4> linesize{canvas->linesize[0], canvas->linesize[1],
+                                          canvas->linesize[2], canvas->linesize[3]};
+  av_image_fill_black(canvas->data, linesize.data(), static_cast<AVPixelFormat>(canvas->format),
+                      canvas->color_range, width, height);
+  return canvas;
+}
+
+// copies a tile to (x, y) of the canvas, clipped to the canvas
+bool CopyTile(AVFrame* canvas, const AVFrame* tile, int x, int y)
+{
+  if (x < 0 || y < 0)
+    return false;
+
+  const int width{std::min(tile->width, canvas->width - x)};
+  const int height{std::min(tile->height, canvas->height - y)};
+  if (width <= 0 || height <= 0)
+    return true;
+
+  const auto format{static_cast<AVPixelFormat>(canvas->format)};
+  const AVPixFmtDescriptor* desc{av_pix_fmt_desc_get(format)};
+  for (int plane = 0; plane < av_pix_fmt_count_planes(format); ++plane)
+  {
+    const int shiftY{plane == 1 || plane == 2 ? desc->log2_chroma_h : 0};
+    const int offset{av_image_get_linesize(format, x, plane)};
+    const int rowBytes{av_image_get_linesize(format, canvas->width, plane)};
+    const int tileBytes{av_image_get_linesize(format, width, plane)};
+    if (offset < 0 || rowBytes < 0 || tileBytes < 0)
+      return false;
+
+    // odd offsets of subsampled planes round up, so clip to the plane
+    const int top{AV_CEIL_RSHIFT(y, shiftY)};
+    const int bytes{std::min(tileBytes, rowBytes - offset)};
+    const int rows{
+        std::min(AV_CEIL_RSHIFT(height, shiftY), AV_CEIL_RSHIFT(canvas->height, shiftY) - top)};
+    if (bytes <= 0 || rows <= 0)
+      continue;
+
+    av_image_copy_plane(canvas->data[plane] + top * canvas->linesize[plane] + offset,
+                        canvas->linesize[plane], tile->data[plane], tile->linesize[plane], bytes,
+                        rows);
+  }
+  return true;
+}
+} // namespace
 
 Frame::Frame(const Frame& src) :
   m_delay(src.m_delay),
@@ -48,7 +210,7 @@ struct ThumbDataManagement
   AVFrame* frame_temporary = nullptr;
   SwsContext* sws = nullptr;
   AVCodecContext* avOutctx = nullptr;
-  AVCodec* codec = nullptr;
+  const AVCodec* codec = nullptr;
   ~ThumbDataManagement()
   {
     av_free(intermediateBuffer);
@@ -138,6 +300,8 @@ CFFmpegImage::~CFFmpegImage()
 bool CFFmpegImage::LoadImageFromMemory(unsigned char* buffer, unsigned int bufSize,
                                       unsigned int width, unsigned int height)
 {
+  m_maxWidth = width;
+  m_maxHeight = height;
 
   if (!Initialize(buffer, bufSize))
   {
@@ -147,6 +311,19 @@ bool CFFmpegImage::LoadImageFromMemory(unsigned char* buffer, unsigned int bufSi
 
   av_frame_free(&m_pFrame);
   m_pFrame = ExtractFrame();
+
+  // The decoder refuses some JPEGs at a reduced size, such as lossless ones
+  if (!m_pFrame && m_codec_ctx && m_codec_ctx->lowres > 0)
+  {
+    avcodec_free_context(&m_codec_ctx);
+    avformat_close_input(&m_fctx);
+    FreeIOCtx(&m_ioctx);
+    m_maxWidth = 0;
+    m_maxHeight = 0;
+    if (!Initialize(buffer, bufSize))
+      return false;
+    m_pFrame = ExtractFrame();
+  }
 
   return !(m_pFrame == nullptr);
 }
@@ -189,33 +366,57 @@ bool CFFmpegImage::Initialize(unsigned char* buffer, size_t bufSize)
 
   // Some clients have pngs saved as jpeg or ask us for png but are jpeg
   // mythv throws all mimetypes away and asks us with application/octet-stream
-  // this is poor man's fallback to at least identify png / jpeg
-  bool is_jpeg = (bufSize > 2 && buffer[0] == 0xFF && buffer[1] == 0xD8 && buffer[2] == 0xFF);
-  bool is_png = (bufSize > 3 && buffer[1] == 'P' && buffer[2] == 'N' && buffer[3] == 'G');
-  bool is_tiff = (bufSize > 2 && buffer[0] == 'I' && buffer[1] == 'I' && buffer[2] == '*');
+  // this is poor man's fallback to at least identify the most important formats
+  constexpr uint8_t jpegHeader[] = {0xFF, 0xD8, 0xFF};
+  constexpr uint8_t pngHeader[] = {0x89, 'P', 'N', 'G'};
+  constexpr uint8_t tiffLEHeader[] = {'I', 'I', '*', '\0'};
+  constexpr uint8_t tiffBEHeader[] = {'M', 'M', '\0', '*'};
+  constexpr uint8_t webpHeader1[] = {'R', 'I', 'F', 'F'};
+  constexpr uint8_t webpHeader2[] = {'W', 'E', 'B', 'P'};
+  const bool is_jpeg = (bufSize > 2 && std::memcmp(buffer, jpegHeader, sizeof(jpegHeader)) == 0);
+  const bool is_png = (bufSize > 3 && std::memcmp(buffer, pngHeader, sizeof(pngHeader)) == 0);
+  const bool is_tiff =
+      (bufSize > 3 && (std::memcmp(buffer, tiffLEHeader, sizeof(tiffLEHeader)) == 0 ||
+                       std::memcmp(buffer, tiffBEHeader, sizeof(tiffBEHeader)) == 0));
+  const bool is_webp =
+      (bufSize > 11 && std::memcmp(buffer, webpHeader1, sizeof(webpHeader1)) == 0 &&
+       std::memcmp(buffer + 8, webpHeader2, sizeof(webpHeader2)) == 0);
 
-  AVInputFormat* inp = nullptr;
+  // See Github #19113
+#if LIBAVCODEC_VERSION_MAJOR < 60
+  constexpr char jpegFormat[] = "image2";
+#else
+  constexpr char jpegFormat[] = "jpeg_pipe";
+#endif
+
+  const AVInputFormat* inp = nullptr;
   if (is_jpeg)
-    inp = av_find_input_format("image2");
+    inp = av_find_input_format(jpegFormat);
   else if (m_strMimeType == "image/apng")
     inp = av_find_input_format("apng");
   else if (is_png)
     inp = av_find_input_format("png_pipe");
   else if (is_tiff)
     inp = av_find_input_format("tiff_pipe");
+  else if (is_webp)
+    inp = av_find_input_format("webp_pipe");
   else if (m_strMimeType == "image/jp2")
     inp = av_find_input_format("j2k_pipe");
+  // brute force parse if above check already failed
   else if (m_strMimeType == "image/webp")
     inp = av_find_input_format("webp_pipe");
-  // brute force parse if above check already failed
   else if (m_strMimeType == "image/jpeg" || m_strMimeType == "image/jpg")
-    inp = av_find_input_format("image2");
+    inp = av_find_input_format(jpegFormat);
   else if (m_strMimeType == "image/png")
     inp = av_find_input_format("png_pipe");
   else if (m_strMimeType == "image/tiff")
     inp = av_find_input_format("tiff_pipe");
   else if (m_strMimeType == "image/gif")
     inp = av_find_input_format("gif");
+  else if (m_strMimeType == "image/avif")
+    inp = av_find_input_format("avif");
+  else if (m_strMimeType == "image/heif" || m_strMimeType == "image/heic")
+    inp = av_find_input_format("heic");
 
   if (avformat_open_input(&m_fctx, NULL, inp, NULL) < 0)
   {
@@ -231,8 +432,36 @@ bool CFFmpegImage::Initialize(unsigned char* buffer, size_t bufSize)
     FreeIOCtx(&m_ioctx);
     return false;
   }
-  AVCodecParameters* codec_params = m_fctx->streams[0]->codecpar;
-  AVCodec* codec = avcodec_find_decoder(codec_params->codec_id);
+
+  // HEIF and AVIF store large pictures as a grid of separately coded tiles
+  for (unsigned int i = 0; i < m_fctx->nb_stream_groups; ++i)
+  {
+    const AVStreamGroup* group = m_fctx->stream_groups[i];
+    if (group->type == AV_STREAM_GROUP_PARAMS_TILE_GRID &&
+        (group->disposition & AV_DISPOSITION_DEFAULT))
+    {
+      m_tileGrid = group;
+      return true;
+    }
+  }
+
+  // prefer the primary picture of HEIF and AVIF, else the first video stream
+  int primary{-1};
+  int firstVideo{-1};
+  for (unsigned int i = 0; i < m_fctx->nb_streams && primary < 0; ++i)
+  {
+    const AVStream* stream = m_fctx->streams[i];
+    if (stream->codecpar->codec_type != AVMEDIA_TYPE_VIDEO)
+      continue;
+    if (firstVideo < 0)
+      firstVideo = static_cast<int>(i);
+    if (stream->disposition & AV_DISPOSITION_DEFAULT)
+      primary = static_cast<int>(i);
+  }
+  m_streamIndex = primary >= 0 ? primary : std::max(firstVideo, 0);
+
+  AVCodecParameters* codec_params = m_fctx->streams[m_streamIndex]->codecpar;
+  const AVCodec* codec = avcodec_find_decoder(codec_params->codec_id);
   m_codec_ctx = avcodec_alloc_context3(codec);
   if (!m_codec_ctx)
   {
@@ -249,6 +478,25 @@ bool CFFmpegImage::Initialize(unsigned char* buffer, size_t bufSize)
     return false;
   }
 
+  // Nothing bounds the size of the file we were handed, and decoding more pixels than the
+  // caller can use costs memory that scaling afterwards cannot give back. Decoding at a
+  // reduced size is the only point at which that cost can be avoided rather than merely
+  // hidden, and it needs the dimensions before the frame is decoded.
+  if (is_jpeg)
+    JpegDimensions(buffer, bufSize, m_sourceWidth, m_sourceHeight);
+
+  if (codec && m_maxWidth > 0 && m_maxHeight > 0 && m_sourceWidth > 0 && m_sourceHeight > 0)
+  {
+    // The caller scales the image down to fit its own maximum, so everything decoded above
+    // that size is read and thrown away. Pre-reduce by the largest power of two that stays
+    // at or above it, which costs no detail the caller would have kept.
+    const unsigned int ratio = std::max(m_sourceWidth / m_maxWidth, m_sourceHeight / m_maxHeight);
+    int lowres = 0;
+    while (lowres < codec->max_lowres && (1U << (lowres + 1)) <= ratio)
+      lowres++;
+    m_codec_ctx->lowres = lowres;
+  }
+
   if (avcodec_open2(m_codec_ctx, codec, NULL) < 0)
   {
     avformat_close_input(&m_fctx);
@@ -262,42 +510,25 @@ bool CFFmpegImage::Initialize(unsigned char* buffer, size_t bufSize)
 
 AVFrame* CFFmpegImage::ExtractFrame()
 {
-  if (!m_fctx || !m_fctx->streams[0])
+  if (!m_fctx || (!m_tileGrid && !m_fctx->streams[m_streamIndex]))
   {
     CLog::LogF(LOGERROR, "No valid format context or stream");
     return nullptr;
   }
 
-  AVPacket pkt;
-  AVFrame* frame = av_frame_alloc();
-  int frame_decoded = 0;
-  int ret = 0;
-  ret = av_read_frame(m_fctx, &pkt);
-  if (ret < 0)
-  {
-    CLog::Log(LOGDEBUG, "Error [{}] while reading frame: {}", ret, strerror(AVERROR(ret)));
-    av_frame_free(&frame);
-    av_packet_unref(&pkt);
+  AVFrame* frame = m_tileGrid ? ExtractTileGridFrame() : ExtractStreamFrame();
+  if (!frame)
     return nullptr;
-  }
 
-  ret = DecodeFFmpegFrame(m_codec_ctx, frame, &frame_decoded, &pkt);
-  if (ret < 0 || frame_decoded == 0 || !frame)
-  {
-    CLog::Log(LOGDEBUG, "Error [{}] while decoding frame: {}", ret, strerror(AVERROR(ret)));
-    av_frame_free(&frame);
-    av_packet_unref(&pkt);
-    return nullptr;
-  }
-  //we need milliseconds
-  frame->pkt_duration = av_rescale_q(frame->pkt_duration, m_fctx->streams[0]->time_base, AVRational{ 1, 1000 });
   m_height = frame->height;
   m_width = frame->width;
-  m_originalWidth = m_width;
-  m_originalHeight = m_height;
+  m_originalWidth = m_sourceWidth > 0 ? m_sourceWidth : m_width;
+  m_originalHeight = m_sourceHeight > 0 ? m_sourceHeight : m_height;
 
-  const AVPixFmtDescriptor* pixDescriptor = av_pix_fmt_desc_get(static_cast<AVPixelFormat>(frame->format));
-  if (pixDescriptor && ((pixDescriptor->flags & (AV_PIX_FMT_FLAG_ALPHA | AV_PIX_FMT_FLAG_PAL)) != 0))
+  const AVPixFmtDescriptor* pixDescriptor =
+      av_pix_fmt_desc_get(static_cast<AVPixelFormat>(frame->format));
+  if (pixDescriptor &&
+      ((pixDescriptor->flags & (AV_PIX_FMT_FLAG_ALPHA | AV_PIX_FMT_FLAG_PAL)) != 0))
     m_hasAlpha = true;
 
   AVDictionary* dic = frame->metadata;
@@ -314,9 +545,163 @@ AVFrame* CFFmpegImage::ExtractFrame()
         m_orientation = (unsigned int)orientation;
     }
   }
+
+  // FFmpeg 8.1 and later only report the EXIF orientation as a display matrix
+  if (m_orientation == 0)
+  {
+    const AVFrameSideData* sideData{av_frame_get_side_data(frame, AV_FRAME_DATA_DISPLAYMATRIX)};
+    if (sideData && sideData->size >= sizeof(int32_t) * DISPLAY_MATRIX_SIZE)
+      m_orientation =
+          OrientationFromDisplayMatrix(reinterpret_cast<const int32_t*>(sideData->data));
+  }
+
+  return frame;
+}
+
+AVFrame* CFFmpegImage::ExtractStreamFrame()
+{
+  AVPacket pkt;
+  AVFrame* frame = av_frame_alloc();
+  int frame_decoded = -1;
+  int ret = AVERROR(EAGAIN);
+  while (ret == AVERROR(EAGAIN))
+  {
+    if (frame_decoded == 0)
+      av_packet_unref(&pkt);
+
+    ret = av_read_frame(m_fctx, &pkt);
+    if (ret < 0)
+    {
+      CLog::Log(LOGDEBUG, "Error [{}] while reading frame: {}", ret, strerror(AVERROR(ret)));
+      av_frame_free(&frame);
+      av_packet_unref(&pkt);
+      return nullptr;
+    }
+
+    // HEIF thumbnails and auxiliary images come as further streams
+    if (pkt.stream_index != m_streamIndex)
+    {
+      av_packet_unref(&pkt);
+      ret = AVERROR(EAGAIN);
+      continue;
+    }
+
+    ret = DecodeFFmpegFrame(m_codec_ctx, frame, &frame_decoded, &pkt);
+  }
+  if (ret < 0 || frame_decoded == 0 || !frame)
+  {
+    CLog::Log(LOGDEBUG, "Error [{}] while decoding frame: {}", ret, strerror(AVERROR(ret)));
+    av_frame_free(&frame);
+    av_packet_unref(&pkt);
+    return nullptr;
+  }
+  //we need milliseconds
+
+#if LIBAVCODEC_VERSION_MAJOR < 60
+  frame->pkt_duration = av_rescale_q(frame->pkt_duration, m_fctx->streams[m_streamIndex]->time_base,
+                                     AVRational{1, 1000});
+#else
+  frame->duration =
+      av_rescale_q(frame->duration, m_fctx->streams[m_streamIndex]->time_base, AVRational{1, 1000});
+#endif
+
   av_packet_unref(&pkt);
 
   return frame;
+}
+
+AVFrame* CFFmpegImage::ExtractTileGridFrame()
+{
+  const AVStreamGroupTileGrid* grid = m_tileGrid->params.tile_grid;
+  CLog::LogF(LOGDEBUG, "Decoding a grid of {} tiles to {}x{}", grid->nb_tiles, grid->width,
+             grid->height);
+
+  // the demuxer does not check these against the coded size
+  if (grid->nb_tiles == 0 || grid->coded_width <= 0 || grid->coded_height <= 0 ||
+      grid->horizontal_offset < 0 || grid->vertical_offset < 0 || grid->width <= 0 ||
+      grid->height <= 0 || grid->width > grid->coded_width - grid->horizontal_offset ||
+      grid->height > grid->coded_height - grid->vertical_offset)
+  {
+    CLog::LogF(LOGERROR, "Invalid tile grid geometry");
+    return nullptr;
+  }
+
+  // FFmpeg 7.x gives a tile's number here, not its stream's, so a tile used twice runs past them
+  for (unsigned int i = 0; i < grid->nb_tiles; ++i)
+  {
+    if (grid->offsets[i].idx >= m_tileGrid->nb_streams)
+    {
+      CLog::LogF(LOGERROR, "Tile {} refers to stream {} of {}", i, grid->offsets[i].idx,
+                 m_tileGrid->nb_streams);
+      return nullptr;
+    }
+  }
+
+  AVPacket* pkt = av_packet_alloc();
+  AVFrame* tile = av_frame_alloc();
+  AVFrame* canvas = nullptr;
+  unsigned int placed = 0;
+  bool failed = !pkt || !tile;
+
+  while (!failed && placed < grid->nb_tiles && av_read_frame(m_fctx, pkt) >= 0)
+  {
+    bool decoded = false;
+    // a tile may be placed more than once
+    for (unsigned int i = 0; !failed && i < grid->nb_tiles; ++i)
+    {
+      const AVStream* stream = m_tileGrid->streams[grid->offsets[i].idx];
+      if (stream->index != pkt->stream_index)
+        continue;
+
+      if (!decoded)
+      {
+        decoded = DecodeStill(stream->codecpar, pkt, tile);
+        if (decoded && !canvas)
+          canvas = AllocCanvas(tile, grid->coded_width, grid->coded_height);
+        failed = !decoded || !canvas || tile->format != canvas->format;
+      }
+      failed =
+          failed || !CopyTile(canvas, tile, grid->offsets[i].horizontal, grid->offsets[i].vertical);
+      if (failed)
+        CLog::LogF(LOGERROR, "Could not decode or place tile stream {}", stream->index);
+      else
+        placed++;
+    }
+    av_packet_unref(pkt);
+  }
+  av_packet_free(&pkt);
+  av_frame_free(&tile);
+
+  if (failed || placed < grid->nb_tiles)
+  {
+    CLog::LogF(LOGERROR, "Could only decode {} of {} tiles", placed, grid->nb_tiles);
+    av_frame_free(&canvas);
+    return nullptr;
+  }
+
+  canvas->crop_left = grid->horizontal_offset;
+  canvas->crop_top = grid->vertical_offset;
+  canvas->crop_right = grid->coded_width - grid->width - grid->horizontal_offset;
+  canvas->crop_bottom = grid->coded_height - grid->height - grid->vertical_offset;
+  if (av_frame_apply_cropping(canvas, AV_FRAME_CROP_UNALIGNED) < 0)
+  {
+    CLog::LogF(LOGERROR, "Invalid tile grid cropping");
+    av_frame_free(&canvas);
+    return nullptr;
+  }
+
+#if LIBAVFORMAT_VERSION_INT >= AV_VERSION_INT(61, 9, 100)
+  // irot/imir of a grid apply to the grid, not its tiles
+  const AVPacketSideData* sideData{av_packet_side_data_get(
+      grid->coded_side_data, grid->nb_coded_side_data, AV_PKT_DATA_DISPLAYMATRIX)};
+  AVFrameSideData* matrix{
+      sideData ? av_frame_new_side_data(canvas, AV_FRAME_DATA_DISPLAYMATRIX, sideData->size)
+               : nullptr};
+  if (matrix)
+    std::memcpy(matrix->data, sideData->data, sideData->size);
+#endif
+
+  return canvas;
 }
 
 AVPixelFormat CFFmpegImage::ConvertFormats(AVFrame* frame)
@@ -402,10 +787,10 @@ int CFFmpegImage::DecodeFFmpegFrame(AVCodecContext *avctx, AVFrame *frame, int *
   }
 
   ret = avcodec_receive_frame(avctx, frame);
-  if (ret < 0 && ret != AVERROR(EAGAIN) && ret != AVERROR_EOF)
+  if (ret < 0 && ret != AVERROR_EOF)
     return ret;
   if (ret >= 0) // static code analysers would complain
-   *got_frame = 1;
+    *got_frame = 1;
 
   return 0;
 }
@@ -451,6 +836,8 @@ bool CFFmpegImage::DecodeFrame(AVFrame* frame, unsigned int width, unsigned int 
     pictureRGB->format = AV_PIX_FMT_RGB32;
     pictureRGB->width = width;
     pictureRGB->height = height;
+    // let av_frame_get_buffer choose an aligned stride instead of the one from av_image_fill_arrays
+    std::ranges::fill(pictureRGB->linesize, 0);
     // we copy the data manually later so give a chance to intrinsics (e.g. mmx, neon)
     if (av_frame_get_buffer(pictureRGB, 32) < 0)
     {
@@ -466,23 +853,8 @@ bool CFFmpegImage::DecodeFrame(AVFrame* frame, unsigned int width, unsigned int 
   AVColorRange range = frame->color_range;
   AVPixelFormat pixFormat = ConvertFormats(frame);
 
-  // assumption quadratic maximums e.g. 2048x2048
-  float ratio = m_width / (float)m_height;
-  unsigned int nHeight = m_originalHeight;
-  unsigned int nWidth = m_originalWidth;
-  if (nHeight > height)
-  {
-    nHeight = height;
-    nWidth = (unsigned int)(nHeight * ratio + 0.5f);
-  }
-  if (nWidth > width)
-  {
-    nWidth = width;
-    nHeight = (unsigned int)(nWidth / ratio + 0.5f);
-  }
-
-  struct SwsContext* context = sws_getContext(m_originalWidth, m_originalHeight, pixFormat,
-    nWidth, nHeight, AV_PIX_FMT_RGB32, SWS_BICUBIC, NULL, NULL, NULL);
+  SwsContext* context = sws_getContext(frame->width, frame->height, pixFormat, width, height,
+                                       AV_PIX_FMT_RGB32, SWS_BICUBIC, NULL, NULL, NULL);
 
   if (range == AVCOL_RANGE_JPEG)
   {
@@ -494,8 +866,8 @@ bool CFFmpegImage::DecodeFrame(AVFrame* frame, unsigned int width, unsigned int 
     sws_setColorspaceDetails(context, inv_table, srcRange, table, dstRange, brightness, contrast, saturation);
   }
 
-  sws_scale(context, frame->data, frame->linesize, 0, m_originalHeight,
-    pictureRGB->data, pictureRGB->linesize);
+  sws_scale(context, frame->data, frame->linesize, 0, frame->height, pictureRGB->data,
+            pictureRGB->linesize);
   sws_freeContext(context);
 
   if (needsCopy)
@@ -510,7 +882,7 @@ bool CFFmpegImage::DecodeFrame(AVFrame* frame, unsigned int width, unsigned int 
     const unsigned char *src = pictureRGB->data[0];
     unsigned char* dst = pixels;
 
-    for (unsigned int y = 0; y < nHeight; y++)
+    for (unsigned int y = 0; y < height; y++)
     {
       memcpy(dst, src, minPitch);
       src += pictureRGB->linesize[0];
@@ -525,11 +897,16 @@ bool CFFmpegImage::DecodeFrame(AVFrame* frame, unsigned int width, unsigned int 
     av_frame_free(&pictureRGB);
   }
 
-  // update width and height original dimensions are kept
-  m_height = nHeight;
-  m_width = nWidth;
+  // update width and height
+  m_height = height;
+  m_width = width;
 
   return true;
+}
+
+void CFFmpegImage::SetColorMetadata(const ImageColorMetadata& color)
+{
+  m_color = color;
 }
 
 bool CFFmpegImage::CreateThumbnailFromSurface(unsigned char* bufferin, unsigned int width,
@@ -539,12 +916,21 @@ bool CFFmpegImage::CreateThumbnailFromSurface(unsigned char* bufferin, unsigned 
                                              unsigned char* &bufferout,
                                              unsigned int &bufferoutSize)
 {
-  // It seems XB_FMT_A8R8G8B8 mean RGBA and not ARGB
-  if (format != XB_FMT_A8R8G8B8)
+  // XB_FMT_A8R8G8B8 is BGRA byte order. The OPAQUE flag drops a source alpha via
+  // an X-variant; the capture path also passes RGBA8 and packed X2BGR10.
+  const bool opaque = (format & XB_FMT_OPAQUE) != 0;
+  const unsigned int baseFormat = format & XB_FMT_MASK;
+  if (baseFormat != XB_FMT_A8R8G8B8 && baseFormat != XB_FMT_RGBA8 && baseFormat != XB_FMT_RGBA16 &&
+      baseFormat != XB_FMT_X2BGR10)
   {
     CLog::Log(LOGERROR, "Supplied format: {} is not supported.", format);
     return false;
   }
+
+  bool is16bit = (baseFormat == XB_FMT_RGBA16 || baseFormat == XB_FMT_X2BGR10);
+
+  // XB_FMT_OPAQUE 16-bit sources carry undefined alpha; RGB48 output drops it
+  const AVPixelFormat fmt16bit = opaque ? AV_PIX_FMT_RGB48BE : AV_PIX_FMT_RGBA64BE;
 
   bool jpg_output = false;
   if (m_strMimeType == "image/jpeg" || m_strMimeType == "image/jpg")
@@ -578,11 +964,14 @@ bool CFFmpegImage::CreateThumbnailFromSurface(unsigned char* bufferin, unsigned 
   tdm.avOutctx->width = width;
   tdm.avOutctx->time_base.num = 1;
   tdm.avOutctx->time_base.den = 1;
-  tdm.avOutctx->pix_fmt = jpg_output ? AV_PIX_FMT_YUVJ420P : AV_PIX_FMT_RGBA;
+  tdm.avOutctx->pix_fmt = jpg_output ? AV_PIX_FMT_YUVJ420P : is16bit ? fmt16bit : AV_PIX_FMT_RGBA;
   tdm.avOutctx->flags = AV_CODEC_FLAG_QSCALE;
   tdm.avOutctx->mb_lmin = tdm.avOutctx->qmin * FF_QP2LAMBDA;
   tdm.avOutctx->mb_lmax = tdm.avOutctx->qmax * FF_QP2LAMBDA;
-  tdm.avOutctx->global_quality = tdm.avOutctx->qmin * FF_QP2LAMBDA;
+  unsigned int quality =
+      CServiceBroker::GetSettingsComponent()->GetAdvancedSettings()->m_imageQualityJpeg;
+  tdm.avOutctx->global_quality =
+      jpg_output ? quality * FF_QP2LAMBDA : tdm.avOutctx->qmin * FF_QP2LAMBDA;
 
   unsigned int internalBufOutSize = 0;
 
@@ -627,7 +1016,11 @@ bool CFFmpegImage::CreateThumbnailFromSurface(unsigned char* bufferin, unsigned 
     return false;
   }
 
-  if (av_image_fill_arrays(tdm.frame_temporary->data, tdm.frame_temporary->linesize, tdm.intermediateBuffer, jpg_output ? AV_PIX_FMT_YUV420P : AV_PIX_FMT_RGBA, width, height, 16) < 0)
+  AVPixelFormat intermediateFmt = jpg_output ? AV_PIX_FMT_YUV420P
+                                  : is16bit  ? fmt16bit
+                                             : AV_PIX_FMT_RGBA;
+  if (av_image_fill_arrays(tdm.frame_temporary->data, tdm.frame_temporary->linesize,
+                           tdm.intermediateBuffer, intermediateFmt, width, height, 16) < 0)
   {
     CLog::Log(LOGERROR, "Could not fill picture for thumbnail: {}", destFile);
     CleanupLocalOutputBuffer();
@@ -637,8 +1030,28 @@ bool CFFmpegImage::CreateThumbnailFromSurface(unsigned char* bufferin, unsigned 
   uint8_t* src[] = { bufferin, NULL, NULL, NULL };
   int srcStride[] = { (int) pitch, 0, 0, 0};
 
-  //input size == output size which means only pix_fmt conversion
-  tdm.sws = sws_getContext(width, height, AV_PIX_FMT_RGB32, width, height, jpg_output ? AV_PIX_FMT_YUV420P : AV_PIX_FMT_RGBA, 0, 0, 0, 0);
+  //input size == output size which means only pix_fmt conversion; opaque uses an
+  //X-variant source so swscale drops the framebuffer alpha
+  AVPixelFormat srcFmt;
+  switch (baseFormat)
+  {
+    case XB_FMT_RGBA8:
+      srcFmt = opaque ? AV_PIX_FMT_RGB0 : AV_PIX_FMT_RGBA;
+      break;
+    case XB_FMT_RGBA16:
+      srcFmt = AV_PIX_FMT_RGBA64LE;
+      break;
+    case XB_FMT_X2BGR10:
+      srcFmt = AV_PIX_FMT_X2BGR10LE;
+      break;
+    default: // XB_FMT_A8R8G8B8
+      srcFmt = opaque ? AV_PIX_FMT_BGR0 : AV_PIX_FMT_RGB32;
+      break;
+  }
+  AVPixelFormat dstFmt = jpg_output ? AV_PIX_FMT_YUV420P : is16bit ? fmt16bit : AV_PIX_FMT_RGBA;
+  // SWS_ACCURATE_RND skips RGB->YUV fast paths that ignore the range set below
+  tdm.sws = sws_getContext(width, height, srcFmt, width, height, dstFmt,
+                           jpg_output ? SWS_ACCURATE_RND : 0, nullptr, nullptr, nullptr);
   if (!tdm.sws)
   {
     CLog::Log(LOGERROR, "Could not setup scaling context for thumbnail: {}", destFile);
@@ -686,7 +1099,19 @@ bool CFFmpegImage::CreateThumbnailFromSurface(unsigned char* bufferin, unsigned 
   tdm.frame_input->linesize[1] = tdm.frame_temporary->linesize[1];
   tdm.frame_input->linesize[2] = tdm.frame_temporary->linesize[2];
   // this is deprecated but mjpeg is not yet transitioned
-  tdm.frame_input->format = jpg_output ? AV_PIX_FMT_YUVJ420P : AV_PIX_FMT_RGBA;
+  tdm.frame_input->format = jpg_output ? AV_PIX_FMT_YUVJ420P : is16bit ? fmt16bit : AV_PIX_FMT_RGBA;
+
+  // CICP color signaling (PNG cICP/sRGB chunk). Only the PNG (RGB) path uses
+  // it; JPEG ignores it. A negative code leaves the field unset.
+  if (!jpg_output)
+  {
+    if (m_color.primaries >= 0)
+      tdm.frame_input->color_primaries = static_cast<AVColorPrimaries>(m_color.primaries);
+    if (m_color.transfer >= 0)
+      tdm.frame_input->color_trc = static_cast<AVColorTransferCharacteristic>(m_color.transfer);
+    if (m_color.range >= 0)
+      tdm.frame_input->color_range = static_cast<AVColorRange>(m_color.range);
+  }
 
   int got_package = 0;
   AVPacket* avpkt;
@@ -738,7 +1163,13 @@ std::shared_ptr<Frame> CFFmpegImage::ReadFrame()
   if (avframe == nullptr)
     return nullptr;
   std::shared_ptr<Frame> frame(new Frame());
+
+#if LIBAVCODEC_VERSION_MAJOR < 60
   frame->m_delay = (unsigned int)avframe->pkt_duration;
+#else
+  frame->m_delay = (unsigned int)avframe->duration;
+#endif
+
   frame->m_pitch = avframe->width * 4;
   frame->m_pImage = (unsigned char*) av_malloc(avframe->height * frame->m_pitch);
   DecodeFrame(avframe, avframe->width, avframe->height, frame->m_pitch, frame->m_pImage);

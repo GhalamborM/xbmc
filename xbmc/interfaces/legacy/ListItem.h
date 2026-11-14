@@ -22,6 +22,7 @@
 #include "commons/Exception.h"
 
 #include <map>
+#include <memory>
 #include <utility>
 #include <vector>
 
@@ -58,45 +59,45 @@ namespace XBMCAddon
 #endif
 
 #ifdef DOXYGEN_SHOULD_USE_THIS
-    ///
-    /// \ingroup python_xbmcgui_listitem
-    /// @brief Selectable window list item.
-    ///
-    /// The list item control is used for creating item lists in Kodi
-    ///
-    /// \python_class{ ListItem([label, label2, path, offscreen]) }
-    ///
-    /// @param label                [opt] string (default `""`) - the label to display on the item
-    /// @param label2               [opt] string (default `""`) - the label2 of the item
-    /// @param path                 [opt] string (default `""`) - the path for the item
-    /// @param offscreen            [opt] bool (default `False`) - if GUI based locks should be
-    ///                                          avoided. Most of the times listitems are created
-    ///                                          offscreen and added later to a container
-    ///                                          for display (e.g. plugins) or they are not
-    ///                                          even displayed (e.g. python scrapers).
-    ///                                          In such cases, there is no need to lock the
-    ///                                          GUI when creating the items (increasing your addon
-    ///                                          performance).
-    ///                                          Note however, that if you are creating listitems
-    ///                                          and managing the container itself (e.g using
-    ///                                          WindowXML or WindowXMLDialog classes) subsquent
-    ///                                          modifications to the item will require locking.
-    ///                                          Thus, in such cases, use the default value (`False`).
-    ///
-    ///
-    ///-----------------------------------------------------------------------
-    /// @python_v16 **iconImage** and **thumbnailImage** are deprecated. Use **setArt()**.
-    /// @python_v18 Added **offscreen** argument.
-    /// @python_v19 Removed **iconImage** and **thumbnailImage**. Use **setArt()**.
-    ///
-    /// **Example:**
-    /// ~~~~~~~~~~~~~{.py}
-    /// ...
-    /// listitem = xbmcgui.ListItem('Casino Royale')
-    /// ...
-    /// ~~~~~~~~~~~~~
-    ///
-    ListItem([label, label2, path, offscreen]);
+      ///
+      /// \ingroup python_xbmcgui_listitem
+      /// @brief Selectable window list item.
+      ///
+      /// The list item control is used for creating item lists in Kodi
+      ///
+      /// \python_class{ ListItem([label, label2, path, offscreen]) }
+      ///
+      /// @param label                [opt] string (default `""`) - the label to display on the item
+      /// @param label2               [opt] string (default `""`) - the label2 of the item
+      /// @param path                 [opt] string (default `""`) - the path for the item
+      /// @param offscreen            [opt] bool (default `False`) - if GUI based locks should be
+      ///                                          avoided. Most of the times listitems are created
+      ///                                          offscreen and added later to a container
+      ///                                          for display (e.g. plugins) or they are not
+      ///                                          even displayed (e.g. python scrapers).
+      ///                                          In such cases, there is no need to lock the
+      ///                                          GUI when creating the items (increasing your addon
+      ///                                          performance).
+      ///                                          Note however, that if you are creating listitems
+      ///                                          and managing the container itself (e.g using
+      ///                                          WindowXML or WindowXMLDialog classes) subsequent
+      ///                                          modifications to the item will require locking.
+      ///                                          Thus, in such cases, use the default value (`False`).
+      ///
+      ///
+      ///-----------------------------------------------------------------------
+      /// @python_v16 **iconImage** and **thumbnailImage** are deprecated. Use **setArt()**.
+      /// @python_v18 Added **offscreen** argument.
+      /// @python_v19 Removed **iconImage** and **thumbnailImage**. Use **setArt()**.
+      ///
+      /// **Example:**
+      /// ~~~~~~~~~~~~~{.py}
+      /// ...
+      /// listitem = xbmcgui.ListItem('Casino Royale')
+      /// ...
+      /// ~~~~~~~~~~~~~
+      ///
+      ListItem([ label, label2, path, offscreen ]);
 #else
     ListItem(const String& label = emptyString,
              const String& label2 = emptyString,
@@ -110,7 +111,7 @@ namespace XBMCAddon
       static inline AddonClass::Ref<ListItem> fromString(const String& str)
       {
         AddonClass::Ref<ListItem> ret = AddonClass::Ref<ListItem>(new ListItem());
-        ret->item.reset(new CFileItem(str));
+        ret->item = std::make_shared<CFileItem>(str);
         return ret;
       }
 #endif
@@ -710,6 +711,7 @@ namespace XBMCAddon
       /// | set           | string (Batman Collection) - name of the collection
       /// | setoverview   | string (All Batman movies) - overview of the collection
       /// | tag           | string (cult) or list of strings (["cult", "documentary", "best movies"]) - movie tag
+      /// | videoversion  | string (Video version)
       /// | imdbnumber    | string (tt0110293) - IMDb code
       /// | code          | string (101) - Production code
       /// | aired         | string (2008-12-07)
@@ -780,6 +782,7 @@ namespace XBMCAddon
       /// Added labels **dbid** (music), **setoverview**, **tag**, **sortepisode**, **sortseason**, **episodeguide**, **showlink**.
       /// Extended labels **genre**, **country**, **director**, **studio**, **writer**, **tag**, **credits** to also use a list of strings.
       /// @python_v20 Partially deprecated. Use explicit setters in **InfoTagVideo**, **InfoTagMusic**, **InfoTagPicture** or **InfoTagGame** instead.
+      /// @python_v21 Added videoversion infolabel for movies
       ///
       /// **Example:**
       /// ~~~~~~~~~~~~~{.py}
@@ -845,6 +848,7 @@ namespace XBMCAddon
       ///
       ///-----------------------------------------------------------------------
       /// @python_v18 New function added.
+      /// @python_v22 Deprecated. Use **InfoTagVideo.setAvailableFanart()** instead.
       ///
       /// **Example:**
       /// ~~~~~~~~~~~~~{.py}
@@ -995,6 +999,7 @@ namespace XBMCAddon
       /// - **Internal Properties**
       /// | Key           | Description                                     |
       /// |--------------:|:------------------------------------------------|
+      /// | EDLPath       | string (special://temp/video.edl) - Path or URL of an MPlayer-style EDL file for the item
       /// | inputstream   | string (inputstream.adaptive) - Set the inputstream add-on that will be used to play the item
       /// | IsPlayable    | string - "true", "false" - Mark the item as playable, **mandatory for playable items**
       /// | MimeType      | string (application/x-mpegURL) - Set the MimeType of the item before playback
@@ -1006,11 +1011,14 @@ namespace XBMCAddon
       /// | TotalTime     | float (7848.0) - Set the total time of the item in seconds
       /// | OverrideInfotag | string - "true", "false" - When true will override all info from previous listitem
       /// | ForceResolvePlugin | string - "true", "false" - When true ensures that a plugin will always receive callbacks to resolve paths (useful for playlist cases)
+      /// | rtsp_transport | string - "udp", "udp_multicast" or "tcp" - Allow to force the rtsp transport mode for rtsp streams
       ///
       ///-----------------------------------------------------------------------
       /// @python_v20 OverrideInfotag property added
       /// @python_v20 **ResumeTime** and **TotalTime** deprecated. Use **InfoTagVideo.setResumePoint()** instead.
       /// @python_v20 ForceResolvePlugin property added
+      /// @python_v20 rtsp_transport property added
+      /// @python_v23 EDLPath property added
       ///
       /// **Example:**
       /// ~~~~~~~~~~~~~{.py}
@@ -1135,6 +1143,79 @@ namespace XBMCAddon
       setContentLookup(...);
 #else
       void setContentLookup(bool enable);
+#endif
+
+#ifdef DOXYGEN_SHOULD_USE_THIS
+      ///
+      /// \ingroup python_xbmcgui_listitem
+      /// @brief \python_func{ setFileTitle(title) }
+      /// Sets the title of this item's file.
+      ///
+      /// @param title  string - file title
+      ///
+      ///
+      ///-----------------------------------------------------------------------
+      /// @python_v22 New function added. Replaces the setInfo() "title" info label
+      /// for items without a media info tag.
+      ///
+      setFileTitle(...);
+#else
+      void setFileTitle(const String& title);
+#endif
+
+#ifdef DOXYGEN_SHOULD_USE_THIS
+      ///
+      /// \ingroup python_xbmcgui_listitem
+      /// @brief \python_func{ setCount(count) }
+      /// Sets the item count badge shown for this item, e.g. the number of items
+      /// inside a folder.
+      ///
+      /// @param count  integer - item count
+      ///
+      ///
+      ///-----------------------------------------------------------------------
+      /// @python_v22 New function added. Replaces the setInfo() "count" info label.
+      ///
+      setCount(...);
+#else
+      void setCount(int count);
+#endif
+
+#ifdef DOXYGEN_SHOULD_USE_THIS
+      ///
+      /// \ingroup python_xbmcgui_listitem
+      /// @brief \python_func{ setSize(size) }
+      /// Sets the file size of this item, in bytes.
+      ///
+      /// @param size  integer - size in bytes
+      ///
+      ///
+      ///-----------------------------------------------------------------------
+      /// @python_v22 New function added. Replaces the setInfo() "size" info label.
+      ///
+      setSize(...);
+#else
+      void setSize(int64_t size);
+#endif
+
+#ifdef DOXYGEN_SHOULD_USE_THIS
+      ///
+      /// \ingroup python_xbmcgui_listitem
+      /// @brief \python_func{ setOverlay(overlay) }
+      /// Sets the overlay icon of this item, one of the xbmcgui ICON_OVERLAY
+      /// values (0 to 8).
+      ///
+      /// @param overlay  integer - overlay icon
+      /// @throws ListItemException  if overlay is outside 0 to 8
+      ///
+      ///
+      ///-----------------------------------------------------------------------
+      /// @python_v22 New function added. Replaces the setInfo() "overlay" info
+      /// label, which silently ignored invalid values.
+      ///
+      setOverlay(...);
+#else
+      void setOverlay(int overlay);
 #endif
 
 #ifdef DOXYGEN_SHOULD_USE_THIS
@@ -1267,7 +1348,7 @@ private:
       MUSIC_INFO::CMusicInfoTag* GetMusicInfoTag();
       const MUSIC_INFO::CMusicInfoTag* GetMusicInfoTag() const;
 
-      void setTitleRaw(std::string title);
+      void setTitleRaw(const std::string& title);
       void setPathRaw(const std::string& path);
       void setCountRaw(int count);
       void setSizeRaw(int64_t size);

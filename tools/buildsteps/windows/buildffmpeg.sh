@@ -3,7 +3,7 @@
 [[ -f buildhelpers.sh ]] &&
     source buildhelpers.sh
 
-FFMPEG_CONFIG_FILE=/xbmc/tools/buildsteps/windows/ffmpeg_options.txt
+FFMPEG_CONFIG_FILE=/xbmc/tools/depends/target/ffmpeg/win_ffmpeg_options.txt
 FFMPEG_VERSION_FILE=/xbmc/tools/depends/target/ffmpeg/FFMPEG-VERSION
 FFMPEG_BASE_OPTS="--disable-debug --disable-doc --enable-gpl --enable-w32threads"
 FFMPEG_DEFAULT_OPTS=""
@@ -27,6 +27,9 @@ do_getFFmpegConfig() {
   elif [ "$ARCH" == "arm" ]; then
     FFMPEG_TARGET_OS=mingw32
     do_addOption "--cpu=armv7"
+  elif [ "$ARCH" == "arm64" ]; then
+    FFMPEG_TARGET_OS=mingw32
+    do_addOption "--cpu=armv8-a"
   fi
 
   # add options for static modplug
@@ -78,6 +81,11 @@ do_removeOption() {
 
 do_getFFmpegConfig
 
+if [ "$ENABLE_LIBOPUS" == "ON" ]; then
+  do_addOption "--enable-libopus"
+  export PKG_CONFIG_PATH="/depends/$TRIPLET/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+fi
+
 # enable OpenSSL, because schannel has issues
 do_removeOption "--enable-gnutls"
 do_addOption "--disable-gnutls"
@@ -92,6 +100,8 @@ elif [ "$ARCH" = "x86" ]; then
   FFMPEG_TARGET_OS=win32
 elif [ "$ARCH" = "arm" ]; then
   FFMPEG_TARGET_OS=win32
+elif [ "$ARCH" = "arm64" ]; then
+  FFMPEG_TARGET_OS=mingw32
 fi
 
 export CFLAGS=""
@@ -100,10 +110,14 @@ export LDFLAGS=""
 
 extra_cflags="-I$LOCALDESTDIR/include -I/depends/$TRIPLET/include -DWIN32_LEAN_AND_MEAN"
 extra_ldflags="-LIBPATH:\"$LOCALDESTDIR/lib\" -LIBPATH:\"$MINGW_PREFIX/lib\" -LIBPATH:\"/depends/$TRIPLET/lib\""
-if [ $win10 == "yes" ]; then
+if [ "$win10" == "yes" ]; then
   do_addOption "--enable-cross-compile"
   extra_cflags=$extra_cflags" -MD -DWINAPI_FAMILY=WINAPI_FAMILY_APP -D_WIN32_WINNT=0x0A00"
   extra_ldflags=$extra_ldflags" -APPCONTAINER WindowsApp.lib"
+fi
+
+if [ "$ARCH" == "arm64" -a $(uname -m) == "x86_64" ]; then
+  do_addOption "--enable-cross-compile"
 fi
 
 # compile ffmpeg with debug symbols
@@ -116,13 +130,23 @@ cd $LOCALBUILDDIR
 
 do_clean_get $1
 [ -f config.mak ] && make distclean
+cleanLastSuccess $FFMPEGDESTDIR
+
 do_print_status "$LIBNAME-$VERSION (${TRIPLET})" "$blue_color" "Configuring"
 
 [[ -z "$extra_cflags" ]] && extra_cflags=-DPTW32_STATIC_LIB
 [[ -z "$extra_ldflags" ]] && extra_ldflags=-static-libgcc
 
+ccache_options=()
+if [[ -n "$CCACHE_PROGRAM" ]]; then
+  ccache_program=$(cygpath -u "$CCACHE_PROGRAM")
+  export PATH="$(dirname "$ccache_program"):$PATH"
+  ccache_executable=$(basename "$ccache_program")
+  ccache_options=("--cc=$ccache_executable cl.exe" "--cxx=$ccache_executable cl.exe")
+fi
+
 $LOCALSRCDIR/configure --target-os=$FFMPEG_TARGET_OS --prefix=$FFMPEGDESTDIR --arch=$ARCH \
-  $FFMPEG_OPTS_SHARED \
+  $FFMPEG_OPTS_SHARED "${ccache_options[@]}" \
   --extra-cflags="$extra_cflags" --extra-ldflags="$extra_ldflags"
 
 do_makelib

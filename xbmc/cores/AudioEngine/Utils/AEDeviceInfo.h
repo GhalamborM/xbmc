@@ -42,8 +42,13 @@ public:
 
   bool m_wantsIECPassthrough;           /* if sink supports passthrough encapsulation is done when set to true */
 
+  bool m_onlyPassthrough{false}; // sink only only should be used for passthrough (audio PT device)
+  bool m_onlyPCM{false}; // sink only should be used for PCM (audio device)
+
   operator std::string();
   static std::string DeviceTypeToString(enum AEDeviceType deviceType);
+  std::string GetFriendlyName() const;
+  std::string ToDeviceString(const std::string& driver) const;
 };
 
 typedef std::vector<CAEDeviceInfo> AEDeviceInfoList;

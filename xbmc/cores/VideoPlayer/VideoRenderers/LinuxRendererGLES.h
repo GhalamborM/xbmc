@@ -8,24 +8,24 @@
 
 #pragma once
 
+#include "BaseRenderer.h"
+#include "FrameBufferObject.h"
+#include "RenderFlags.h"
+#include "RenderInfo.h"
+#include "cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodec.h"
+#include "cores/VideoSettings.h"
+#include "guilib/Shader.h"
+#include "windowing/GraphicContext.h"
+
 #include <vector>
 
 #include "system_gl.h"
 
-#include "BaseRenderer.h"
-#include "cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodec.h"
-#include "cores/VideoSettings.h"
-#include "FrameBufferObject.h"
-#include "guilib/Shader.h"
-#include "RenderFlags.h"
-#include "RenderInfo.h"
-#include "windowing/GraphicContext.h"
-
 extern "C" {
 #include <libavutil/mastering_display_metadata.h>
+#include <libavutil/pixdesc.h>
 }
 
-class CRenderCapture;
 class CRenderSystemGLES;
 
 class CTexture;
@@ -70,36 +70,38 @@ public:
   void AddVideoPicture(const VideoPicture& picture, int index) override;
   void UnInit() override;
   bool Flush(bool saveBuffers) override;
-  void SetBufferSize(int numBuffers) override { m_NumYV12Buffers = numBuffers; }
+  void SetBufferSize(int numBuffers) override { m_NumYUVBuffers = numBuffers; }
   bool IsGuiLayer() override;
+  bool VideoBypassesFramebuffer() override { return false; }
   void ReleaseBuffer(int idx) override;
   void RenderUpdate(int index, int index2, bool clear, unsigned int flags, unsigned int alpha) override;
   void Update() override;
-  bool RenderCapture(CRenderCapture* capture) override;
   CRenderInfo GetRenderInfo() override;
   bool ConfigChanged(const VideoPicture& picture) override;
 
   // Feature support
   bool SupportsMultiPassRendering() override;
-  bool Supports(ERENDERFEATURE feature) override;
-  bool Supports(ESCALINGMETHOD method) override;
-
-  CRenderCapture* GetRenderCapture() override;
+  bool Supports(ERENDERFEATURE feature) const override;
+  bool Supports(ESCALINGMETHOD method) const override;
 
 protected:
+  // Returns 0 if scaling is below hqscalers threshold.
+  // Otherwise returns the scale factor: < 1.0 = downscale, > 1.0 = upscale.
+  float ScalingAboveThreshold() const;
   static const int FIELD_FULL{0};
   static const int FIELD_TOP{1};
   static const int FIELD_BOT{2};
 
-  virtual void Render(unsigned int flags, int index);
+  virtual bool Render(unsigned int flags, int index);
   virtual void RenderUpdateVideo(bool clear, unsigned int flags = 0, unsigned int alpha = 255);
 
-  int NextYV12Texture();
+  int NextYUVTexture();
   virtual bool ValidateRenderTarget();
   virtual void LoadShaders(int field=FIELD_FULL);
   virtual void ReleaseShaders();
   void SetTextureFilter(GLenum method);
   void UpdateVideoFilter();
+  void CheckVideoParameters(int index);
   AVColorPrimaries GetSrcPrimaries(AVColorPrimaries srcPrimaries, unsigned int width, unsigned int height);
 
   // textures
@@ -107,14 +109,18 @@ protected:
   virtual void DeleteTexture(int index);
   virtual bool CreateTexture(int index);
 
-  bool UploadYV12Texture(int index);
-  void DeleteYV12Texture(int index);
-  bool CreateYV12Texture(int index);
-  virtual bool SkipUploadYV12(int index) { return false; }
+  bool UploadPlanarYUVTexture(int index);
+  void DeletePlanarYUVTexture(int index);
+  bool CreatePlanarYUVTexture(int index);
+  virtual bool SkipUploadYUV(int index) { return false; }
 
   bool UploadNV12Texture(int index);
   void DeleteNV12Texture(int index);
   bool CreateNV12Texture(int index);
+
+  bool UploadPackedYUVTexture(int index);
+  void DeletePackedYUVTexture(int index);
+  bool CreatePackedYUVTexture(int index);
 
   void CalculateTextureSourceRects(int source, int num_planes);
 
@@ -123,7 +129,7 @@ protected:
   void RenderFromFBO();
   void RenderSinglePass(int index, int field); // single pass glsl renderer
 
-  // hooks for HwDec Renderered
+  // hooks for HwDec rendering
   virtual bool LoadShadersHook() { return false; }
   virtual bool RenderHook(int idx) { return false; }
   virtual void AfterRenderHook(int idx) {}
@@ -135,18 +141,25 @@ protected:
     float height{0.0};
   } m_fbo;
 
-  int m_iYV12RenderBuffer{0};
-  int m_NumYV12Buffers{0};
+  int m_iYUVRenderBuffer{0};
+  int m_NumYUVBuffers{0};
 
   bool m_bConfigured{false};
   bool m_bValidated{false};
-  GLenum m_textureTarget;
+  GLenum m_textureTarget = GL_TEXTURE_2D;
   int m_renderMethod{RENDER_GLSL};
   RenderQuality m_renderQuality{RQ_SINGLEPASS};
 
+  // Dithering
+  bool m_useDithering{false};
+  unsigned int m_ditherDepth{0};
+  unsigned int m_srcColorBits{8};
+  bool m_srcFullRange{false};
+  GLuint m_ditherTex{0};
+
   // Raw data used by renderer
   int m_currentField{FIELD_FULL};
-  int m_reloadShaders{0};
+  bool m_reloadShaders{false};
   CRenderSystemGLES *m_renderSystem{nullptr};
   GLenum m_pixelStoreKey{0};
 
@@ -176,6 +189,8 @@ protected:
 
     AVColorPrimaries m_srcPrimaries;
     AVColorSpace m_srcColSpace;
+    AVColorTransferCharacteristic m_srcColTransfer;
+
     int m_srcBits{8};
     int m_srcTextureBits{8};
     bool m_srcFullRange;
@@ -186,7 +201,7 @@ protected:
     AVContentLightMetadata lightMetadata;
   };
 
-  // YV12 decoder textures
+  // YUV decoder textures
   // field index 0 is full image, 1 is odd scanlines, 2 is even scanlines
   CPictureBuffer m_buffers[NUM_BUFFERS];
 
@@ -202,15 +217,28 @@ protected:
   bool m_fullRange;
   AVColorPrimaries m_srcPrimaries;
   bool m_toneMap = false;
-  int m_toneMapMethod = 0;
+  ETONEMAPMETHOD m_toneMapMethod = VS_TONEMAPMETHOD_OFF;
+  // PQ/HLG streams get hue and saturation from the YUV shader in linear light
+  AVColorTransferCharacteristic m_hueSatTransfer{AVCOL_TRC_UNSPECIFIED};
+  // SDR streams get gamma from the YUV shader
+  bool m_useGamma{false};
+  bool m_streamIsHDR{false};
   bool m_passthroughHDR = false;
+  GLint m_intermediateFormat{GL_RGBA};
+  GLint m_intermediateType{GL_UNSIGNED_BYTE};
+  // TODO: GL has m_intermediateGammaCorrection -- add when ported to GLES
   unsigned char* m_planeBuffer = nullptr;
   size_t m_planeBufferSize = 0;
 
-  // clear colour for "black" bars
-  float m_clearColour{0.0f};
-  CRect m_viewRect;
+  CRect m_lastViewRect;
+  CRect m_lastSourceRect;
+
+  // HDR FBO compositing: when active, IsGuiLayer() returns false so
+  // video renders separately from GUI via RenderUpdateVideo()
+  bool m_hdrFboActive{false};
 
 private:
+  void ClearBackBuffer();
+  void ClearBackBufferQuad();
   void DrawBlackBars();
 };

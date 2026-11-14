@@ -8,7 +8,6 @@
 
 #include "WinSystemWayland.h"
 
-#include "Application.h"
 #include "CompileInfo.h"
 #include "Connection.h"
 #include "OSScreenSaverIdleInhibitUnstableV1.h"
@@ -22,20 +21,22 @@
 #include "VideoSyncWpPresentation.h"
 #include "WinEventsWayland.h"
 #include "WindowDecorator.h"
+#include "application/Application.h"
 #include "cores/RetroPlayer/process/wayland/RPProcessInfoWayland.h"
 #include "cores/VideoPlayer/Process/wayland/ProcessInfoWayland.h"
+#include "cores/VideoPlayer/VideoReferenceClock.h"
 #include "guilib/DispResource.h"
-#include "guilib/LocalizeStrings.h"
 #include "input/InputManager.h"
 #include "input/touch/generic/GenericTouchActionHandler.h"
 #include "input/touch/generic/GenericTouchInputHandler.h"
 #include "messaging/ApplicationMessenger.h"
+#include "resources/LocalizeStrings.h"
+#include "resources/ResourcesComponent.h"
 #include "settings/AdvancedSettings.h"
 #include "settings/DisplaySettings.h"
 #include "settings/Settings.h"
 #include "settings/SettingsComponent.h"
 #include "settings/lib/Setting.h"
-#include "threads/SingleLock.h"
 #include "utils/ActorProtocol.h"
 #include "utils/MathUtils.h"
 #include "utils/StringUtils.h"
@@ -47,11 +48,10 @@
 
 #include <algorithm>
 #include <limits>
+#include <memory>
+#include <mutex>
 #include <numeric>
-
-#if defined(HAS_DBUS)
-# include "windowing/linux/OSScreenSaverFreedesktop.h"
-#endif
+#include <string_view>
 
 using namespace KODI::WINDOWING;
 using namespace KODI::WINDOWING::WAYLAND;
@@ -128,7 +128,7 @@ struct MsgConfigure
 
 struct MsgBufferScale
 {
-  int scale;
+  double scale;
 };
 
 };
@@ -138,13 +138,10 @@ struct MsgBufferScale
 CWinSystemWayland::CWinSystemWayland()
 : CWinSystemBase{}, m_protocol{"WinSystemWaylandInternal"}
 {
-  m_winEvents.reset(new CWinEventsWayland());
+  m_winEvents = std::make_unique<CWinEventsWayland>();
 }
 
-CWinSystemWayland::~CWinSystemWayland() noexcept
-{
-  DestroyWindowSystem();
-}
+CWinSystemWayland::~CWinSystemWayland() noexcept = default;
 
 bool CWinSystemWayland::InitWindowSystem()
 {
@@ -158,19 +155,32 @@ bool CWinSystemWayland::InitWindowSystem()
   wayland::set_log_handler([](const std::string& message)
                            { CLog::Log(LOGWARNING, "wayland-client log message: {}", message); });
 
+  CLog::LogF(LOGINFO, "Connecting to Wayland server");
+  m_connection = std::make_unique<CConnection>();
+  if (!m_connection->HasDisplay())
+    return false;
+
   VIDEOPLAYER::CProcessInfoWayland::Register();
   RETRO::CRPProcessInfoWayland::Register();
 
-  CLog::LogF(LOGINFO, "Connecting to Wayland server");
-  m_connection.reset(new CConnection);
-  m_registry.reset(new CRegistry{*m_connection});
+  m_registry = std::make_unique<CRegistry>(*m_connection);
 
   m_registry->RequestSingleton(m_compositor, 1, 4);
   m_registry->RequestSingleton(m_shm, 1, 1);
+  m_registry->RequestSingleton(m_viewporter, 1, 1, false);
+  m_registry->RequestSingleton(m_fractionalScaleManager, 1, 1, false);
   m_registry->RequestSingleton(m_presentation, 1, 1, false);
   // version 2 adds done() -> required
   // version 3 adds destructor -> optional
-  m_registry->Request<wayland::output_t>(2, 3, std::bind(&CWinSystemWayland::OnOutputAdded, this, _1, _2), std::bind(&CWinSystemWayland::OnOutputRemoved, this, _1));
+  // version 4 adds name() and description() -> optional
+#if WAYLANDPP_VERSION_MAJOR >= 1
+  constexpr std::uint32_t maxOutputVersion = 4;
+#else
+  constexpr std::uint32_t maxOutputVersion = 3;
+#endif
+  m_registry->Request<wayland::output_t>(2, maxOutputVersion,
+                                         std::bind(&CWinSystemWayland::OnOutputAdded, this, _1, _2),
+                                         std::bind(&CWinSystemWayland::OnOutputRemoved, this, _1));
 
   m_registry->Bind();
 
@@ -190,6 +200,11 @@ bool CWinSystemWayland::InitWindowSystem()
     throw std::runtime_error("No outputs received from compositor");
   }
 
+  if (!m_viewporter)
+  {
+    m_fractionalScaleManager = wayland::fractional_scale_manager_v1_t();
+  }
+
   // Event loop is started in CreateWindow
 
   // pointer is by default not on this window, will be immediately rectified
@@ -203,12 +218,14 @@ bool CWinSystemWayland::InitWindowSystem()
       ->GetSetting(CSettings::SETTING_VIDEOSCREEN_LIMITEDRANGE)
       ->SetVisible(true);
 
+  m_colorManager = std::make_unique<CColorManager>(*m_connection);
   return CWinSystemBase::InitWindowSystem();
 }
 
 bool CWinSystemWayland::DestroyWindowSystem()
 {
   DestroyWindow();
+  m_colorManager.reset();
   // wl_display_disconnect frees all proxy objects, so we have to make sure
   // all stuff is gone on the C++ side before that
   m_cursorSurface = wayland::surface_t{};
@@ -247,9 +264,9 @@ bool CWinSystemWayland::CreateNewWindow(const std::string& name,
     {
       CLog::Log(LOGDEBUG, "Entering output \"{}\" with scale {} and {:.3f} dpi",
                 UserFriendlyOutputName(output), output->GetScale(), output->GetCurrentDpi());
-      CSingleLock lock(m_surfaceOutputsMutex);
+      std::unique_lock lock(m_surfaceOutputsMutex);
       m_surfaceOutputs.emplace(output);
-      lock.Leave();
+      lock.unlock();
       UpdateBufferScale();
       UpdateTouchDpi();
     }
@@ -263,9 +280,9 @@ bool CWinSystemWayland::CreateNewWindow(const std::string& name,
     {
       CLog::Log(LOGDEBUG, "Leaving output \"{}\" with scale {}", UserFriendlyOutputName(output),
                 output->GetScale());
-      CSingleLock lock(m_surfaceOutputsMutex);
+      std::unique_lock lock(m_surfaceOutputsMutex);
       m_surfaceOutputs.erase(output);
-      lock.Leave();
+      lock.unlock();
       UpdateBufferScale();
       UpdateTouchDpi();
     }
@@ -275,10 +292,31 @@ bool CWinSystemWayland::CreateNewWindow(const std::string& name,
     }
   };
 
-  m_windowDecorator.reset(new CWindowDecorator(*this, *m_connection, m_surface));
+  if (m_viewporter)
+  {
+    m_viewport = m_viewporter.get_viewport(m_surface);
+  }
 
-  m_seatInputProcessing.reset(new CSeatInputProcessing(m_surface, *this));
-  m_seatRegistry.reset(new CRegistry{*m_connection});
+  if (m_fractionalScaleManager)
+  {
+    m_fractionalScale = m_fractionalScaleManager.get_fractional_scale(m_surface);
+    m_fractionalScale.on_preferred_scale() = [this](std::uint32_t scale)
+    {
+      constexpr double WAYLAND_SCALE_FACTOR = 120.0;
+      const double newScale = scale / WAYLAND_SCALE_FACTOR;
+      CLog::LogF(LOGINFO, "Received new preferred scale: {}", newScale);
+      if (newScale > 0.0)
+      {
+        WinSystemWaylandProtocol::MsgBufferScale msg{newScale};
+        m_protocol.SendOutMessage(WinSystemWaylandProtocol::BUFFER_SCALE, &msg, sizeof(msg));
+      }
+    };
+  }
+
+  m_windowDecorator = std::make_unique<CWindowDecorator>(*this, *m_connection, m_surface);
+
+  m_seatInputProcessing = std::make_unique<CSeatInputProcessing>(m_surface, *this);
+  m_seatRegistry = std::make_unique<CRegistry>(*m_connection);
   // version 2 adds name event -> optional
   // version 4 adds wl_keyboard repeat_info -> optional
   // version 5 adds discrete axis events in wl_pointer -> unused
@@ -300,19 +338,7 @@ bool CWinSystemWayland::CreateNewWindow(const std::string& name,
   UpdateSizeVariables({res.iWidth, res.iHeight}, m_scale, m_shellSurfaceState, false);
 
   // Use AppName as the desktop file name. This is required to lookup the app icon of the same name.
-  m_shellSurface.reset(CShellSurfaceXdgShell::TryCreate(*this, *m_connection, m_surface, name,
-                                                        std::string(CCompileInfo::GetAppName())));
-  if (!m_shellSurface)
-  {
-    m_shellSurface.reset(CShellSurfaceXdgShellUnstableV6::TryCreate(
-        *this, *m_connection, m_surface, name, std::string(CCompileInfo::GetAppName())));
-  }
-  if (!m_shellSurface)
-  {
-    CLog::LogF(LOGWARNING, "Compositor does not support xdg_shell protocol (stable or unstable v6) - falling back to wl_shell, not all features might work");
-    m_shellSurface.reset(new CShellSurfaceWlShell(*this, *m_connection, m_surface, name,
-                                                  std::string(CCompileInfo::GetAppName())));
-  }
+  m_shellSurface.reset(CreateShellSurface(name));
 
   if (fullScreen)
   {
@@ -321,7 +347,7 @@ bool CWinSystemWayland::CreateNewWindow(const std::string& name,
     auto wlOutput = output ? output->GetWaylandOutput() : wayland::output_t{};
     m_lastSetOutput = wlOutput;
     m_shellSurface->SetFullScreen(wlOutput, res.fRefreshRate);
-    if (output && m_surface.can_set_buffer_scale())
+    if (!m_fractionalScaleManager && output && m_surface.can_set_buffer_scale())
     {
       m_scale = output->GetScale();
       ApplyBufferScale();
@@ -373,7 +399,29 @@ bool CWinSystemWayland::CreateNewWindow(const std::string& name,
   //   stopped then.
   CWinEventsWayland::SetDisplay(&m_connection->GetDisplay());
 
+  m_colorManager->SetSurface(m_surface);
+
   return true;
+}
+
+IShellSurface* CWinSystemWayland::CreateShellSurface(const std::string& name)
+{
+  IShellSurface* shell = CShellSurfaceXdgShell::TryCreate(*this, *m_connection, m_surface, name,
+                                                          std::string(CCompileInfo::GetAppName()));
+  if (!shell)
+  {
+    shell = CShellSurfaceXdgShellUnstableV6::TryCreate(*this, *m_connection, m_surface, name,
+                                                       std::string(CCompileInfo::GetAppName()));
+  }
+  if (!shell)
+  {
+    CLog::LogF(LOGWARNING, "Compositor does not support xdg_shell protocol (stable or unstable v6) "
+                           "- falling back to wl_shell, not all features might work");
+    shell = new CShellSurfaceWlShell(*this, *m_connection, m_surface, name,
+                                     std::string(CCompileInfo::GetAppName()));
+  }
+
+  return shell;
 }
 
 bool CWinSystemWayland::DestroyWindow()
@@ -383,6 +431,8 @@ bool CWinSystemWayland::DestroyWindow()
 
   m_shellSurface.reset();
   // waylandpp automatically calls wl_surface_destroy when the last reference is removed
+  m_viewport = wayland::viewport_t();
+  m_fractionalScale = wayland::fractional_scale_v1_t();
   m_surface = wayland::surface_t();
   m_windowDecorator.reset();
   m_seats.clear();
@@ -401,11 +451,12 @@ bool CWinSystemWayland::CanDoWindowed()
 
 std::vector<std::string> CWinSystemWayland::GetConnectedOutputs()
 {
-  CSingleLock lock(m_outputsMutex);
+  std::unique_lock lock(m_outputsMutex);
   std::vector<std::string> outputs;
-  std::transform(m_outputs.cbegin(), m_outputs.cend(), std::back_inserter(outputs),
-                 [this](decltype(m_outputs)::value_type const& pair)
-                 { return UserFriendlyOutputName(pair.second); });
+  outputs.emplace_back(OUTPUT_NAME_DEFAULT);
+  std::ranges::transform(m_outputs, std::back_inserter(outputs),
+                         [this](decltype(m_outputs)::value_type const& pair)
+                         { return UserFriendlyOutputName(pair.second); });
 
   return outputs;
 }
@@ -425,7 +476,7 @@ void CWinSystemWayland::UpdateResolutions()
   // Only show resolutions for the currently selected output
   std::string userOutput = CServiceBroker::GetSettingsComponent()->GetSettings()->GetString(CSettings::SETTING_VIDEOSCREEN_MONITOR);
 
-  CSingleLock lock(m_outputsMutex);
+  std::unique_lock lock(m_outputsMutex);
 
   if (m_outputs.empty())
   {
@@ -481,19 +532,62 @@ void CWinSystemWayland::UpdateResolutions()
 
 std::shared_ptr<COutput> CWinSystemWayland::FindOutputByUserFriendlyName(const std::string& name)
 {
-  CSingleLock lock(m_outputsMutex);
+  std::unique_lock lock(m_outputsMutex);
   auto outputIt = std::find_if(m_outputs.begin(), m_outputs.end(),
                                [this, &name](decltype(m_outputs)::value_type const& entry)
                                {
                                  return (name == UserFriendlyOutputName(entry.second));
                                });
 
-  return (outputIt == m_outputs.end() ? nullptr : outputIt->second);
+  if (outputIt == m_outputs.end())
+  {
+    // Preserve monitor selections saved before wl_output v4 names were used.
+    outputIt = std::find_if(m_outputs.begin(), m_outputs.end(),
+                            [this, &name](decltype(m_outputs)::value_type const& entry)
+                            { return name == UserFriendlyOutputName(entry.second, true); });
+  }
+
+  if (outputIt != m_outputs.end())
+    return outputIt->second;
+  if (name == OUTPUT_NAME_DEFAULT)
+    return nullptr;
+
+  std::string_view label{name};
+  const auto position = label.rfind(" @");
+  if (position != std::string_view::npos)
+  {
+    const auto coordinates = label.substr(position + 2);
+    const auto separator = coordinates.find('x');
+    if (separator != std::string_view::npos &&
+        coordinates.find_first_not_of("-0123456789x") == std::string_view::npos &&
+        StringUtils::IsInteger(coordinates.substr(0, separator)) &&
+        StringUtils::IsInteger(coordinates.substr(separator + 1)))
+      label = label.substr(0, position);
+  }
+
+  // Descriptions can change; accept only a unique complete output-name match.
+  std::shared_ptr<COutput> match;
+  for (const auto& [id, output] : m_outputs)
+  {
+    const auto connector = output->GetName();
+    if (connector.empty())
+      continue;
+
+    const auto suffix = StringUtils::Format(" ({})", connector);
+    const auto matches = [&](std::string_view value)
+    { return value == connector || (value.size() > suffix.size() && value.ends_with(suffix)); };
+    if (!matches(name) && !matches(label))
+      continue;
+    if (match)
+      return nullptr;
+    match = output;
+  }
+  return match;
 }
 
 std::shared_ptr<COutput> CWinSystemWayland::FindOutputByWaylandOutput(wayland::output_t const& output)
 {
-  CSingleLock lock(m_outputsMutex);
+  std::unique_lock lock(m_outputsMutex);
   auto outputIt = std::find_if(m_outputs.begin(), m_outputs.end(),
                                [&output](decltype(m_outputs)::value_type const& entry)
                                {
@@ -613,7 +707,7 @@ bool CWinSystemWayland::ResizeWindow(int, int, int, int)
   // CGraphicContext is "smart" and calls ResizeWindow or SetFullScreen depending
   // on some state like whether we were already fullscreen. But actually the processing
   // here is always identical, so we are using a common function to handle both.
-  auto& res = CDisplaySettings::GetInstance().GetResolutionInfo(RES_WINDOW);
+  const auto& res = CDisplaySettings::GetInstance().GetResolutionInfo(RES_WINDOW);
   // The newWidth/newHeight parameters are taken from RES_WINDOW anyway, so we can just
   // ignore them
   return SetResolutionExternal(false, res);
@@ -633,6 +727,10 @@ void CWinSystemWayland::ApplySizeUpdate(SizeUpdateInformation update)
   }
   if (update.surfaceSizeChanged)
   {
+    if (m_viewport)
+    {
+      ApplyViewportSizes();
+    }
     // Update opaque region here so size always matches the configured egl surface
     ApplyOpaqueRegion();
   }
@@ -676,7 +774,7 @@ void CWinSystemWayland::ProcessMessages()
   Actor::Message* message{};
   MessageHandle lastConfigureMessage;
   int skippedConfigures{-1};
-  int newScale{m_scale};
+  double newScale{m_scale};
 
   while (m_protocol.ReceiveOutMessage(&message))
   {
@@ -697,7 +795,7 @@ void CWinSystemWayland::ProcessMessages()
       {
         CLog::LogF(LOGDEBUG, "Output hotplug, re-reading resolutions");
         UpdateResolutions();
-        CSingleLock lock(m_outputsMutex);
+        std::unique_lock lock(m_outputsMutex);
         auto const& desktopRes = CDisplaySettings::GetInstance().GetResolutionInfo(RES_DESKTOP);
         auto output = FindOutputByUserFriendlyName(desktopRes.strOutput);
         auto const& wlOutput = output->GetWaylandOutput();
@@ -758,7 +856,8 @@ void CWinSystemWayland::ProcessMessages()
         auto const& windowed = CDisplaySettings::GetInstance().GetResolutionInfo(RES_WINDOW);
         // Kodi resolution is buffer size, but SetResolutionInternal expects
         // surface size, so divide by m_scale
-        size = CSizeInt{windowed.iWidth, windowed.iHeight} / newScale;
+        size.SetWidth(std::round(static_cast<double>(windowed.iWidth) / newScale));
+        size.SetHeight(std::round(static_cast<double>(windowed.iHeight) / newScale));
         CLog::LogF(LOGDEBUG, "Adapting Kodi windowed size {}x{}", size.Width(), size.Height());
         sizeIncludesDecoration = false;
       }
@@ -778,6 +877,10 @@ void CWinSystemWayland::ApplyShellSurfaceState(IShellSurface::StateBitset state)
 {
   m_windowDecorator->SetState(m_configuredSize, m_scale, state);
   m_shellSurfaceState = state;
+  // Enabling or disabling decorations changes the window geometry even when the
+  // configured size stays the same, in which case ApplySizeUpdate() does not
+  // reapply it and a stale decorated geometry would offset the whole window
+  ApplyWindowGeometry();
 }
 
 void CWinSystemWayland::OnConfigure(std::uint32_t serial, CSizeInt size, IShellSurface::StateBitset state)
@@ -826,7 +929,12 @@ void CWinSystemWayland::AckConfigure(std::uint32_t serial)
  * \param scale new buffer scale
  * \param sizeIncludesDecoration whether size includes the size of the window decorations if present
  */
-void CWinSystemWayland::SetResolutionInternal(CSizeInt size, std::int32_t scale, IShellSurface::StateBitset state, bool sizeIncludesDecoration, bool mustAck, std::uint32_t configureSerial)
+void CWinSystemWayland::SetResolutionInternal(CSizeInt size,
+                                              double scale,
+                                              IShellSurface::StateBitset state,
+                                              bool sizeIncludesDecoration,
+                                              bool mustAck,
+                                              std::uint32_t configureSerial)
 {
   // This should never be called while a size set is pending
   assert(!m_waitingForApply);
@@ -842,7 +950,7 @@ void CWinSystemWayland::SetResolutionInternal(CSizeInt size, std::int32_t scale,
   // Get actual frame rate from monitor, take highest frame rate if multiple
   float refreshRate{m_fRefreshRate};
   {
-    CSingleLock lock(m_surfaceOutputsMutex);
+    std::unique_lock lock(m_surfaceOutputsMutex);
     auto maxRefreshIt = std::max_element(m_surfaceOutputs.cbegin(), m_surfaceOutputs.cend(), OutputCurrentRefreshRateComparer());
     if (maxRefreshIt != m_surfaceOutputs.cend())
     {
@@ -879,7 +987,7 @@ void CWinSystemWayland::SetResolutionInternal(CSizeInt size, std::int32_t scale,
       {
         XBMC_Event msg{};
         msg.type = XBMC_VIDEORESIZE;
-        msg.resize = {sizes.bufferSize.Width(), sizes.bufferSize.Height()};
+        msg.resize = {sizes.surfaceSize.Width(), sizes.surfaceSize.Height(), scale};
         // FIXME
         dynamic_cast<CWinEventsWayland&>(*m_winEvents).MessagePush(&msg);
         m_waitingForApply = true;
@@ -922,7 +1030,7 @@ void CWinSystemWayland::SetResolutionInternal(CSizeInt size, std::int32_t scale,
 
 void CWinSystemWayland::FinishModeChange(RESOLUTION res)
 {
-  auto& resInfo = CDisplaySettings::GetInstance().GetResolutionInfo(res);
+  const auto& resInfo = CDisplaySettings::GetInstance().GetResolutionInfo(res);
 
   ApplyNextState();
 
@@ -953,7 +1061,10 @@ void CWinSystemWayland::ApplyNextState()
   }
 }
 
-CWinSystemWayland::Sizes CWinSystemWayland::CalculateSizes(CSizeInt size, int scale, IShellSurface::StateBitset state, bool sizeIncludesDecoration)
+CWinSystemWayland::Sizes CWinSystemWayland::CalculateSizes(CSizeInt size,
+                                                           double scale,
+                                                           IShellSurface::StateBitset state,
+                                                           bool sizeIncludesDecoration)
 {
   Sizes result;
 
@@ -984,7 +1095,8 @@ CWinSystemWayland::Sizes CWinSystemWayland::CalculateSizes(CSizeInt size, int sc
     result.configuredSize = m_windowDecorator->CalculateFullSurfaceSize(size, state);
   }
 
-  result.bufferSize = result.surfaceSize * scale;
+  result.bufferSize.SetWidth(std::round(static_cast<double>(result.surfaceSize.Width()) * scale));
+  result.bufferSize.SetHeight(std::round(static_cast<double>(result.surfaceSize.Height()) * scale));
 
   return result;
 }
@@ -999,7 +1111,8 @@ CWinSystemWayland::Sizes CWinSystemWayland::CalculateSizes(CSizeInt size, int sc
  * \param sizeIncludesDecoration if true, given size includes potential window decorations
  * \return whether main buffer (not surface) size changed
  */
-CWinSystemWayland::SizeUpdateInformation CWinSystemWayland::UpdateSizeVariables(CSizeInt size, int scale, IShellSurface::StateBitset state, bool sizeIncludesDecoration)
+CWinSystemWayland::SizeUpdateInformation CWinSystemWayland::UpdateSizeVariables(
+    CSizeInt size, double scale, IShellSurface::StateBitset state, bool sizeIncludesDecoration)
 {
   CLog::LogF(LOGDEBUG, "Set size {}x{} scale {} {} decorations with state {}", size.Width(),
              size.Height(), scale, sizeIncludesDecoration ? "including" : "excluding",
@@ -1041,21 +1154,43 @@ CWinSystemWayland::SizeUpdateInformation CWinSystemWayland::UpdateSizeVariables(
   return changes;
 }
 
-std::string CWinSystemWayland::UserFriendlyOutputName(std::shared_ptr<COutput> const& output)
+std::string CWinSystemWayland::UserFriendlyOutputName(std::shared_ptr<COutput> const& output,
+                                                      bool legacyName)
 {
   std::vector<std::string> parts;
-  if (!output->GetMake().empty())
+
+  if (!legacyName)
   {
-    parts.emplace_back(output->GetMake());
+    const auto name = output->GetName();
+    const auto description = output->GetDescription();
+    if (!description.empty())
+    {
+      parts.emplace_back(description);
+      if (!name.empty())
+        parts.emplace_back(StringUtils::Format("({})", name));
+    }
+    else if (!name.empty())
+    {
+      parts.emplace_back(name);
+    }
   }
-  if (!output->GetModel().empty())
+
+  if (parts.empty())
   {
-    parts.emplace_back(output->GetModel());
+    if (!output->GetMake().empty())
+    {
+      parts.emplace_back(output->GetMake());
+    }
+    if (!output->GetModel().empty())
+    {
+      parts.emplace_back(output->GetModel());
+    }
   }
+
   if (parts.empty())
   {
     // Fallback to "unknown" if no name received from compositor
-    parts.emplace_back(g_localizeStrings.Get(13205));
+    parts.emplace_back(CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(13205));
   }
 
   // Add position
@@ -1076,12 +1211,9 @@ bool CWinSystemWayland::Minimize()
 
 bool CWinSystemWayland::HasCursor()
 {
-  CSingleLock lock(m_seatsMutex);
-  return std::any_of(m_seats.cbegin(), m_seats.cend(),
-                     [](decltype(m_seats)::value_type const& entry)
-                     {
-                       return entry.second.HasPointerCapability();
-                     });
+  std::unique_lock lock(m_seatsMutex);
+  return std::ranges::any_of(m_seats, [](const auto& entry)
+                             { return entry.second->HasPointerCapability(); });
 }
 
 void CWinSystemWayland::ShowOSMouse(bool show)
@@ -1120,39 +1252,43 @@ void CWinSystemWayland::LoadDefaultCursor()
 
 void CWinSystemWayland::Register(IDispResource* resource)
 {
-  CSingleLock lock(m_dispResourcesMutex);
+  std::unique_lock lock(m_dispResourcesMutex);
   m_dispResources.emplace(resource);
 }
 
 void CWinSystemWayland::Unregister(IDispResource* resource)
 {
-  CSingleLock lock(m_dispResourcesMutex);
+  std::unique_lock lock(m_dispResourcesMutex);
   m_dispResources.erase(resource);
 }
 
 void CWinSystemWayland::OnSeatAdded(std::uint32_t name, wayland::proxy_t&& proxy)
 {
-  CSingleLock lock(m_seatsMutex);
+  std::unique_lock lock(m_seatsMutex);
 
   wayland::seat_t seat(proxy);
-  auto newSeatEmplace = m_seats.emplace(std::piecewise_construct,
-                                           std::forward_as_tuple(name),
-                                                 std::forward_as_tuple(name, seat, *m_connection));
+  auto newSeatEmplace = m_seats.emplace(std::piecewise_construct, std::forward_as_tuple(name),
+                                        std::forward_as_tuple(CreateSeat(name, seat)));
 
   auto& seatInst = newSeatEmplace.first->second;
-  m_seatInputProcessing->AddSeat(&seatInst);
-  m_windowDecorator->AddSeat(&seatInst);
+  m_seatInputProcessing->AddSeat(seatInst.get());
+  m_windowDecorator->AddSeat(seatInst.get());
+}
+
+std::unique_ptr<CSeat> CWinSystemWayland::CreateSeat(std::uint32_t name, wayland::seat_t& seat)
+{
+  return std::make_unique<CSeat>(name, seat, *m_connection);
 }
 
 void CWinSystemWayland::OnSeatRemoved(std::uint32_t name)
 {
-  CSingleLock lock(m_seatsMutex);
+  std::unique_lock lock(m_seatsMutex);
 
   auto seatI = m_seats.find(name);
   if (seatI != m_seats.end())
   {
-    m_seatInputProcessing->RemoveSeat(&seatI->second);
-    m_windowDecorator->RemoveSeat(&seatI->second);
+    m_seatInputProcessing->RemoveSeat(seatI->second.get());
+    m_windowDecorator->RemoveSeat(seatI->second.get());
     m_seats.erase(name);
   }
 }
@@ -1161,10 +1297,12 @@ void CWinSystemWayland::OnOutputAdded(std::uint32_t name, wayland::proxy_t&& pro
 {
   wayland::output_t output(proxy);
   // This is not accessed from multiple threads
-  m_outputsInPreparation.emplace(name, std::make_shared<COutput>(name, output, std::bind(&CWinSystemWayland::OnOutputDone, this, name)));
+  m_outputsInPreparation.emplace(
+      name, std::make_shared<COutput>(name, output, [this, name](bool labelChanged)
+                                      { OnOutputDone(name, labelChanged); }));
 }
 
-void CWinSystemWayland::OnOutputDone(std::uint32_t name)
+void CWinSystemWayland::OnOutputDone(std::uint32_t name, bool labelChanged)
 {
   auto it = m_outputsInPreparation.find(name);
   if (it != m_outputsInPreparation.end())
@@ -1173,7 +1311,7 @@ void CWinSystemWayland::OnOutputDone(std::uint32_t name)
     // output parameters change later
 
     {
-      CSingleLock lock(m_outputsMutex);
+      std::unique_lock lock(m_outputsMutex);
       // Move from m_outputsInPreparation to m_outputs
       m_outputs.emplace(std::move(*it));
       m_outputsInPreparation.erase(it);
@@ -1181,6 +1319,8 @@ void CWinSystemWayland::OnOutputDone(std::uint32_t name)
 
     m_protocol.SendOutMessage(WinSystemWaylandProtocol::OUTPUT_HOTPLUG);
   }
+  else if (labelChanged)
+    m_protocol.SendOutMessage(WinSystemWaylandProtocol::OUTPUT_HOTPLUG);
 
   UpdateBufferScale();
 }
@@ -1189,7 +1329,7 @@ void CWinSystemWayland::OnOutputRemoved(std::uint32_t name)
 {
   m_outputsInPreparation.erase(name);
 
-  CSingleLock lock(m_outputsMutex);
+  std::unique_lock lock(m_outputsMutex);
   if (m_outputs.erase(name) != 0)
   {
     // Theoretically, the compositor should automatically put us on another
@@ -1201,7 +1341,7 @@ void CWinSystemWayland::OnOutputRemoved(std::uint32_t name)
 void CWinSystemWayland::SendFocusChange(bool focus)
 {
   g_application.m_AppFocused = focus;
-  CSingleLock lock(m_dispResourcesMutex);
+  std::unique_lock lock(m_dispResourcesMutex);
   for (auto dispResource : m_dispResources)
   {
     dispResource->OnAppFocusChange(focus);
@@ -1253,23 +1393,30 @@ void CWinSystemWayland::OnSetCursor(std::uint32_t seatGlobalName, std::uint32_t 
     LoadDefaultCursor();
     if (m_cursorSurface) // Cursor loading could have failed
     {
-      seatI->second.SetCursor(serial, m_cursorSurface, m_cursorImage.hotspot_x(), m_cursorImage.hotspot_y());
+      seatI->second->SetCursor(serial, m_cursorSurface, m_cursorImage.hotspot_x(),
+                               m_cursorImage.hotspot_y());
     }
   }
   else
   {
-    seatI->second.SetCursor(serial, wayland::surface_t{}, 0, 0);
+    seatI->second->SetCursor(serial, wayland::surface_t{}, 0, 0);
   }
 }
 
 void CWinSystemWayland::UpdateBufferScale()
 {
+  if (m_fractionalScaleManager)
+  {
+    return;
+  }
+
   // Adjust our surface size to the output with the biggest scale in order
   // to get the best quality
   auto const maxBufferScaleIt = std::max_element(m_surfaceOutputs.cbegin(), m_surfaceOutputs.cend(), OutputScaleComparer());
   if (maxBufferScaleIt != m_surfaceOutputs.cend())
   {
-    WinSystemWaylandProtocol::MsgBufferScale msg{(*maxBufferScaleIt)->GetScale()};
+    WinSystemWaylandProtocol::MsgBufferScale msg{
+        static_cast<double>((*maxBufferScaleIt)->GetScale())};
     m_protocol.SendOutMessage(WinSystemWaylandProtocol::BUFFER_SCALE, &msg, sizeof(msg));
   }
 }
@@ -1277,9 +1424,22 @@ void CWinSystemWayland::UpdateBufferScale()
 void CWinSystemWayland::ApplyBufferScale()
 {
   CLog::LogF(LOGINFO, "Setting Wayland buffer scale to {}", m_scale);
-  m_surface.set_buffer_scale(m_scale);
+  if (m_viewport)
+  {
+    ApplyViewportSizes();
+  }
+  else if (m_surface.can_set_buffer_scale())
+  {
+    m_surface.set_buffer_scale(std::round(m_scale));
+  }
   m_windowDecorator->SetState(m_configuredSize, m_scale, m_shellSurfaceState);
   m_seatInputProcessing->SetCoordinateScale(m_scale);
+}
+
+void CWinSystemWayland::ApplyViewportSizes()
+{
+  m_viewport.set_destination(m_surfaceSize.Width(), m_surfaceSize.Height());
+  m_viewport.set_source(0.0, 0.0, m_bufferSize.Width(), m_bufferSize.Height());
 }
 
 void CWinSystemWayland::UpdateTouchDpi()
@@ -1329,7 +1489,7 @@ void CWinSystemWayland::PrepareFramePresentation()
     // to the actual object
     decltype(m_surfaceSubmissions)::iterator iter;
     {
-      CSingleLock lock(m_surfaceSubmissionsMutex);
+      std::unique_lock lock(m_surfaceSubmissionsMutex);
       iter = m_surfaceSubmissions.emplace(m_surfaceSubmissions.end(), tStart, feedback);
     }
 
@@ -1352,12 +1512,14 @@ void CWinSystemWayland::PrepareFramePresentation()
       timespec tv = { .tv_sec = static_cast<std::time_t> ((static_cast<std::uint64_t>(tvSecHi) << 32) + tvSecLo), .tv_nsec = static_cast<long>(tvNsec) };
       std::int64_t latency{KODI::LINUX::TimespecDifference(iter->submissionTime, tv)};
       std::uint64_t msc{(static_cast<std::uint64_t>(seqHi) << 32) + seqLo};
-      m_presentationFeedbackHandlers.Invoke(tv, refresh, m_syncOutputID, m_syncOutputRefreshRate, msc);
+      m_presentationRefreshRate = refresh != 0 ? 1.0e9f / refresh : m_syncOutputRefreshRate.load();
+      m_presentationFeedbackHandlers.Invoke(tv, refresh, m_syncOutputID, m_presentationRefreshRate,
+                                            msc);
 
       iter->latency = latency / 1e9f; // nanoseconds to seconds
       float adjust{};
       {
-        CSingleLock lock(m_surfaceSubmissionsMutex);
+        std::unique_lock lock(m_surfaceSubmissionsMutex);
         if (m_surfaceSubmissions.size() > LATENCY_MOVING_AVERAGE_SIZE)
         {
           adjust = - m_surfaceSubmissions.front().latency / LATENCY_MOVING_AVERAGE_SIZE;
@@ -1372,7 +1534,7 @@ void CWinSystemWayland::PrepareFramePresentation()
     feedback.on_discarded() = [this,iter]()
     {
       CLog::Log(LOGDEBUG, "Presentation: Frame was discarded by compositor");
-      CSingleLock lock(m_surfaceSubmissionsMutex);
+      std::unique_lock lock(m_surfaceSubmissionsMutex);
       m_surfaceSubmissions.erase(iter);
     };
   }
@@ -1449,9 +1611,9 @@ float CWinSystemWayland::GetDisplayLatency()
   }
 }
 
-float CWinSystemWayland::GetSyncOutputRefreshRate()
+float CWinSystemWayland::GetPresentationRefreshRate()
 {
-  return m_syncOutputRefreshRate;
+  return m_presentationRefreshRate;
 }
 
 KODI::CSignalRegistration CWinSystemWayland::RegisterOnPresentationFeedback(
@@ -1460,7 +1622,7 @@ KODI::CSignalRegistration CWinSystemWayland::RegisterOnPresentationFeedback(
   return m_presentationFeedbackHandlers.Register(handler);
 }
 
-std::unique_ptr<CVideoSync> CWinSystemWayland::GetVideoSync(void* clock)
+std::unique_ptr<CVideoSync> CWinSystemWayland::GetVideoSync(CVideoReferenceClock* clock)
 {
   if (m_surface && m_presentation)
   {
@@ -1501,20 +1663,35 @@ std::unique_ptr<IOSScreenSaver> CWinSystemWayland::GetOSScreenSaverImpl()
 
 std::string CWinSystemWayland::GetClipboardText()
 {
-  CSingleLock lock(m_seatsMutex);
+  std::unique_lock lock(m_seatsMutex);
   // Get text of first seat with non-empty selection
   // Actually, the value of the seat that received the Ctrl+V keypress should be used,
   // but this would need a workaround or proper multi-seat support in Kodi - it's
   // probably just not that relevant in practice
   for (auto const& seat : m_seats)
   {
-    auto text = seat.second.GetSelectionText();
-    if (text != "")
+    auto text = seat.second->GetSelectionText();
+    if (!text.empty())
     {
       return text;
     }
   }
   return "";
+}
+
+bool CWinSystemWayland::SetHDR(const VideoPicture* videoPicture)
+{
+  return m_colorManager->SetHDR(videoPicture);
+}
+
+bool CWinSystemWayland::IsHDRDisplay()
+{
+  return m_colorManager->IsHDRDisplay();
+}
+
+CHDRCapabilities CWinSystemWayland::GetDisplayHDRCapabilities() const
+{
+  return m_colorManager->GetDisplayHDRCapabilities();
 }
 
 void CWinSystemWayland::OnWindowMove(const wayland::seat_t& seat, std::uint32_t serial)
@@ -1534,7 +1711,7 @@ void CWinSystemWayland::OnWindowShowContextMenu(const wayland::seat_t& seat, std
 
 void CWinSystemWayland::OnWindowClose()
 {
-  KODI::MESSAGING::CApplicationMessenger::GetInstance().PostMsg(TMSG_QUIT);
+  CServiceBroker::GetAppMessenger()->PostMsg(TMSG_QUIT);
 }
 
 void CWinSystemWayland::OnWindowMinimize()
@@ -1556,7 +1733,7 @@ void CWinSystemWayland::OnWindowMaximize()
 
 void CWinSystemWayland::OnClose()
 {
-  KODI::MESSAGING::CApplicationMessenger::GetInstance().PostMsg(TMSG_QUIT);
+  CServiceBroker::GetAppMessenger()->PostMsg(TMSG_QUIT);
 }
 
 bool CWinSystemWayland::MessagePump()

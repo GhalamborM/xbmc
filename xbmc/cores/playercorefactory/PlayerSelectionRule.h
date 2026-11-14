@@ -8,19 +8,23 @@
 
 #pragma once
 
-#include "FileItem.h"
 #include "PlayerCoreFactory.h"
 
 #include <string>
 #include <vector>
 
+class CFileItem;
 class CRegExp;
-class TiXmlElement;
+
+namespace tinyxml2
+{
+class XMLElement;
+} // namespace tinyxml2
 
 class CPlayerSelectionRule
 {
 public:
-  explicit CPlayerSelectionRule(TiXmlElement* rule);
+  explicit CPlayerSelectionRule(tinyxml2::XMLElement* rule);
   virtual ~CPlayerSelectionRule() = default;
 
   void GetPlayers(const CFileItem& item, std::vector<std::string>&validPlayers, std::vector<std::string>&players);
@@ -29,7 +33,7 @@ private:
   static int GetTristate(const char* szValue);
   static bool CompileRegExp(const std::string& str, CRegExp& regExp);
   static bool MatchesRegExp(const std::string& str, CRegExp& regExp);
-  void Initialize(TiXmlElement* pRule);
+  void Initialize(tinyxml2::XMLElement* pRule);
 
   std::string m_name;
 
@@ -55,6 +59,7 @@ private:
   std::string m_videoCodec;
   std::string m_videoResolution;
   std::string m_videoAspect;
+  std::string m_hdrType;
 
   std::string m_playerName;
 

@@ -1378,14 +1378,16 @@ public:
 
     safeUrl.reserve(str.size());
 
-    std::transform(str.begin(), str.end(), std::back_inserter(safeUrl), [](char c) {
-      if (('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z') || ('0' <= c && c <= '9') || c == '-' ||
-          c == '.' || c == '_' || c == '~')
-      {
-        return c;
-      }
-      return '_';
-    });
+    std::transform(str.begin(), str.end(), std::back_inserter(safeUrl),
+                   [](char c)
+                   {
+                     if (('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z') ||
+                         ('0' <= c && c <= '9') || c == '-' || c == '.' || c == '_' || c == '~')
+                     {
+                       return c;
+                     }
+                     return '_';
+                   });
 
     return safeUrl;
   }
@@ -1406,12 +1408,14 @@ public:
 
     safeString.reserve(str.size());
 
-    std::transform(str.begin(), str.end(), std::back_inserter(safeString), [](char c) {
-      if (c < 0x20)
-        return ' ';
+    std::transform(str.begin(), str.end(), std::back_inserter(safeString),
+                   [](char c)
+                   {
+                     if (c < 0x20)
+                       return ' ';
 
-      return c;
-    });
+                     return c;
+                   });
 
     return safeString;
   }
@@ -1461,7 +1465,8 @@ public:
   /// --------------------------------------------------------------------------
   /// Example:
   /// ~~~~~~~~~~~~~{.cpp}
-  /// std::string ref, var;
+  /// std::string ref;
+  /// std::string var;
   ///
   /// ref = "8378 787464";
   /// var = "test string";
@@ -1590,7 +1595,7 @@ public:
       c2 = *s2++;
       // This includes the possibility that one of the characters is the null-terminator,
       // which implies a string mismatch.
-      if (c1 != c2 && ::tolower(c1) != ::tolower(c2))
+      if (c1 != c2 && ToLowerAscii(c1) != ToLowerAscii(c2))
         return false;
     } while (c2 != '\0'); // At this point, we know c1 == c2, so there's no need to test them both.
     return true;
@@ -1640,8 +1645,8 @@ public:
       index++;
       // This includes the possibility that one of the characters is the null-terminator,
       // which implies a string mismatch.
-      if (c1 != c2 && ::tolower(c1) != ::tolower(c2))
-        return ::tolower(c1) - ::tolower(c2);
+      if (c1 != c2 && ToLowerAscii(c1) != ToLowerAscii(c2))
+        return ToLowerAscii(c1) - ToLowerAscii(c2);
     } while (c2 != '\0' &&
              index != n); // At this point, we know c1 == c2, so there's no need to test them both.
     return 0;
@@ -1775,7 +1780,7 @@ public:
   {
     while (*s2 != '\0')
     {
-      if (::tolower(*s1) != ::tolower(*s2))
+      if (ToLowerAscii(*s1) != ToLowerAscii(*s2))
         return false;
       s1++;
       s2++;
@@ -1866,7 +1871,7 @@ public:
     const char* s2 = str2.c_str();
     while (*s2 != '\0')
     {
-      if (::tolower(*s1) != ::tolower(*s2))
+      if (ToLowerAscii(*s1) != ToLowerAscii(*s2))
         return false;
       s1++;
       s2++;
@@ -1892,7 +1897,7 @@ public:
     const char* s1 = str1.c_str() + str1.size() - len2;
     while (*s2 != '\0')
     {
-      if (::tolower(*s1) != ::tolower(*s2))
+      if (ToLowerAscii(*s1) != ToLowerAscii(*s2))
         return false;
       s1++;
       s2++;
@@ -2921,7 +2926,8 @@ public:
   /// ~~~~~~~~~~~~~{.cpp}
   /// #include <kodi/tools/StringUtils.h>
   ///
-  /// std::string ref, var;
+  /// std::string ref;
+  /// std::string var;
   ///
   /// ref = "21:30:55";
   /// var = kodi::tools::StringUtils::SecondsToTimeString(77455);
@@ -2931,24 +2937,24 @@ public:
   inline static std::string SecondsToTimeString(long seconds,
                                                 TIME_FORMAT format = TIME_FORMAT_GUESS)
   {
-    bool isNegative = seconds < 0;
+    const bool isNegative = seconds < 0;
     seconds = std::abs(seconds);
 
     std::string strHMS;
     if (format == TIME_FORMAT_SECS)
       strHMS = std::to_string(seconds);
     else if (format == TIME_FORMAT_MINS)
-      strHMS = std::to_string(lrintf(static_cast<float>(seconds) / 60.0f));
+      strHMS = std::to_string(std::lrintf(static_cast<float>(seconds) / 60.0f));
     else if (format == TIME_FORMAT_HOURS)
-      strHMS = std::to_string(lrintf(static_cast<float>(seconds) / 3600.0f));
+      strHMS = std::to_string(std::lrintf(static_cast<float>(seconds) / 3600.0f));
     else if (format & TIME_FORMAT_M)
       strHMS += std::to_string(seconds % 3600 / 60);
     else
     {
-      int hh = seconds / 3600;
+      const long hh = seconds / 3600;
       seconds = seconds % 3600;
-      int mm = seconds / 60;
-      int ss = seconds % 60;
+      const long mm = seconds / 60;
+      unsigned int ss = seconds % 60;
 
       if (format == TIME_FORMAT_GUESS)
         format = (hh >= 1) ? TIME_FORMAT_HH_MM_SS : TIME_FORMAT_MM_SS;
@@ -3019,6 +3025,10 @@ private:
       return 1;
     return 0;
   }
+
+  inline static char ToLowerAscii(char c) { return 'A' <= c && c <= 'Z' ? c - 'A' + 'a' : c; }
+
+  inline static char ToUpperAscii(char c) { return 'a' <= c && c <= 'z' ? c - 'a' + 'A' : c; }
 
   inline static wchar_t tolowerUnicode(const wchar_t& c)
   {

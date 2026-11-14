@@ -8,6 +8,7 @@
 
 #include "WinSystemIOS.h"
 
+#include "ServiceBroker.h"
 #include "VideoSyncIos.h"
 #include "WinEventsIOS.h"
 #include "cores/AudioEngine/Sinks/AESinkDARWINIOS.h"
@@ -27,7 +28,6 @@
 #include "settings/DisplaySettings.h"
 #include "settings/Settings.h"
 #include "settings/SettingsComponent.h"
-#include "threads/SingleLock.h"
 #include "utils/StringUtils.h"
 #include "utils/log.h"
 #include "windowing/GraphicContext.h"
@@ -36,6 +36,8 @@
 #import "platform/darwin/ios/IOSScreenManager.h"
 #import "platform/darwin/ios/XBMCController.h"
 
+#include <memory>
+#include <mutex>
 #include <vector>
 
 #import <Foundation/Foundation.h>
@@ -101,7 +103,7 @@ CWinSystemIOS::CWinSystemIOS() : CWinSystemBase()
   m_bIsBackgrounded = false;
   m_pDisplayLink = new CADisplayLinkWrapper;
   m_pDisplayLink->callbackClass = [[IOSDisplayLinkCallback alloc] init];
-  m_winEvents.reset(new CWinEventsIOS());
+  m_winEvents = std::make_unique<CWinEventsIOS>();
 
   CAESinkDARWINIOS::Register();
 }
@@ -245,7 +247,7 @@ bool CWinSystemIOS::GetScreenResolution(int* w, int* h, double* fps, int screenI
   }
 
   // for mainscreen use the eagl bounds from xbmcController
-  // because mainscreen is might be 90° rotate dependend on
+  // because mainscreen is might be 90° rotate dependent on
   // the device and eagl gives the correct values in all cases.
   if(screenIdx == 0)
   {
@@ -349,13 +351,13 @@ bool CWinSystemIOS::EndRender()
 
 void CWinSystemIOS::Register(IDispResource *resource)
 {
-  CSingleLock lock(m_resourceSection);
+  std::unique_lock lock(m_resourceSection);
   m_resources.push_back(resource);
 }
 
 void CWinSystemIOS::Unregister(IDispResource* resource)
 {
-  CSingleLock lock(m_resourceSection);
+  std::unique_lock lock(m_resourceSection);
   std::vector<IDispResource*>::iterator i = find(m_resources.begin(), m_resources.end(), resource);
   if (i != m_resources.end())
     m_resources.erase(i);
@@ -363,7 +365,7 @@ void CWinSystemIOS::Unregister(IDispResource* resource)
 
 void CWinSystemIOS::OnAppFocusChange(bool focus)
 {
-  CSingleLock lock(m_resourceSection);
+  std::unique_lock lock(m_resourceSection);
   m_bIsBackgrounded = !focus;
   CLog::Log(LOGDEBUG, "CWinSystemIOS::OnAppFocusChange: {}", focus ? 1 : 0);
   for (std::vector<IDispResource *>::iterator i = m_resources.begin(); i != m_resources.end(); i++)
@@ -438,14 +440,14 @@ bool CWinSystemIOS::HasCursor()
 void CWinSystemIOS::NotifyAppActiveChange(bool bActivated)
 {
   if (bActivated && m_bWasFullScreenBeforeMinimize && !CServiceBroker::GetWinSystem()->GetGfxContext().IsFullScreenRoot())
-    CApplicationMessenger::GetInstance().PostMsg(TMSG_TOGGLEFULLSCREEN);
+    CServiceBroker::GetAppMessenger()->PostMsg(TMSG_TOGGLEFULLSCREEN);
 }
 
 bool CWinSystemIOS::Minimize()
 {
   m_bWasFullScreenBeforeMinimize = CServiceBroker::GetWinSystem()->GetGfxContext().IsFullScreenRoot();
   if (m_bWasFullScreenBeforeMinimize)
-    CApplicationMessenger::GetInstance().PostMsg(TMSG_TOGGLEFULLSCREEN);
+    CServiceBroker::GetAppMessenger()->PostMsg(TMSG_TOGGLEFULLSCREEN);
 
   return true;
 }
@@ -473,7 +475,7 @@ CVEAGLContext CWinSystemIOS::GetEAGLContextObj()
 std::vector<std::string> CWinSystemIOS::GetConnectedOutputs()
 {
   std::vector<std::string> outputs;
-  outputs.emplace_back("Default");
+  outputs.emplace_back(OUTPUT_NAME_DEFAULT);
   outputs.emplace_back(CONST_TOUCHSCREEN);
   if ([[UIScreen screens] count] > 1)
   {
@@ -488,7 +490,7 @@ void CWinSystemIOS::MoveToTouchscreen()
   CDisplaySettings::GetInstance().SetMonitor(CONST_TOUCHSCREEN);
 }
 
-std::unique_ptr<CVideoSync> CWinSystemIOS::GetVideoSync(void *clock)
+std::unique_ptr<CVideoSync> CWinSystemIOS::GetVideoSync(CVideoReferenceClock* clock)
 {
   std::unique_ptr<CVideoSync> pVSync(new CVideoSyncIos(clock, *this));
   return pVSync;

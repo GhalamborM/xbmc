@@ -8,40 +8,13 @@
 
 #pragma once
 
+#include "cores/VideoPlayer/Buffers/DmaBufIdentityCache.h"
 #include "cores/VideoPlayer/Interface/StreamInfo.h"
 #include "windowing/gbm/VideoLayerBridge.h"
 
 #include <memory>
 
 #include <drm_mode.h>
-
-#ifndef HAVE_HDR_OUTPUT_METADATA
-// HDR structs is copied from linux include/linux/hdmi.h
-struct hdr_metadata_infoframe
-{
-  uint8_t eotf;
-  uint8_t metadata_type;
-  struct
-  {
-    uint16_t x, y;
-  } display_primaries[3];
-  struct
-  {
-    uint16_t x, y;
-  } white_point;
-  uint16_t max_display_mastering_luminance;
-  uint16_t min_display_mastering_luminance;
-  uint16_t max_cll;
-  uint16_t max_fall;
-};
-struct hdr_output_metadata
-{
-  uint32_t metadata_type;
-  union {
-    struct hdr_metadata_infoframe hdmi_metadata_type1;
-  };
-};
-#endif
 
 namespace KODI
 {
@@ -71,14 +44,17 @@ protected:
   std::shared_ptr<KODI::WINDOWING::GBM::CDRMAtomic> m_DRM;
 
 private:
-  void Acquire(CVideoBufferDRMPRIME* buffer);
+  void Acquire(CVideoBufferDRMPRIME* buffer, uint32_t fbId);
   void Release(CVideoBufferDRMPRIME* buffer);
-  bool Map(CVideoBufferDRMPRIME* buffer);
-  void Unmap(CVideoBufferDRMPRIME* buffer);
+  bool PrepareBuffer(CVideoBufferDRMPRIME* buffer);
+  //! \brief Convert the buffer's descriptor to a framebuffer; 0 on failure.
+  uint32_t CreateFramebuffer(CVideoBufferDRMPRIME* buffer);
 
+  static constexpr size_t MAX_FB_CACHE = 32;
+
+  DRMPRIME::CDmaBufIdentityCache m_fbCache{MAX_FB_CACHE, "bridge-fb"};
   CVideoBufferDRMPRIME* m_buffer = nullptr;
   CVideoBufferDRMPRIME* m_prev_buffer = nullptr;
-
-  uint32_t m_hdr_blob_id = 0;
-  struct hdr_output_metadata m_hdr_metadata = {};
+  uint32_t m_fb_id{0};
+  uint32_t m_prev_fb_id{0};
 };

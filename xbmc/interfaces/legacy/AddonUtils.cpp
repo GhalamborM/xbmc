@@ -7,10 +7,13 @@
  */
 
 #include "AddonUtils.h"
-#include "Application.h"
-#include "utils/XBMCTinyXML.h"
-#include "addons/Skin.h"
+
 #include "LanguageHook.h"
+#include "ServiceBroker.h"
+#include "addons/Skin.h"
+#include "application/Application.h"
+#include "guilib/GUIComponent.h"
+#include "utils/XBMCTinyXML.h"
 #ifdef ENABLE_XBMC_TRACE_API
 #include "utils/log.h"
 #endif
@@ -50,7 +53,9 @@ namespace XBMCAddonUtils
     control.SetAttribute("type", cControlType);
     TiXmlElement filler("description");
     control.InsertEndChild(filler);
-    g_SkinInfo->ResolveIncludes(&control);
+    auto skin = CServiceBroker::GetGUI()->GetSkinInfo();
+    if (skin)
+      skin->ResolveIncludes(&control);
 
     // ok, now check for our texture type
     TiXmlElement *pTexture = control.FirstChildElement(cTextureType);

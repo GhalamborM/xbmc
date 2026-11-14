@@ -26,24 +26,28 @@ ARCH_DEFINES=@ARCH_DEFINES@
 NATIVE_ARCH_DEFINES=@NATIVE_ARCH_DEFINES@
 TARGET_PLATFORM=@target_platform@
 RENDER_SYSTEM=@app_rendersystem@
-AAPT=@AAPT@
-DX=@DX@
-D8=@D8@
-ZIPALIGN=@ZIPALIGN@
+SHA512SUM=@SHA512SUM@
+SHA256SUM=@SHA256SUM@
+SHASUM=@SHASUM@
+HASH_TOOL_FLAGS=-c --status
+
+ifeq ($(findstring apple-darwin,@use_host@),apple-darwin)
+  APPLE_DEPLOYMENT_TARGET=@target_minver@
+endif
 
 HAS_ZLIB=@has_zlib@
 NEED_LIBICONV=@need_libiconv@
 LINK_ICONV=@link_iconv@
 ENABLE_GPLV3=@use_gplv3@
 
-BASE_URL=http://mirrors.kodi.tv/build-deps/sources
+BASE_URL=https://mirrors.kodi.tv/build-deps/sources
 ifneq ($(KODI_MIRROR),)
 BASE_URL=$(KODI_MIRROR)/build-deps/sources
 endif
-RETRIEVE_TOOL_FLAGS=-Ls --create-dirs -f -O
+RETRIEVE_TOOL_FLAGS=-LsS --create-dirs --retry 10 --retry-connrefused -o
 ARCHIVE_TOOL_FLAGS=--strip-components=1 -xf
-CONFIG_SUB=@prefix@/@tool_dir@/share/automake-1.16/config.sub
-CONFIG_GUESS=@prefix@/@tool_dir@/share/automake-1.16/config.guess
+CONFIG_SUB=@prefix@/@tool_dir@/share/automake-1.19/config.sub
+CONFIG_GUESS=@prefix@/@tool_dir@/share/automake-1.19/config.guess
 
 USE_CCACHE=@use_ccache@
 
@@ -68,8 +72,9 @@ OBJDUMP=@OBJDUMP@
 CMAKE=@prefix@/@tool_dir@/bin/cmake -DCMAKE_TOOLCHAIN_FILE=$(PREFIX)/share/Toolchain.cmake -DCMAKE_INSTALL_PREFIX=$(PREFIX)
 CFLAGS=@platform_cflags@ @platform_includes@ -isystem @prefix@/@deps_dir@/include
 LDFLAGS=-L@prefix@/@deps_dir@/lib @platform_ldflags@
+ASFLAGS=@platform_asflags@
 CXXFLAGS=@platform_cxxflags@ @platform_includes@ -isystem @prefix@/@deps_dir@/include
-CPPFLAGS=@platform_cflags@ @platform_includes@ -isystem @prefix@/@deps_dir@/include
+CPPFLAGS=@platform_cppflags@ @platform_includes@ -isystem @prefix@/@deps_dir@/include
 # set configured FFmpeg configure options
 FFMPEG_CONFIGURE_OPTIONS=@ffmpeg_options@
 
@@ -96,17 +101,20 @@ NM_FOR_BUILD=@NM_FOR_BUILD@
 STRIP_FOR_BUILD=@STRIP_FOR_BUILD@
 READELF_FOR_BUILD=@READELF_FOR_BUILD@
 OBJDUMP_FOR_BUILD=@OBJDUMP_FOR_BUILD@
+CMAKE_FOR_BUILD=@prefix@/@tool_dir@/bin/cmake -DCMAKE_TOOLCHAIN_FILE=$(NATIVEPREFIX)/share/Toolchain-Native.cmake -DCMAKE_INSTALL_PREFIX=$(NATIVEPREFIX)
 
-NATIVE_CFLAGS=@host_includes@ -I@prefix@/@tool_dir@/include
-NATIVE_LDFLAGS=@host_includes@ -L@prefix@/@tool_dir@/lib
-NATIVE_CPPFLAGS=@host_includes@ -I@prefix@/@tool_dir@/include
-NATIVE_CXXFLAGS=@host_includes@ -I@prefix@/@tool_dir@/include
+NATIVE_CFLAGS=-I@prefix@/@tool_dir@/include @host_includes@
+NATIVE_LDFLAGS=-L@prefix@/@tool_dir@/lib @host_includes@
+NATIVE_CPPFLAGS=-I@prefix@/@tool_dir@/include @host_includes@
+NATIVE_CXXFLAGS=-I@prefix@/@tool_dir@/include @host_includes@
 
 VERSION.TXT := $(CMAKE_SOURCE_DIR)/version.txt
 APP_NAME=$(shell awk '/APP_NAME/ {print tolower($$2)}' $(VERSION.TXT))
 
 # Python related vars
-PYTHON_VERSION=3.9
+# version populated from tools/depends/target/python3/PYTHON3-VERSION file
+NATIVE_PYTHON_VERSION=@native_py_version@
+PYTHON_VERSION=@target_py_version@
 PYTHON_SITE_PKG=@prefix@/@deps_dir@/lib/python${PYTHON_VERSION}/site-packages
 
 ifeq ($(CPU), arm64)
@@ -124,4 +132,3 @@ export LIBTOOLIZE=@prefix@/@tool_dir@/bin/libtoolize
 
 export AUTORECONF=@prefix@/@tool_dir@/bin/autoreconf
 export JSON_BUILDER=$(NATIVEPREFIX)/bin/JsonSchemaBuilder
-

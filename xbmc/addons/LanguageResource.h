@@ -24,8 +24,6 @@ public:
 
   void OnPostInstall(bool update, bool modal) override;
 
-  bool IsAllowed(const std::string &file) const override;
-
   const CLocale& GetLocale() const { return m_locale; }
 
   const std::string& GetGuiCharset() const { return m_charsetGui; }
@@ -36,11 +34,12 @@ public:
   const std::string& GetDvdAudioLanguage() const { return m_dvdLanguageAudio; }
   const std::string& GetDvdSubtitleLanguage() const { return m_dvdLanguageSubtitle; }
 
-  const std::set<std::string>& GetSortTokens() const { return m_sortTokens; }
+  const std::set<std::string, std::less<>>& GetSortTokens() const { return m_sortTokens; }
 
   static std::string GetAddonId(const std::string& locale);
 
-  static bool FindLegacyLanguage(const std::string &locale, std::string &legacyLanguage);
+protected:
+  Published PublishedFiles() const override;
 
 private:
   CLocale m_locale;
@@ -53,7 +52,7 @@ private:
   std::string m_dvdLanguageAudio;
   std::string m_dvdLanguageSubtitle;
 
-  std::set<std::string> m_sortTokens;
+  std::set<std::string, std::less<>> m_sortTokens;
 };
 
 }

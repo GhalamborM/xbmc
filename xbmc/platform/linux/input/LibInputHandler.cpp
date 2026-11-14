@@ -14,9 +14,11 @@
 #include "LibInputTouch.h"
 #include "ServiceBroker.h"
 #include "interfaces/AnnouncementManager.h"
+#include "utils/StringUtils.h"
 #include "utils/log.h"
 
 #include <algorithm>
+#include <memory>
 #include <string.h>
 
 #include <fcntl.h>
@@ -63,7 +65,11 @@ static void LogHandler(libinput  __attribute__((unused)) *libinput, libinput_log
     char buf[512];
     int n = vsnprintf(buf, sizeof(buf), format, args);
     if (n > 0)
-      CLog::Log(LOGDEBUG, "libinput: {}", buf);
+    {
+      std::string message(buf);
+      StringUtils::TrimRight(message);
+      CLog::Log(LOGDEBUG, "libinput: {}", message);
+    }
   }
 }
 
@@ -93,12 +99,12 @@ CLibInputHandler::CLibInputHandler() : CThread("libinput")
 
   m_liFd = libinput_get_fd(m_li);
 
-  m_keyboard.reset(new CLibInputKeyboard());
-  m_pointer.reset(new CLibInputPointer());
-  m_touch.reset(new CLibInputTouch());
-  m_settings.reset(new CLibInputSettings(this));
+  m_keyboard = std::make_unique<CLibInputKeyboard>();
+  m_pointer = std::make_unique<CLibInputPointer>();
+  m_touch = std::make_unique<CLibInputTouch>();
+  m_settings = std::make_unique<CLibInputSettings>(this);
 
-  CServiceBroker::GetAnnouncementManager()->AddAnnouncer(this);
+  CServiceBroker::GetAnnouncementManager()->AddAnnouncer(this, ANNOUNCEMENT::System);
 }
 
 CLibInputHandler::~CLibInputHandler()
@@ -136,7 +142,7 @@ bool CLibInputHandler::SetKeymap(const std::string& layout)
 void CLibInputHandler::Start()
 {
   Create();
-  SetPriority(GetMinPriority());
+  SetPriority(ThreadPriority::LOWEST);
 }
 
 void CLibInputHandler::Process()
@@ -279,7 +285,7 @@ void CLibInputHandler::DeviceRemoved(libinput_device *dev)
   {
     CLog::Log(LOGDEBUG, "CLibInputHandler::{} - touch type device removed: {} ({})", __FUNCTION__,
               name, sysname);
-    auto device = std::find(m_devices.begin(), m_devices.end(), libinput_device_unref(dev));
+    auto device = std::ranges::find(m_devices, libinput_device_unref(dev));
     m_devices.erase(device);
   }
 
@@ -287,7 +293,7 @@ void CLibInputHandler::DeviceRemoved(libinput_device *dev)
   {
     CLog::Log(LOGDEBUG, "CLibInputHandler::{} - pointer type device removed: {} ({})", __FUNCTION__,
               name, sysname);
-    auto device = std::find(m_devices.begin(), m_devices.end(), libinput_device_unref(dev));
+    auto device = std::ranges::find(m_devices, libinput_device_unref(dev));
     m_devices.erase(device);
   }
 
@@ -295,7 +301,7 @@ void CLibInputHandler::DeviceRemoved(libinput_device *dev)
   {
     CLog::Log(LOGDEBUG, "CLibInputHandler::{} - keyboard type device removed: {} ({})",
               __FUNCTION__, name, sysname);
-    auto device = std::find(m_devices.begin(), m_devices.end(), libinput_device_unref(dev));
+    auto device = std::ranges::find(m_devices, libinput_device_unref(dev));
     m_devices.erase(device);
   }
 }

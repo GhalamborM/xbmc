@@ -12,6 +12,7 @@
 #include "GUIControllerWindow.h"
 #include "GUIFeatureList.h"
 #include "ServiceBroker.h"
+#include "addons/AddonEvents.h"
 #include "addons/AddonManager.h"
 #include "dialogs/GUIDialogYesNo.h"
 #include "games/GameServices.h"
@@ -36,18 +37,16 @@
 #include <iterator>
 
 using namespace KODI;
-using namespace ADDON;
 using namespace GAME;
 
 CGUIControllerList::CGUIControllerList(CGUIWindow* window,
                                        IFeatureList* featureList,
-                                       GameClientPtr gameClient)
+                                       GameClientPtr gameClient,
+                                       std::string controllerId)
   : m_guiWindow(window),
     m_featureList(featureList),
-    m_controllerList(nullptr),
-    m_controllerButton(nullptr),
-    m_focusedController(-1), // Initially unfocused
-    m_gameClient(std::move(gameClient))
+    m_gameClient(std::move(gameClient)),
+    m_controllerId(std::move(controllerId))
 {
   assert(m_featureList != nullptr);
 }
@@ -62,7 +61,25 @@ bool CGUIControllerList::Initialize(void)
   if (m_controllerButton)
     m_controllerButton->SetVisible(false);
 
-  CServiceBroker::GetAddonMgr().Events().Subscribe(this, &CGUIControllerList::OnEvent);
+  CServiceBroker::GetAddonMgr().Events().Subscribe(
+      this,
+      [this](const ADDON::AddonEvent& event)
+      {
+        if (typeid(event) == typeid(ADDON::AddonEvents::Enabled) || // also called on install,
+            typeid(event) == typeid(ADDON::AddonEvents::Disabled) || // not called on uninstall
+            typeid(event) == typeid(ADDON::AddonEvents::ReInstalled) ||
+            typeid(event) == typeid(ADDON::AddonEvents::UnInstalled))
+        {
+          CGUIMessage msg(GUI_MSG_REFRESH_LIST, m_guiWindow->GetID(), CONTROL_CONTROLLER_LIST);
+
+          // Focus installed add-on
+          if (typeid(event) == typeid(ADDON::AddonEvents::Enabled) ||
+              typeid(event) == typeid(ADDON::AddonEvents::ReInstalled))
+            msg.SetStringParam(event.addonId);
+
+          CServiceBroker::GetAppMessenger()->SendGUIMessage(msg, m_guiWindow->GetID());
+        }
+      });
   Refresh("");
 
   return m_controllerList != nullptr && m_controllerButton != nullptr;
@@ -162,45 +179,36 @@ void CGUIControllerList::ResetController(void)
   }
 }
 
-void CGUIControllerList::OnEvent(const ADDON::AddonEvent& event)
-{
-  if (typeid(event) == typeid(ADDON::AddonEvents::Enabled) || // also called on install,
-      typeid(event) == typeid(ADDON::AddonEvents::Disabled) || // not called on uninstall
-      typeid(event) == typeid(ADDON::AddonEvents::ReInstalled) ||
-      typeid(event) == typeid(ADDON::AddonEvents::UnInstalled))
-  {
-    using namespace MESSAGING;
-    CGUIMessage msg(GUI_MSG_REFRESH_LIST, m_guiWindow->GetID(), CONTROL_CONTROLLER_LIST);
-
-    // Focus installed add-on
-    if (typeid(event) == typeid(ADDON::AddonEvents::Enabled) ||
-        typeid(event) == typeid(ADDON::AddonEvents::ReInstalled))
-      msg.SetStringParam(event.id);
-
-    CApplicationMessenger::GetInstance().SendGUIMessage(msg, m_guiWindow->GetID());
-  }
-}
-
 bool CGUIControllerList::RefreshControllers(void)
 {
   // Get current controllers
   CGameServices& gameServices = CServiceBroker::GetGameServices();
   ControllerVector newControllers = gameServices.GetControllers();
 
+  // Filter by specified controller ID
+  if (!m_controllerId.empty())
+  {
+    newControllers.erase(std::remove_if(newControllers.begin(), newControllers.end(),
+                                        [this](const ControllerPtr& controller)
+                                        { return controller->ID() != m_controllerId; }),
+                         newControllers.end());
+  }
   // Filter by current game add-on
-  if (m_gameClient)
+  else if (m_gameClient)
   {
     const CControllerTree& controllers = m_gameClient->Input().GetDefaultControllerTree();
 
-    auto ControllerNotAccepted = [&controllers](const ControllerPtr& controller) {
-      return !controllers.IsControllerAccepted(controller->ID());
-    };
+    auto ControllerNotAccepted = [&controllers](const ControllerPtr& controller)
+    { return !controllers.IsControllerAccepted(controller->ID()); };
 
-    if (!std::all_of(newControllers.begin(), newControllers.end(), ControllerNotAccepted))
+    if (!std::ranges::all_of(newControllers, ControllerNotAccepted))
       newControllers.erase(
           std::remove_if(newControllers.begin(), newControllers.end(), ControllerNotAccepted),
           newControllers.end());
   }
+
+  if (newControllers.empty())
+    newControllers.emplace_back(gameServices.GetDefaultController());
 
   // Check for changes
   std::set<std::string> oldControllerIds;
@@ -208,10 +216,10 @@ bool CGUIControllerList::RefreshControllers(void)
 
   auto GetControllerID = [](const ControllerPtr& controller) { return controller->ID(); };
 
-  std::transform(m_controllers.begin(), m_controllers.end(),
-                 std::inserter(oldControllerIds, oldControllerIds.begin()), GetControllerID);
-  std::transform(newControllers.begin(), newControllers.end(),
-                 std::inserter(newControllerIds, newControllerIds.begin()), GetControllerID);
+  std::ranges::transform(m_controllers, std::inserter(oldControllerIds, oldControllerIds.begin()),
+                         GetControllerID);
+  std::ranges::transform(newControllers, std::inserter(newControllerIds, newControllerIds.begin()),
+                         GetControllerID);
 
   const bool bChanged = (oldControllerIds != newControllerIds);
   if (bChanged)
@@ -220,7 +228,8 @@ bool CGUIControllerList::RefreshControllers(void)
 
     // Sort add-ons, with default controller first
     std::sort(m_controllers.begin(), m_controllers.end(),
-              [](const ControllerPtr& i, const ControllerPtr& j) {
+              [](const ControllerPtr& i, const ControllerPtr& j)
+              {
                 if (i->ID() == DEFAULT_CONTROLLER_ID && j->ID() != DEFAULT_CONTROLLER_ID)
                   return true;
                 if (i->ID() != DEFAULT_CONTROLLER_ID && j->ID() == DEFAULT_CONTROLLER_ID)

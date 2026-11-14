@@ -12,11 +12,13 @@
 #include "LanguageHook.h"
 #include "ServiceBroker.h"
 #include "addons/AddonManager.h"
+#include "addons/addoninfo/AddonInfo.h"
 #include "addons/gui/GUIDialogAddonSettings.h"
 #include "addons/settings/AddonSettings.h"
 #include "guilib/GUIComponent.h"
 #include "guilib/GUIWindowManager.h"
-#include "guilib/LocalizeStrings.h"
+#include "resources/LocalizeStrings.h"
+#include "resources/ResourcesComponent.h"
 #include "utils/StringUtils.h"
 
 using namespace ADDON;
@@ -44,6 +46,7 @@ namespace XBMCAddon
       params.emplace_back(id);
       params.push_back(value);
       message.SetStringParams(params);
+      message.SetParam1(ADDON_SETTINGS_ID);
       CServiceBroker::GetGUI()->GetWindowManager().SendThreadMessage(message, WINDOW_DIALOG_ADDON_SETTINGS);
 
       return true;
@@ -63,8 +66,7 @@ namespace XBMCAddon
         throw AddonException("No valid addon id could be obtained. None was passed and the script "
                              "wasn't executed in a normal Kodi manner.");
 
-      if (!CServiceBroker::GetAddonMgr().GetAddon(id.c_str(), pAddon, ADDON_UNKNOWN,
-                                                  OnlyEnabled::YES))
+      if (!CServiceBroker::GetAddonMgr().GetAddon(id, pAddon, OnlyEnabled::CHOICE_YES))
         throw AddonException("Unknown addon id '%s'.", id.c_str());
 
       CServiceBroker::GetAddonMgr().AddToUpdateableAddons(pAddon);
@@ -77,7 +79,8 @@ namespace XBMCAddon
 
     String Addon::getLocalizedString(int id)
     {
-      return g_localizeStrings.GetAddonString(pAddon->ID(), id);
+      return CServiceBroker::GetResourcesComponent().GetLocalizeStrings().GetAddonString(
+          pAddon->ID(), id);
     }
 
     Settings* Addon::getSettings()

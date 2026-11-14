@@ -11,6 +11,7 @@
 #include "IArchivable.h"
 #include "filesystem/File.h"
 #include "utils/Variant.h"
+#include "utils/XTimeUtils.h"
 #include "utils/log.h"
 
 #include <algorithm>
@@ -30,11 +31,11 @@ using namespace XFILE;
 #define MAX_STRING_SIZE 100*1024*1024
 
 CArchive::CArchive(CFile* pFile, int mode)
+  : m_pBuffer(std::unique_ptr<uint8_t[]>(new uint8_t[CARCHIVE_BUFFER_MAX]))
 {
   m_pFile = pFile;
   m_iMode = mode;
 
-  m_pBuffer = std::unique_ptr<uint8_t[]>(new uint8_t[CARCHIVE_BUFFER_MAX]);
   memset(m_pBuffer.get(), 0, CARCHIVE_BUFFER_MAX);
   if (mode == load)
   {
@@ -56,11 +57,6 @@ CArchive::~CArchive()
 void CArchive::Close()
 {
   FlushBuffer();
-}
-
-bool CArchive::IsLoading() const
-{
-  return (m_iMode == load);
 }
 
 bool CArchive::IsStoring() const
@@ -410,7 +406,7 @@ CArchive &CArchive::streamout_bufferwrap(const uint8_t *ptr, size_t size)
   do
   {
     auto chunkSize = std::min(size, m_BufferRemain);
-    m_BufferPos = std::copy(ptr, ptr + chunkSize, m_BufferPos);
+    m_BufferPos = std::copy_n(ptr, chunkSize, m_BufferPos);
     ptr += chunkSize;
     size -= chunkSize;
     m_BufferRemain -= chunkSize;
@@ -453,7 +449,7 @@ CArchive &CArchive::streamin_bufferwrap(uint8_t *ptr, size_t size)
       }
     }
     auto chunkSize = std::min(size, m_BufferRemain);
-    ptr = std::copy(m_BufferPos, m_BufferPos + chunkSize, ptr);
+    ptr = std::copy_n(m_BufferPos, chunkSize, ptr);
     m_BufferPos += chunkSize;
     m_BufferRemain -= chunkSize;
     size -= chunkSize;

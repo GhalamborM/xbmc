@@ -11,31 +11,36 @@
   #define GL_GLEXT_PROTOTYPES
 #endif
 
-#include <clocale>
-#include "system_gl.h"
 #include "GLContextEGL.h"
-#include "utils/log.h"
-#include <EGL/eglext.h>
+
 #include "ServiceBroker.h"
+#include "commons/ilog.h"
 #include "settings/AdvancedSettings.h"
 #include "settings/SettingsComponent.h"
-#include "threads/SingleLock.h"
+#include "utils/log.h"
+
+#include <clocale>
+#include <mutex>
+
+#include <unistd.h>
+
+#include "PlatformDefs.h"
+#include "system_gl.h"
+
+#include <EGL/eglext.h>
 
 #define EGL_NO_CONFIG (EGLConfig)0
 
-CGLContextEGL::CGLContextEGL(Display *dpy, EGLint renderingApi) : CGLContext(dpy)
+CGLContextEGL::CGLContextEGL(Display* dpy, EGLint renderingApi)
+  : CGLContext(dpy),
+    m_renderingApi(renderingApi),
+    m_eglConfig(EGL_NO_CONFIG),
+    m_eglGetPlatformDisplayEXT(
+        (PFNEGLGETPLATFORMDISPLAYEXTPROC)eglGetProcAddress("eglGetPlatformDisplayEXT"))
 {
   m_extPrefix = "EGL_";
-  m_renderingApi = renderingApi;
 
-  m_eglDisplay = EGL_NO_DISPLAY;
-  m_eglSurface = EGL_NO_SURFACE;
-  m_eglContext = EGL_NO_CONTEXT;
-  m_eglConfig = EGL_NO_CONFIG;
-
-  m_eglGetPlatformDisplayEXT = (PFNEGLGETPLATFORMDISPLAYEXTPROC)eglGetProcAddress("eglGetPlatformDisplayEXT");
-
-  CSettingsComponent *settings = CServiceBroker::GetSettingsComponent();
+  const auto settings = CServiceBroker::GetSettingsComponent();
   if (settings)
   {
     m_omlSync = settings->GetAdvancedSettings()->m_omlSync;
@@ -157,6 +162,8 @@ bool CGLContextEGL::Refresh(bool force, int screen, Window glWindow, bool &newCo
       EGL_NONE
   };
   m_eglContext = eglCreateContext(m_eglDisplay, m_eglConfig, EGL_NO_CONTEXT, contextAttributes);
+  m_eglUploadContext = eglCreateContext(m_eglDisplay, m_eglConfig, m_eglContext, contextAttributes);
+
   if (m_eglContext == EGL_NO_CONTEXT)
   {
     EGLint contextAttributes[] =
@@ -165,6 +172,8 @@ bool CGLContextEGL::Refresh(bool force, int screen, Window glWindow, bool &newCo
       EGL_NONE
     };
     m_eglContext = eglCreateContext(m_eglDisplay, m_eglConfig, EGL_NO_CONTEXT, contextAttributes);
+    m_eglUploadContext =
+        eglCreateContext(m_eglDisplay, m_eglConfig, m_eglContext, contextAttributes);
 
     if (m_eglContext == EGL_NO_CONTEXT)
     {
@@ -187,23 +196,15 @@ bool CGLContextEGL::Refresh(bool force, int screen, Window glWindow, bool &newCo
 
   m_eglGetSyncValuesCHROMIUM = (PFNEGLGETSYNCVALUESCHROMIUMPROC)eglGetProcAddress("eglGetSyncValuesCHROMIUM");
 
+  if (m_eglUploadContext == EGL_NO_CONTEXT)
+    CLog::Log(LOGWARNING, "failed to create EGL upload context");
+
   m_usePB = false;
   return true;
 }
 
 bool CGLContextEGL::CreatePB()
 {
-  const EGLint configAttribs[] =
-  {
-    EGL_SURFACE_TYPE, EGL_PBUFFER_BIT,
-    EGL_BLUE_SIZE, 8,
-    EGL_GREEN_SIZE, 8,
-    EGL_RED_SIZE, 8,
-    EGL_DEPTH_SIZE, 8,
-    EGL_RENDERABLE_TYPE, EGL_OPENGL_BIT,
-    EGL_NONE
-  };
-
   const EGLint pbufferAttribs[] =
   {
     EGL_WIDTH, 9,
@@ -239,9 +240,42 @@ bool CGLContextEGL::CreatePB()
     return false;
   }
 
-  EGLint numConfigs;
+  const auto chooseConfig = [&](EGLint stencilSize)
+  {
+    const EGLint configAttribs[] = {EGL_SURFACE_TYPE,
+                                    EGL_PBUFFER_BIT,
+                                    EGL_BLUE_SIZE,
+                                    8,
+                                    EGL_GREEN_SIZE,
+                                    8,
+                                    EGL_RED_SIZE,
+                                    8,
+                                    EGL_DEPTH_SIZE,
+                                    8,
+                                    EGL_STENCIL_SIZE,
+                                    stencilSize,
+                                    EGL_RENDERABLE_TYPE,
+                                    m_renderingApi == EGL_OPENGL_API ? EGL_OPENGL_BIT
+                                                                     : EGL_OPENGL_ES2_BIT,
+                                    EGL_NONE};
+    EGLint numConfigs{0};
+    return eglChooseConfig(m_eglDisplay, configAttribs, &m_eglConfig, 1, &numConfigs) == EGL_TRUE &&
+           numConfigs > 0;
+  };
 
-  eglChooseConfig(m_eglDisplay, configAttribs, &m_eglConfig, 1, &numConfigs);
+  if (!chooseConfig(8))
+  {
+    if (m_renderingApi != EGL_OPENGL_ES_API || !chooseConfig(0))
+    {
+      CLog::Log(LOGERROR, "failed to find EGL pbuffer config");
+      Destroy();
+      return false;
+    }
+    CLog::Log(LOGWARNING,
+              "EGL: no pbuffer config with eight stencil bits; rotated GUI masks will be "
+              "hidden on framebuffers without stencil support");
+  }
+
   m_eglSurface = eglCreatePbufferSurface(m_eglDisplay, m_eglConfig, pbufferAttribs);
   if (m_eglSurface == EGL_NO_SURFACE)
   {
@@ -283,6 +317,11 @@ bool CGLContextEGL::CreatePB()
     return false;
   }
 
+  m_eglUploadContext = eglCreateContext(m_eglDisplay, m_eglConfig, m_eglContext, contextAttributes);
+
+  if (m_eglUploadContext == EGL_NO_CONTEXT)
+    CLog::Log(LOGWARNING, "Failed to create EGL upload context");
+
   m_usePB = true;
   return true;
 }
@@ -295,6 +334,12 @@ void CGLContextEGL::Destroy()
     eglMakeCurrent(m_eglDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
     eglDestroyContext(m_eglDisplay, m_eglContext);
     m_eglContext = EGL_NO_CONTEXT;
+  }
+
+  if (m_eglUploadContext)
+  {
+    eglDestroyContext(m_eglDisplay, m_eglUploadContext);
+    m_eglUploadContext = EGL_NO_CONTEXT;
   }
 
   if (m_eglSurface)
@@ -338,7 +383,10 @@ bool CGLContextEGL::SuitableCheck(EGLDisplay eglDisplay, EGLConfig config)
     return false;
   if (!eglGetConfigAttrib(eglDisplay, config, EGL_BLUE_SIZE, &value) || value < 8)
     return false;
-  if (!eglGetConfigAttrib(eglDisplay, config, EGL_DEPTH_SIZE, &value) || value < 24)
+  if (!eglGetConfigAttrib(eglDisplay, config, EGL_DEPTH_SIZE, &value) || value < 16)
+    return false;
+  if (m_renderingApi == EGL_OPENGL_API &&
+      (!eglGetConfigAttrib(eglDisplay, config, EGL_STENCIL_SIZE, &value) || value < 8))
     return false;
 
   return true;
@@ -385,9 +433,25 @@ EGLConfig CGLContextEGL::GetEGLConfig(EGLDisplay eglDisplay, XVisualInfo *vInfo)
     }
     if (value == (EGLint)vInfo->visualid)
     {
+      if (m_renderingApi == EGL_OPENGL_ES_API &&
+          (!eglGetConfigAttrib(eglDisplay, eglConfigs[i], EGL_STENCIL_SIZE, &value) || value < 8))
+      {
+        if (eglConfig == EGL_NO_CONFIG)
+          eglConfig = eglConfigs[i];
+        continue;
+      }
       eglConfig = eglConfigs[i];
       break;
     }
+  }
+
+  if (m_renderingApi == EGL_OPENGL_ES_API && eglConfig != EGL_NO_CONFIG)
+  {
+    EGLint stencilSize{0};
+    if (!eglGetConfigAttrib(eglDisplay, eglConfig, EGL_STENCIL_SIZE, &stencilSize) ||
+        stencilSize < 8)
+      CLog::Log(LOGWARNING, "EGL: no config with eight stencil bits; rotated GUI masks will be "
+                            "hidden on framebuffers without stencil support");
   }
 
 Exit:
@@ -491,7 +555,7 @@ void CGLContextEGL::SwapBuffers()
     msc2++;
   }
   {
-    CSingleLock lock(m_syncLock);
+    std::unique_lock lock(m_syncLock);
     m_sync.ust1 = ust1;
     m_sync.ust2 = ust2;
     m_sync.msc1 = msc1;
@@ -509,7 +573,7 @@ uint64_t CGLContextEGL::GetVblankTiming(uint64_t &msc, uint64_t &interval)
   now = static_cast<uint64_t>(nowTs.tv_sec) * 1000000000ULL + nowTs.tv_nsec;
   now /= 1000;
 
-  CSingleLock lock(m_syncLock);
+  std::unique_lock lock(m_syncLock);
   msc = m_sync.msc2;
 
   interval = (m_sync.cont >= 5) ? m_sync.interval : m_sync.ust2 - m_sync.ust1;
@@ -531,10 +595,67 @@ uint64_t CGLContextEGL::GetVblankTiming(uint64_t &msc, uint64_t &interval)
   return ret;
 }
 
+bool CGLContextEGL::BindTextureUploadContext()
+{
+  if (m_eglDisplay == EGL_NO_DISPLAY || m_eglUploadContext == EGL_NO_CONTEXT)
+  {
+    CLog::LogF(LOGERROR, "No texture upload context found.");
+    return false;
+  }
+
+  m_textureUploadLock.lock();
+
+  if (!eglMakeCurrent(m_eglDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, m_eglUploadContext))
+  {
+    m_textureUploadLock.unlock();
+    CLog::LogF(LOGERROR, "Couldn't bind texture upload context.");
+    return false;
+  }
+
+  return true;
+}
+
+bool CGLContextEGL::UnbindTextureUploadContext()
+{
+  if (m_eglDisplay == EGL_NO_DISPLAY || m_eglUploadContext == EGL_NO_CONTEXT)
+  {
+    CLog::LogF(LOGERROR, "No texture upload context found.");
+    m_textureUploadLock.unlock();
+    return false;
+  }
+
+  if (!eglMakeCurrent(m_eglDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT))
+  {
+    CLog::LogF(LOGERROR, "Couldn't release texture upload context");
+    m_textureUploadLock.unlock();
+    return false;
+  }
+
+  m_textureUploadLock.unlock();
+
+  return true;
+}
+
+bool CGLContextEGL::HasContext()
+{
+  return eglGetCurrentContext() != EGL_NO_CONTEXT;
+}
+
 void CGLContextEGL::QueryExtensions()
 {
   std::string extensions = eglQueryString(m_eglDisplay, EGL_EXTENSIONS);
   m_extensions = std::string(" ") + extensions + " ";
 
   CLog::Log(LOGDEBUG, "EGL_EXTENSIONS:{}", m_extensions);
+}
+
+int CGLContextEGL::GetBufferAge()
+{
+#ifdef EGL_BUFFER_AGE_EXT
+  EGLint age;
+  eglQuerySurface(m_eglDisplay, m_eglSurface, EGL_BUFFER_AGE_EXT, &age);
+  return static_cast<int>(age);
+#else
+  return CGLContext::GetBufferAge();
+#endif
 }

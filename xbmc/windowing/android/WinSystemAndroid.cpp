@@ -13,6 +13,7 @@
 #include "WinEventsAndroid.h"
 #include "addons/interfaces/platform/android/System.h"
 #include "cores/RetroPlayer/process/android/RPProcessInfoAndroid.h"
+#include "cores/RetroPlayer/rendering/VideoRenderers/RPRendererFBO.h"
 #include "cores/RetroPlayer/rendering/VideoRenderers/RPRendererOpenGLES.h"
 #include "cores/VideoPlayer/DVDCodecs/Audio/DVDAudioCodecAndroidMediaCodec.h"
 #include "cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodecAndroidMediaCodec.h"
@@ -24,8 +25,6 @@
 #include "settings/DisplaySettings.h"
 #include "settings/Settings.h"
 #include "settings/SettingsComponent.h"
-#include "system_egl.h"
-#include "threads/SingleLock.h"
 #include "utils/HDRCapabilities.h"
 #include "utils/log.h"
 #include "windowing/GraphicContext.h"
@@ -36,7 +35,11 @@
 #include "platform/android/media/drm/MediaDrmCryptoSession.h"
 
 #include <float.h>
+#include <memory>
+#include <mutex>
 #include <string.h>
+
+#include "system_egl.h"
 
 #include <EGL/eglplatform.h>
 
@@ -45,25 +48,21 @@ using namespace std::chrono_literals;
 
 CWinSystemAndroid::CWinSystemAndroid()
 {
-  m_nativeDisplay = EGL_NO_DISPLAY;
-  m_nativeWindow = nullptr;
-
   m_displayWidth = 0;
   m_displayHeight = 0;
 
-  m_stereo_mode = RENDER_STEREO_MODE_OFF;
+  m_stereo_mode = RenderStereoMode::OFF;
 
   m_dispResetTimer = new CTimer(this);
 
   m_android = nullptr;
 
-  m_winEvents.reset(new CWinEventsAndroid());
+  m_winEvents = std::make_unique<CWinEventsAndroid>();
 }
 
 CWinSystemAndroid::~CWinSystemAndroid()
 {
-  m_nativeWindow = nullptr;
-  delete m_dispResetTimer, m_dispResetTimer = nullptr;
+  delete m_dispResetTimer;
 }
 
 bool CWinSystemAndroid::InitWindowSystem()
@@ -81,6 +80,7 @@ bool CWinSystemAndroid::InitWindowSystem()
   CLinuxRendererGLES::Register();
   RETRO::CRPProcessInfoAndroid::Register();
   RETRO::CRPProcessInfoAndroid::RegisterRendererFactory(new RETRO::CRendererFactoryOpenGLES);
+  RETRO::CRPProcessInfoAndroid::RegisterRendererFactory(new RETRO::CRendererFactoryFBO);
   CRendererMediaCodec::Register();
   CRendererMediaCodecSurface::Register();
   ADDON::Interface_Android::Register();
@@ -107,51 +107,46 @@ bool CWinSystemAndroid::DestroyWindowSystem()
 }
 
 bool CWinSystemAndroid::CreateNewWindow(const std::string& name,
-                                    bool fullScreen,
-                                    RESOLUTION_INFO& res)
+                                        bool fullScreen,
+                                        RESOLUTION_INFO& res)
 {
-  RESOLUTION_INFO current_resolution;
-  current_resolution.iWidth = current_resolution.iHeight = 0;
-  RENDER_STEREO_MODE stereo_mode = CServiceBroker::GetWinSystem()->GetGfxContext().GetStereoMode();
-
-  m_nWidth        = res.iWidth;
-  m_nHeight       = res.iHeight;
-  m_displayWidth  = res.iScreenWidth;
+  m_nWidth = res.iWidth;
+  m_nHeight = res.iHeight;
+  m_displayWidth = res.iScreenWidth;
   m_displayHeight = res.iScreenHeight;
-  m_fRefreshRate  = res.fRefreshRate;
-
-  if ((m_bWindowCreated && m_android->GetNativeResolution(&current_resolution)) &&
-    current_resolution.iWidth == res.iWidth && current_resolution.iHeight == res.iHeight &&
-    current_resolution.iScreenWidth == res.iScreenWidth && current_resolution.iScreenHeight == res.iScreenHeight &&
-    m_bFullScreen == fullScreen && current_resolution.fRefreshRate == res.fRefreshRate &&
-    (current_resolution.dwFlags & D3DPRESENTFLAG_MODEMASK) == (res.dwFlags & D3DPRESENTFLAG_MODEMASK) &&
-    m_stereo_mode == stereo_mode)
-  {
-    CLog::Log(LOGDEBUG, "CWinSystemAndroid::CreateNewWindow: No need to create a new window");
-    return true;
-  }
+  m_fRefreshRate = res.fRefreshRate;
 
   m_dispResetTimer->Stop();
   m_HdmiModeTriggered = false;
 
-  m_stereo_mode = stereo_mode;
+  m_stereo_mode = CServiceBroker::GetWinSystem()->GetGfxContext().GetStereoMode();
   m_bFullScreen = fullScreen;
 
-  m_nativeWindow = CXBMCApp::GetNativeWindow(2000);
+  m_nativeWindow = CXBMCApp::Get().GetNativeWindow(2000);
   if (!m_nativeWindow)
   {
     CLog::Log(LOGERROR, "CWinSystemAndroid::CreateNewWindow: failed");
     return false;
   }
+
+  if (m_dispModesUpdatePending)
+  {
+    CLog::LogF(LOGDEBUG, "display modes update was pending, refreshing resolutions");
+    UpdateResolutions(false);
+    m_dispModesUpdatePending = false;
+  }
+
   m_android->SetNativeResolution(res);
 
+  m_bWindowCreated = true;
   return true;
 }
 
 bool CWinSystemAndroid::DestroyWindow()
 {
   CLog::Log(LOGINFO, "CWinSystemAndroid::{}", __FUNCTION__);
-  m_nativeWindow = nullptr;
+  m_dispModesUpdatePending = false;
+  m_nativeWindow.reset();
   m_bWindowCreated = false;
   return true;
 }
@@ -237,7 +232,7 @@ void CWinSystemAndroid::InitiateModeChange()
 
 void CWinSystemAndroid::SetHdmiState(bool connected)
 {
-  CSingleLock lock(m_resourceSection);
+  std::unique_lock lock(m_resourceSection);
   CLog::Log(LOGDEBUG, "CWinSystemAndroid::SetHdmiState: state: {}", static_cast<int>(connected));
 
   if (connected)
@@ -279,6 +274,17 @@ void CWinSystemAndroid::UpdateDisplayModes()
     // update display settings
     UpdateResolutions(false);
   }
+  else
+  {
+    // Window not yet recreated after standby/wake - defer resolution update
+    // to CreateNewWindow() so CDisplaySettings gets fresh Android mode IDs
+    m_dispModesUpdatePending = true;
+  }
+}
+
+bool CWinSystemAndroid::Minimize()
+{
+  return CXBMCApp::Get().moveTaskToBack(true);
 }
 
 bool CWinSystemAndroid::Hide()
@@ -293,13 +299,13 @@ bool CWinSystemAndroid::Show(bool raise)
 
 void CWinSystemAndroid::Register(IDispResource *resource)
 {
-  CSingleLock lock(m_resourceSection);
+  std::unique_lock lock(m_resourceSection);
   m_resources.push_back(resource);
 }
 
 void CWinSystemAndroid::Unregister(IDispResource *resource)
 {
-  CSingleLock lock(m_resourceSection);
+  std::unique_lock lock(m_resourceSection);
   std::vector<IDispResource*>::iterator i = find(m_resources.begin(), m_resources.end(), resource);
   if (i != m_resources.end())
     m_resources.erase(i);
@@ -329,4 +335,12 @@ std::unique_ptr<WINDOWING::IOSScreenSaver> CWinSystemAndroid::GetOSScreenSaverIm
 CHDRCapabilities CWinSystemAndroid::GetDisplayHDRCapabilities() const
 {
   return CAndroidUtils::GetDisplayHDRCapabilities();
+}
+
+float CWinSystemAndroid::GetGuiSdrPeakLuminance() const
+{
+  const auto settings = CServiceBroker::GetSettingsComponent()->GetSettings();
+  const int guiSdrPeak = settings->GetInt(CSettings::SETTING_VIDEOSCREEN_GUISDRPEAKLUMINANCE);
+
+  return ((0.7f * guiSdrPeak + 30.0f) / 100.0f);
 }

@@ -10,15 +10,17 @@
 
 #include "DirtyRegionSolvers.h"
 #include "ServiceBroker.h"
+#include "guilib/DirtyRegion.h"
 #include "settings/AdvancedSettings.h"
 #include "settings/SettingsComponent.h"
 #include "utils/log.h"
 
+#include <algorithm>
+#include <iterator>
 #include <stdio.h>
 
-CDirtyRegionTracker::CDirtyRegionTracker(int buffering)
+CDirtyRegionTracker::CDirtyRegionTracker()
 {
-  m_buffering = buffering;
   m_solver = NULL;
 }
 
@@ -64,25 +66,24 @@ const CDirtyRegionList &CDirtyRegionTracker::GetMarkedRegions() const
   return m_markedRegions;
 }
 
-CDirtyRegionList CDirtyRegionTracker::GetDirtyRegions()
+CDirtyRegionList CDirtyRegionTracker::GetDirtyRegions(int maxAge)
 {
   CDirtyRegionList output;
 
+  CDirtyRegionList input;
+  std::ranges::copy_if(m_markedRegions, std::back_inserter(input),
+                       [maxAge](const CDirtyRegion& r) { return r.GetAge() <= maxAge; });
+
   if (m_solver)
-    m_solver->Solve(m_markedRegions, output);
+    m_solver->Solve(input, output);
 
   return output;
 }
 
-void CDirtyRegionTracker::CleanMarkedRegions()
+void CDirtyRegionTracker::CleanMarkedRegions(int bufferAge)
 {
-  int buffering = CServiceBroker::GetSettingsComponent()->GetAdvancedSettings()->m_guiVisualizeDirtyRegions ? 20 : m_buffering;
-  int i = m_markedRegions.size() - 1;
-  while (i >= 0)
-	{
-    if (m_markedRegions[i].UpdateAge() >= buffering)
-      m_markedRegions.erase(m_markedRegions.begin() + i);
-
-    i--;
-  }
+  m_markedRegions.erase(std::remove_if(m_markedRegions.begin(), m_markedRegions.end(),
+                                       [bufferAge](CDirtyRegion& r)
+                                       { return r.UpdateAge() > bufferAge; }),
+                        m_markedRegions.end());
 }

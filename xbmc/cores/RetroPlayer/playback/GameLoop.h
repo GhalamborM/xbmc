@@ -8,15 +8,26 @@
 
 #pragma once
 
+#include "cores/RetroPlayer/process/DisplayPacing.h"
 #include "threads/Event.h"
 #include "threads/Thread.h"
 
 #include <atomic>
+#include <chrono>
 
 namespace KODI
 {
 namespace RETRO
 {
+/*!
+ * \brief Interface for the game loop callback
+ *
+ * The IGameLoopCallback interface provides the necessary methods for handling
+ * frame events within the game loop.
+ *
+ * Implementers must define how the next frame (FrameEvent) and previous frame
+ * (RewindEvent) are processed.
+ */
 class IGameLoopCallback
 {
 public:
@@ -31,21 +42,43 @@ public:
    * \brief The prior frame is being shown
    */
   virtual void RewindEvent() = 0;
+
+  /*!
+   * \brief Called when the game loop has ended
+   *
+   * This gives implementers a chance to release resources or execute final
+   * actions once the thread finishes processing frames.
+   */
+  virtual void EndEvent() = 0;
 };
 
+/*!
+ * \brief The game loop class
+ *
+ * CGameLoop is responsible for managing the timing and execution of frame
+ * updates in a game or emulator.
+ *
+ * Inside the Process method, the loop checks for changes in the speed factor,
+ * updates frame timing, and uses precise sleep intervals to maintain a
+ * consistent frame rate while invoking the appropriate callbacks for frame
+ * events.
+ */
 class CGameLoop : protected CThread
 {
 public:
-  CGameLoop(IGameLoopCallback* callback, double fps);
+  CGameLoop(IGameLoopCallback* callback, double fps, CDisplayPacing* displayPacing = nullptr);
 
   ~CGameLoop() override;
 
   void Start();
+  // Park at a frame boundary, preserving the game thread and its render context.
+  void Quiesce();
   void Stop();
 
-  double FPS() const { return m_fps; }
+  double FPS() const { return m_fps.load(); }
+  void SetFrameRate(double fps);
 
-  double GetSpeed() const { return m_speedFactor; }
+  double GetSpeed() const { return m_speedFactor.load(); }
   void SetSpeed(double speedFactor);
   void PauseAsync();
 
@@ -54,16 +87,46 @@ protected:
   void Process() override;
 
 private:
-  double FrameTimeMs() const;
-  double SleepTimeMs() const;
-  double NowMs() const;
+  /*!
+   * \brief Run the next frame in step with the screen, if it can be
+   *
+   * \return False if the frame should be timed by the game's own rate instead
+   */
+  bool PaceToDisplay();
+  void StopPacing();
+  void RunFrame();
+
+  enum class PacingState
+  {
+    UNKNOWN,
+    NO_INTERVAL,
+    RATE_TOO_FAR,
+    FRAME_TOO_SLOW,
+    PACED,
+  };
+
+  /*!
+   * \brief Record why the game is or isn't paced
+   *
+   * \return True if that changed, so it can be logged once
+   */
+  bool PacingChanged(PacingState state);
+
+  std::chrono::microseconds FrameTimeUs() const;
+  std::chrono::microseconds NowUs() const;
 
   IGameLoopCallback* const m_callback;
-  const double m_fps;
-  std::atomic<double> m_speedFactor;
-  double m_lastFrameMs;
-  mutable double m_adjustTime;
+  CDisplayPacing* const m_displayPacing;
+  std::atomic<double> m_fps;
+  std::atomic<double> m_speedFactor{0.0};
+  double m_loopSpeedFactor{0.0};
+  std::chrono::microseconds m_lastFrameUs{std::chrono::microseconds::zero()};
   CEvent m_sleepEvent;
+  CDisplayPacing::Clock::time_point m_lastPacedTake{};
+  CDisplayPacing::Clock::duration m_frameCost{};
+  PacingState m_pacingState{PacingState::UNKNOWN};
+  std::atomic<bool> m_quiesceRequested{false};
+  CEvent m_quiescedEvent{true};
 };
 } // namespace RETRO
 } // namespace KODI

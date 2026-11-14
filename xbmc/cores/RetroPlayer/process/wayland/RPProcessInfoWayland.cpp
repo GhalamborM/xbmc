@@ -11,13 +11,13 @@
 using namespace KODI;
 using namespace RETRO;
 
-CRPProcessInfoWayland::CRPProcessInfoWayland() : CRPProcessInfo("Wayland")
+CRPProcessInfoWayland::CRPProcessInfoWayland() : CRPProcessInfoEGL("Wayland")
 {
 }
 
-CRPProcessInfo* CRPProcessInfoWayland::Create()
+std::unique_ptr<CRPProcessInfo> CRPProcessInfoWayland::Create()
 {
-  return new CRPProcessInfoWayland();
+  return std::make_unique<CRPProcessInfoWayland>();
 }
 
 void CRPProcessInfoWayland::Register()

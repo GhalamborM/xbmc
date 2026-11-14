@@ -15,27 +15,37 @@
 #include "GUIPassword.h"
 #include "GUIUserMessages.h"
 #include "ServiceBroker.h"
-#include "TextureCache.h"
+#include "TextureDatabase.h"
 #include "URL.h"
 #include "Util.h"
 #include "addons/Scraper.h"
-#include "filesystem/File.h"
+#include "dialogs/ImageChoices.h"
+#include "favourites/FavouritesService.h"
 #include "guilib/GUIButtonControl.h"
 #include "guilib/GUIComponent.h"
 #include "guilib/GUIControlGroupList.h"
 #include "guilib/GUIWindowManager.h"
-#include "guilib/LocalizeStrings.h"
-#include "input/Key.h"
+#include "input/actions/Action.h"
+#include "input/actions/ActionIDs.h"
 #include "media/MediaLockState.h"
+#include "music/MusicFileItemClassify.h"
 #include "profiles/ProfileManager.h"
 #include "profiles/dialogs/GUIDialogLockSettings.h"
+#include "resources/LocalizeStrings.h"
+#include "resources/ResourcesComponent.h"
 #include "settings/MediaSourceSettings.h"
 #include "settings/Settings.h"
 #include "settings/SettingsComponent.h"
 #include "storage/MediaManager.h"
+#include "utils/ArtTypes.h"
+#include "utils/ArtUtils.h"
+#include "utils/FileUtils.h"
 #include "utils/StringUtils.h"
 #include "utils/URIUtils.h"
 #include "utils/Variant.h"
+
+using namespace KODI;
+using KODI::MEDIA::MediaSection;
 
 #define BACKGROUND_IMAGE       999
 #define GROUP_LIST             996
@@ -56,7 +66,8 @@ void CContextButtons::Add(unsigned int button, int label)
   for (const auto& i : *this)
     if (i.first == button)
       return; // already have added this button
-  push_back(std::pair<unsigned int, std::string>(button, g_localizeStrings.Get(label)));
+  push_back(std::pair<unsigned int, std::string>(
+      button, CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(label)));
 }
 
 CGUIDialogContextMenu::CGUIDialogContextMenu(void)
@@ -77,6 +88,12 @@ bool CGUIDialogContextMenu::OnMessage(CGUIMessage &message)
   { // someone has been clicked - deinit...
     if (message.GetSenderId() >= BUTTON_START && message.GetSenderId() <= BUTTON_END)
       m_clickedButton = message.GetSenderId() - BUTTON_START;
+    Close();
+    return true;
+  }
+  else if (message.GetMessage() == GUI_MSG_PLAYBACK_AVSTARTED)
+  {
+    // playback was just started from elsewhere - close the dialog
     Close();
     return true;
   }
@@ -105,7 +122,7 @@ void CGUIDialogContextMenu::OnInitWindow()
 
 void CGUIDialogContextMenu::SetupButtons()
 {
-  if (!m_buttons.size())
+  if (m_buttons.empty())
     return;
 
   // disable the template button control
@@ -119,17 +136,17 @@ void CGUIDialogContextMenu::SetupButtons()
   CGUIControlGroupList* pGroupList = dynamic_cast<CGUIControlGroupList *>(GetControl(GROUP_LIST));
 
   // add our buttons
-  for (unsigned int i = 0; i < m_buttons.size(); i++)
+  if (pGroupList)
   {
-    CGUIButtonControl *pButton = new CGUIButtonControl(*pButtonTemplate);
-    if (pButton)
-    { // set the button's ID and position
-      int id = BUTTON_START + i;
-      pButton->SetID(id);
-      pButton->SetVisible(true);
-      pButton->SetLabel(m_buttons[i].second);
-      if (pGroupList)
-      {
+    for (unsigned int i = 0; i < m_buttons.size(); i++)
+    {
+      CGUIButtonControl* pButton = new CGUIButtonControl(*pButtonTemplate);
+      if (pButton)
+      { // set the button's ID and position
+        int id = BUTTON_START + i;
+        pButton->SetID(id);
+        pButton->SetVisible(true);
+        pButton->SetLabel(m_buttons[i].second);
         pButton->SetPosition(pButtonTemplate->GetXPosition(), pButtonTemplate->GetYPosition());
         // try inserting context buttons at position specified by template
         // button, if template button is not in grouplist fallback to adding
@@ -192,7 +209,10 @@ float CGUIDialogContextMenu::GetWidth() const
     return CGUIDialog::GetWidth();
 }
 
-bool CGUIDialogContextMenu::SourcesMenu(const std::string &strType, const CFileItemPtr& item, float posX, float posY)
+bool CGUIDialogContextMenu::SourcesMenu(MediaSection section,
+                                        const CFileItemPtr& item,
+                                        float posX,
+                                        float posY)
 {
   //! @todo This should be callable even if we don't have any valid items
   if (!item)
@@ -200,31 +220,56 @@ bool CGUIDialogContextMenu::SourcesMenu(const std::string &strType, const CFileI
 
   // grab our context menu
   CContextButtons buttons;
-  GetContextButtons(strType, item, buttons);
+  GetContextButtons(section, item, buttons);
 
   int button = ShowAndGetChoice(buttons);
   if (button >= 0)
-    return OnContextButton(strType, item, (CONTEXT_BUTTON)button);
+    return OnContextButton(section, item, (CONTEXT_BUTTON)button);
   return false;
 }
 
-void CGUIDialogContextMenu::GetContextButtons(const std::string &type, const CFileItemPtr& item, CContextButtons &buttons)
+namespace
+{
+bool ShowAndGetLock(CMediaSource& share, MediaSection section, MediaLockState state)
+{
+  KODI::UTILS::CLockInfo& lockInfo{share.GetLockInfo()};
+
+  LockMode newLockMode{lockInfo.GetMode()};
+  std::string newPassword;
+  if (CGUIDialogLockSettings::ShowAndGetLock(newLockMode, newPassword))
+  {
+    lockInfo.SetState(state);
+    lockInfo.SetMode(newLockMode);
+  }
+  else
+    return false;
+
+  // password entry and re-entry succeeded, write out the lock data
+  CMediaSourceSettings& settings{CMediaSourceSettings::GetInstance()};
+  settings.UpdateSource(section, share.strName, "lockcode", newPassword);
+  settings.UpdateSource(section, share.strName, "lockmode",
+                        std::to_string(static_cast<int>(newLockMode)));
+  settings.UpdateSource(section, share.strName, "badpwdcount", "0");
+  settings.Save();
+
+  return true;
+}
+} // unnamed namespace
+
+void CGUIDialogContextMenu::GetContextButtons(MediaSection section,
+                                              const CFileItemPtr& item,
+                                              CContextButtons& buttons)
 {
   // Add buttons to the ContextMenu that should be visible for both sources and autosourced items
-  if (item && item->IsRemovable())
+  // Optical removable drives automatically have the static Eject button added (see CEjectDisk).
+  // Here we only add the eject button to HDD drives
+  if (item && item->IsRemovable() && !item->IsDVD() && !MUSIC::IsCDDA(*item))
   {
-    if (item->IsDVD() || item->IsCDDA())
-    {
-      buttons.Add(CONTEXT_BUTTON_EJECT_DISC, 13391); // Eject / Load
-    }
-    else // Must be HDD
-    {
-      buttons.Add(CONTEXT_BUTTON_EJECT_DRIVE, 13420); // Remove safely
-    }
+    buttons.Add(CONTEXT_BUTTON_EJECT_DRIVE, 13420); // Remove safely
   }
 
   // Next, Add buttons to the ContextMenu that should ONLY be visible for sources and not autosourced items
-  CMediaSource *share = GetShare(type, item.get());
+  CMediaSource *share = GetShare(section, item.get());
 
   if (CServiceBroker::GetSettingsComponent()->GetProfileManager()->GetCurrentProfile().canWriteSources() || g_passwordManager.bMasterUser)
   {
@@ -235,49 +280,64 @@ void CGUIDialogContextMenu::GetContextButtons(const std::string &type, const CFi
       // Note. Temporarily disabled ability to remove plugin sources until installer is operational
 
       CURL url(share->strPath);
-      bool isAddon = ADDON::TranslateContent(url.GetProtocol()) != CONTENT_NONE;
+      bool isAddon = ADDON::TranslateContent(url.GetProtocol()) != ADDON::ContentType::NONE;
       if (!share->m_ignore && !isAddon)
         buttons.Add(CONTEXT_BUTTON_EDIT_SOURCE, 1027); // Edit Source
-      if (type != "video")
+      if (CMediaSourceSettings::HasDefaultSource(section))
         buttons.Add(CONTEXT_BUTTON_SET_DEFAULT, 13335); // Set as Default
       if (!share->m_ignore && !isAddon)
         buttons.Add(CONTEXT_BUTTON_REMOVE_SOURCE, 522); // Remove Source
 
       buttons.Add(CONTEXT_BUTTON_SET_THUMB, 20019);
     }
-    if (!GetDefaultShareNameByType(type).empty())
+    if (!GetDefaultShareNameByType(section).empty())
       buttons.Add(CONTEXT_BUTTON_CLEAR_DEFAULT, 13403); // Clear Default
   }
-  if (share && LOCK_MODE_EVERYONE != CServiceBroker::GetSettingsComponent()->GetProfileManager()->GetMasterProfile().getLockMode())
+
+  if (share)
   {
-    if (share->m_iHasLock == LOCK_STATE_NO_LOCK && (CServiceBroker::GetSettingsComponent()
-                                                        ->GetProfileManager()
-                                                        ->GetCurrentProfile()
-                                                        .canWriteSources() ||
-                                                    g_passwordManager.bMasterUser))
-      buttons.Add(CONTEXT_BUTTON_ADD_LOCK, 12332);
-    else if (share->m_iHasLock == LOCK_STATE_LOCK_BUT_UNLOCKED)
-      buttons.Add(CONTEXT_BUTTON_REMOVE_LOCK, 12335);
-    else if (share->m_iHasLock == LOCK_STATE_LOCKED)
+    const KODI::UTILS::CLockInfo& lockInfo{share->GetLockInfo()};
+    const std::shared_ptr<const CSettingsComponent> settings{
+        CServiceBroker::GetSettingsComponent()};
+    const std::shared_ptr<const CProfileManager> profileMgr{settings->GetProfileManager()};
+
+    if (profileMgr->GetMasterProfile().getLockMode() != LockMode::EVERYONE)
     {
-      buttons.Add(CONTEXT_BUTTON_REMOVE_LOCK, 12335);
+      if (lockInfo.GetState() == LOCK_STATE_NO_LOCK &&
+          (profileMgr->GetCurrentProfile().canWriteSources() || g_passwordManager.bMasterUser))
+        buttons.Add(CONTEXT_BUTTON_ADD_LOCK, 12332);
+      else if (lockInfo.GetState() == LOCK_STATE_LOCK_BUT_UNLOCKED)
+        buttons.Add(CONTEXT_BUTTON_REMOVE_LOCK, 12335);
+      else if (lockInfo.GetState() == LOCK_STATE_LOCKED)
+      {
+        buttons.Add(CONTEXT_BUTTON_REMOVE_LOCK, 12335);
 
-      bool maxRetryExceeded = false;
-      if (CServiceBroker::GetSettingsComponent()->GetSettings()->GetInt(CSettings::SETTING_MASTERLOCK_MAXRETRIES) != 0)
-        maxRetryExceeded = (share->m_iBadPwdCount >= CServiceBroker::GetSettingsComponent()->GetSettings()->GetInt(CSettings::SETTING_MASTERLOCK_MAXRETRIES));
+        bool maxRetryExceeded = false;
+        if (settings->GetSettings()->GetInt(CSettings::SETTING_MASTERLOCK_MAXRETRIES) != 0)
+          maxRetryExceeded =
+              (lockInfo.GetBadPasswordCount() >=
+               settings->GetSettings()->GetInt(CSettings::SETTING_MASTERLOCK_MAXRETRIES));
 
-      if (maxRetryExceeded)
-        buttons.Add(CONTEXT_BUTTON_RESET_LOCK, 12334);
-      else
-        buttons.Add(CONTEXT_BUTTON_CHANGE_LOCK, 12356);
+        if (maxRetryExceeded)
+          buttons.Add(CONTEXT_BUTTON_RESET_LOCK, 12334);
+        else
+          buttons.Add(CONTEXT_BUTTON_CHANGE_LOCK, 12356);
+      }
     }
+
+    if (!g_passwordManager.bMasterUser && lockInfo.GetState() == LOCK_STATE_LOCK_BUT_UNLOCKED)
+      buttons.Add(CONTEXT_BUTTON_REACTIVATE_LOCK, 12353);
   }
-  if (share && !g_passwordManager.bMasterUser && item->m_iHasLock == LOCK_STATE_LOCK_BUT_UNLOCKED)
-    buttons.Add(CONTEXT_BUTTON_REACTIVATE_LOCK, 12353);
 }
 
-bool CGUIDialogContextMenu::OnContextButton(const std::string &type, const CFileItemPtr& item, CONTEXT_BUTTON button)
+bool CGUIDialogContextMenu::OnContextButton(MediaSection section,
+                                            const CFileItemPtr& item,
+                                            CONTEXT_BUTTON button)
 {
+  auto& windowManager{CServiceBroker::GetGUI()->GetWindowManager()};
+  auto& localizeStrings{CServiceBroker::GetResourcesComponent().GetLocalizeStrings()};
+  const auto profileManager{CServiceBroker::GetSettingsComponent()->GetProfileManager()};
+  CMediaSourceSettings& mediaSources{CMediaSourceSettings::GetInstance()};
   // buttons that are available on both sources and autosourced items
   if (!item)
     return false;
@@ -286,25 +346,19 @@ bool CGUIDialogContextMenu::OnContextButton(const std::string &type, const CFile
   {
     case CONTEXT_BUTTON_EJECT_DRIVE:
       return CServiceBroker::GetMediaManager().Eject(item->GetPath());
-#ifdef HAS_DVD_DRIVE
-    case CONTEXT_BUTTON_EJECT_DISC:
-      CServiceBroker::GetMediaManager().ToggleTray(
-          CServiceBroker::GetMediaManager().TranslateDevicePath(item->GetPath())[0]);
-#endif
-      return true;
     default:
       break;
   }
 
   // the rest of the operations require a valid share
-  CMediaSource *share = GetShare(type, item.get());
+  CMediaSource *share = GetShare(section, item.get());
   if (!share)
     return false;
 
   switch (button)
   {
   case CONTEXT_BUTTON_EDIT_SOURCE:
-    if (CServiceBroker::GetSettingsComponent()->GetProfileManager()->IsMasterProfile())
+    if (profileManager->IsMasterProfile())
     {
       if (!g_passwordManager.IsMasterLockUnlocked(true))
         return false;
@@ -312,20 +366,20 @@ bool CGUIDialogContextMenu::OnContextButton(const std::string &type, const CFile
     else if (!g_passwordManager.IsProfileLockUnlocked())
       return false;
 
-    return CGUIDialogMediaSource::ShowAndEditMediaSource(type, *share);
+    return CGUIDialogMediaSource::ShowAndEditMediaSource(section, *share);
 
   case CONTEXT_BUTTON_REMOVE_SOURCE:
   {
-    if (CServiceBroker::GetSettingsComponent()->GetProfileManager()->IsMasterProfile())
+    if (profileManager->IsMasterProfile())
     {
       if (!g_passwordManager.IsMasterLockUnlocked(true))
         return false;
     }
     else
     {
-      if (!CServiceBroker::GetSettingsComponent()->GetProfileManager()->GetCurrentProfile().canWriteSources() && !g_passwordManager.IsMasterLockUnlocked(false))
+      if (!profileManager->GetCurrentProfile().canWriteSources() && !g_passwordManager.IsMasterLockUnlocked(false))
         return false;
-      if (CServiceBroker::GetSettingsComponent()->GetProfileManager()->GetCurrentProfile().canWriteSources() && !g_passwordManager.IsProfileLockUnlocked())
+      if (profileManager->GetCurrentProfile().canWriteSources() && !g_passwordManager.IsProfileLockUnlocked())
         return false;
     }
     // prompt user if they want to really delete the source
@@ -333,37 +387,37 @@ bool CGUIDialogContextMenu::OnContextButton(const std::string &type, const CFile
       return false;
 
     // check default before we delete, as deletion will kill the share object
-    std::string defaultSource(GetDefaultShareNameByType(type));
+    std::string defaultSource(GetDefaultShareNameByType(section));
     if (!defaultSource.empty())
     {
       if (share->strName == defaultSource)
-        ClearDefault(type);
+        ClearDefault(section);
     }
-    CMediaSourceSettings::GetInstance().DeleteSource(type, share->strName, share->strPath);
+    mediaSources.DeleteSource(section, share->strName, share->strPath);
     return true;
   }
   case CONTEXT_BUTTON_SET_DEFAULT:
-    if (CServiceBroker::GetSettingsComponent()->GetProfileManager()->GetCurrentProfile().canWriteSources() && !g_passwordManager.IsProfileLockUnlocked())
+    if (profileManager->GetCurrentProfile().canWriteSources() && !g_passwordManager.IsProfileLockUnlocked())
       return false;
     else if (!g_passwordManager.IsMasterLockUnlocked(true))
       return false;
 
     // make share default
-    SetDefault(type, share->strName);
+    SetDefault(section, share->strName);
     return true;
 
   case CONTEXT_BUTTON_CLEAR_DEFAULT:
-    if (CServiceBroker::GetSettingsComponent()->GetProfileManager()->GetCurrentProfile().canWriteSources() && !g_passwordManager.IsProfileLockUnlocked())
+    if (profileManager->GetCurrentProfile().canWriteSources() && !g_passwordManager.IsProfileLockUnlocked())
       return false;
     else if (!g_passwordManager.IsMasterLockUnlocked(true))
       return false;
     // remove share default
-    ClearDefault(type);
+    ClearDefault(section);
     return true;
 
   case CONTEXT_BUTTON_SET_THUMB:
     {
-      if (CServiceBroker::GetSettingsComponent()->GetProfileManager()->GetCurrentProfile().canWriteSources() && !g_passwordManager.IsProfileLockUnlocked())
+      if (profileManager->GetCurrentProfile().canWriteSources() && !g_passwordManager.IsProfileLockUnlocked())
         return false;
       else if (!g_passwordManager.IsMasterLockUnlocked(true))
         return false;
@@ -374,62 +428,63 @@ bool CGUIDialogContextMenu::OnContextButton(const std::string &type, const CFile
       // add the current thumb, if available
       if (!share->m_strThumbnailImage.empty())
       {
-        CFileItemPtr current(new CFileItem("thumb://Current", false));
-        current->SetArt("thumb", share->m_strThumbnailImage);
-        current->SetLabel(g_localizeStrings.Get(20016));
+        CFileItemPtr current(new CFileItem(ART::CHOICE::CURRENT, false));
+        current->SetArt(ART::TYPE::THUMB, share->m_strThumbnailImage);
+        current->SetLabel(localizeStrings.Get(20016));
         items.Add(current);
       }
-      else if (item->HasArt("thumb"))
+      else if (item->HasArt(ART::TYPE::THUMB))
       { // already have a thumb that the share doesn't know about - must be a local one, so we mayaswell reuse it.
-        CFileItemPtr current(new CFileItem("thumb://Current", false));
-        current->SetArt("thumb", item->GetArt("thumb"));
-        current->SetLabel(g_localizeStrings.Get(20016));
+        CFileItemPtr current(new CFileItem(ART::CHOICE::CURRENT, false));
+        current->SetArt(ART::TYPE::THUMB, item->GetArt(ART::TYPE::THUMB));
+        current->SetLabel(localizeStrings.Get(20016));
         items.Add(current);
       }
       // see if there's a local thumb for this item
-      std::string folderThumb = item->GetFolderThumb();
-      if (XFILE::CFile::Exists(folderThumb))
+      std::string folderThumb = ART::GetFolderThumb(*item);
+      if (CFileUtils::Exists(folderThumb))
       {
-        CFileItemPtr local(new CFileItem("thumb://Local", false));
-        local->SetArt("thumb", folderThumb);
-        local->SetLabel(g_localizeStrings.Get(20017));
+        CFileItemPtr local(new CFileItem(ART::CHOICE::LOCAL, false));
+        local->SetArt(ART::TYPE::THUMB, folderThumb);
+        local->SetLabel(localizeStrings.Get(20017));
         items.Add(local);
       }
       // and add a "no thumb" entry as well
-      CFileItemPtr nothumb(new CFileItem("thumb://None", false));
-      nothumb->SetArt("icon", item->GetArt("icon"));
-      nothumb->SetLabel(g_localizeStrings.Get(20018));
+      CFileItemPtr nothumb(new CFileItem(ART::CHOICE::NONE, false));
+      nothumb->SetArt(ART::TYPE::ICON, item->GetArt(ART::TYPE::ICON));
+      nothumb->SetLabel(localizeStrings.Get(20018));
       items.Add(nothumb);
 
       std::string strThumb;
-      VECSOURCES shares;
+      std::vector<CMediaSource> shares;
       CServiceBroker::GetMediaManager().GetLocalDrives(shares);
-      if (!CGUIDialogFileBrowser::ShowAndGetImage(items, shares, g_localizeStrings.Get(1030), strThumb))
+      if (!CGUIDialogFileBrowser::ShowAndGetImage(items, shares, localizeStrings.Get(1030),
+                                                  strThumb))
         return false;
 
-      if (strThumb == "thumb://Current")
+      if (strThumb == ART::CHOICE::CURRENT)
         return true;
 
-      if (strThumb == "thumb://Local")
+      if (strThumb == ART::CHOICE::LOCAL)
         strThumb = folderThumb;
 
-      if (strThumb == "thumb://None")
+      if (strThumb == ART::CHOICE::NONE)
         strThumb = "";
 
       if (!share->m_ignore)
       {
-        CMediaSourceSettings::GetInstance().UpdateSource(type,share->strName,"thumbnail",strThumb);
-        CMediaSourceSettings::GetInstance().Save();
+        mediaSources.UpdateSource(section,share->strName,"thumbnail",strThumb);
+        mediaSources.Save();
       }
       else if (!strThumb.empty())
       { // this is some sort of an auto-share, so store in the texture database
         CTextureDatabase db;
         if (db.Open())
-          db.SetTextureForPath(item->GetPath(), "thumb", strThumb);
+          db.SetTextureForPath(item->GetPath(), ART::TYPE::THUMB, strThumb);
       }
 
       CGUIMessage msg(GUI_MSG_NOTIFY_ALL,0,0,GUI_MSG_UPDATE_SOURCES);
-      CServiceBroker::GetGUI()->GetWindowManager().SendThreadMessage(msg);
+      windowManager.SendThreadMessage(msg);
       return true;
     }
 
@@ -439,19 +494,15 @@ bool CGUIDialogContextMenu::OnContextButton(const std::string &type, const CFile
       if (!g_passwordManager.IsMasterLockUnlocked(true))
         return false;
 
-      std::string strNewPassword = "";
-      if (!CGUIDialogLockSettings::ShowAndGetLock(share->m_iLockMode,strNewPassword))
+      if (!ShowAndGetLock(*share, section, LOCK_STATE_LOCKED))
         return false;
-      // password entry and re-entry succeeded, write out the lock data
-      share->m_iHasLock = LOCK_STATE_LOCKED;
-      CMediaSourceSettings::GetInstance().UpdateSource(type, share->strName, "lockcode", strNewPassword);
-      strNewPassword = std::to_string(share->m_iLockMode);
-      CMediaSourceSettings::GetInstance().UpdateSource(type, share->strName, "lockmode", strNewPassword);
-      CMediaSourceSettings::GetInstance().UpdateSource(type, share->strName, "badpwdcount", "0");
-      CMediaSourceSettings::GetInstance().Save();
+
+      // lock of a mediasource has been added
+      // => refresh favourites due to possible visibility changes
+      CServiceBroker::GetFavouritesService().RefreshFavourites();
 
       CGUIMessage msg(GUI_MSG_NOTIFY_ALL,0,0,GUI_MSG_UPDATE_SOURCES);
-      CServiceBroker::GetGUI()->GetWindowManager().SendThreadMessage(msg);
+      windowManager.SendThreadMessage(msg);
       return true;
     }
   case CONTEXT_BUTTON_RESET_LOCK:
@@ -460,10 +511,10 @@ bool CGUIDialogContextMenu::OnContextButton(const std::string &type, const CFile
       if (!g_passwordManager.IsMasterLockUnlocked(true))
         return false;
 
-      CMediaSourceSettings::GetInstance().UpdateSource(type, share->strName, "badpwdcount", "0");
-      CMediaSourceSettings::GetInstance().Save();
+      mediaSources.UpdateSource(section, share->strName, "badpwdcount", "0");
+      mediaSources.Save();
       CGUIMessage msg(GUI_MSG_NOTIFY_ALL,0,0,GUI_MSG_UPDATE_SOURCES);
-      CServiceBroker::GetGUI()->GetWindowManager().SendThreadMessage(msg);
+      windowManager.SendThreadMessage(msg);
       return true;
     }
   case CONTEXT_BUTTON_REMOVE_LOCK:
@@ -475,24 +526,36 @@ bool CGUIDialogContextMenu::OnContextButton(const std::string &type, const CFile
       if (!CGUIDialogYesNo::ShowAndGetInput(CVariant{12335}, CVariant{750}))
         return false;
 
-      share->m_iHasLock = LOCK_STATE_NO_LOCK;
-      CMediaSourceSettings::GetInstance().UpdateSource(type, share->strName, "lockmode", "0");
-      CMediaSourceSettings::GetInstance().UpdateSource(type, share->strName, "lockcode", "0");
-      CMediaSourceSettings::GetInstance().UpdateSource(type, share->strName, "badpwdcount", "0");
-      CMediaSourceSettings::GetInstance().Save();
+      KODI::UTILS::CLockInfo& lockInfo{share->GetLockInfo()};
+      lockInfo.SetState(LOCK_STATE_NO_LOCK);
+      mediaSources.UpdateSource(section, share->strName, "lockmode", "0");
+      mediaSources.UpdateSource(section, share->strName, "lockcode", "0");
+      mediaSources.UpdateSource(section, share->strName, "badpwdcount", "0");
+      mediaSources.Save();
+
+      // lock of a mediasource has been removed
+      // => refresh favourites due to possible visibility changes
+      CServiceBroker::GetFavouritesService().RefreshFavourites();
+
       CGUIMessage msg(GUI_MSG_NOTIFY_ALL,0,0,GUI_MSG_UPDATE_SOURCES);
-      CServiceBroker::GetGUI()->GetWindowManager().SendThreadMessage(msg);
+      windowManager.SendThreadMessage(msg);
       return true;
     }
   case CONTEXT_BUTTON_REACTIVATE_LOCK:
     {
       bool maxRetryExceeded = false;
       if (CServiceBroker::GetSettingsComponent()->GetSettings()->GetInt(CSettings::SETTING_MASTERLOCK_MAXRETRIES) != 0)
-        maxRetryExceeded = (share->m_iBadPwdCount >= CServiceBroker::GetSettingsComponent()->GetSettings()->GetInt(CSettings::SETTING_MASTERLOCK_MAXRETRIES));
+        maxRetryExceeded = (share->GetLockInfo().GetBadPasswordCount() >=
+                            CServiceBroker::GetSettingsComponent()->GetSettings()->GetInt(
+                                CSettings::SETTING_MASTERLOCK_MAXRETRIES));
       if (!maxRetryExceeded)
       {
         // don't prompt user for mastercode when reactivating a lock
-        g_passwordManager.LockSource(type, share->strName, true);
+        g_passwordManager.LockSource(section, share->strName, true);
+
+        // lock of a mediasource has been reactivated
+        // => refresh favourites due to possible visibility changes
+        CServiceBroker::GetFavouritesService().RefreshFavourites();
         return true;
       }
       return false;
@@ -502,19 +565,15 @@ bool CGUIDialogContextMenu::OnContextButton(const std::string &type, const CFile
       if (!g_passwordManager.IsMasterLockUnlocked(true))
         return false;
 
-      std::string strNewPW;
-      std::string strNewLockMode;
-      if (CGUIDialogLockSettings::ShowAndGetLock(share->m_iLockMode,strNewPW))
-        strNewLockMode = std::to_string(share->m_iLockMode);
-      else
+      if (!ShowAndGetLock(*share, section, share->GetLockInfo().GetState()))
         return false;
-      // password ReSet and re-entry succeeded, write out the lock data
-      CMediaSourceSettings::GetInstance().UpdateSource(type, share->strName, "lockcode", strNewPW);
-      CMediaSourceSettings::GetInstance().UpdateSource(type, share->strName, "lockmode", strNewLockMode);
-      CMediaSourceSettings::GetInstance().UpdateSource(type, share->strName, "badpwdcount", "0");
-      CMediaSourceSettings::GetInstance().Save();
+
+      // lock of a mediasource has been changed
+      // => refresh favourites due to possible visibility changes
+      CServiceBroker::GetFavouritesService().RefreshFavourites();
+
       CGUIMessage msg(GUI_MSG_NOTIFY_ALL,0,0,GUI_MSG_UPDATE_SOURCES);
-      CServiceBroker::GetGUI()->GetWindowManager().SendThreadMessage(msg);
+      windowManager.SendThreadMessage(msg);
       return true;
     }
   default:
@@ -523,14 +582,14 @@ bool CGUIDialogContextMenu::OnContextButton(const std::string &type, const CFile
   return false;
 }
 
-CMediaSource *CGUIDialogContextMenu::GetShare(const std::string &type, const CFileItem *item)
+CMediaSource *CGUIDialogContextMenu::GetShare(MediaSection section, const CFileItem *item)
 {
-  VECSOURCES *shares = CMediaSourceSettings::GetInstance().GetSources(type);
-  if (!shares || !item)
+  if (!item)
     return nullptr;
-  for (unsigned int i = 0; i < shares->size(); i++)
+  std::vector<CMediaSource>& shares = CMediaSourceSettings::GetInstance().GetSources(section);
+  for (unsigned int i = 0; i < shares.size(); i++)
   {
-    CMediaSource &testShare = shares->at(i);
+    CMediaSource &testShare = shares.at(i);
     if (URIUtils::IsDVD(testShare.strPath))
     {
       if (!item->IsDVD())
@@ -577,7 +636,10 @@ void CGUIDialogContextMenu::OnDeinitWindow(int nextWindowID)
   {
     const CGUIControl *control = GetControl(BUTTON_START + i);
     if (control)
+    {
       RemoveControl(control);
+      delete control;
+    }
   }
 
   m_buttons.clear();
@@ -585,43 +647,41 @@ void CGUIDialogContextMenu::OnDeinitWindow(int nextWindowID)
   CGUIDialog::OnDeinitWindow(nextWindowID);
 }
 
-std::string CGUIDialogContextMenu::GetDefaultShareNameByType(const std::string &strType)
+std::string CGUIDialogContextMenu::GetDefaultShareNameByType(MediaSection section)
 {
-  VECSOURCES *pShares = CMediaSourceSettings::GetInstance().GetSources(strType);
-  std::string strDefault = CMediaSourceSettings::GetInstance().GetDefaultSource(strType);
-
-  if (!pShares) return "";
+  std::vector<CMediaSource>& shares = CMediaSourceSettings::GetInstance().GetSources(section);
+  std::string strDefault = CMediaSourceSettings::GetInstance().GetDefaultSource(section);
 
   bool bIsSourceName(false);
-  int iIndex = CUtil::GetMatchingSource(strDefault, *pShares, bIsSourceName);
-  if (iIndex < 0 || iIndex >= (int)pShares->size())
+  int iIndex = CUtil::GetMatchingSource(strDefault, shares, bIsSourceName);
+  if (iIndex < 0 || iIndex >= (int)shares.size())
     return "";
 
-  return pShares->at(iIndex).strName;
+  return shares.at(iIndex).strName;
 }
 
-void CGUIDialogContextMenu::SetDefault(const std::string &strType, const std::string &strDefault)
+void CGUIDialogContextMenu::SetDefault(MediaSection section, const std::string &strDefault)
 {
-  CMediaSourceSettings::GetInstance().SetDefaultSource(strType, strDefault);
+  CMediaSourceSettings::GetInstance().SetDefaultSource(section, strDefault);
   CMediaSourceSettings::GetInstance().Save();
 }
 
-void CGUIDialogContextMenu::ClearDefault(const std::string &strType)
+void CGUIDialogContextMenu::ClearDefault(MediaSection section)
 {
-  SetDefault(strType, "");
+  SetDefault(section, "");
 }
 
-void CGUIDialogContextMenu::SwitchMedia(const std::string& strType, const std::string& strPath)
+void CGUIDialogContextMenu::SwitchMedia(MediaSection section, const std::string& strPath)
 {
   // create menu
   CContextButtons choices;
-  if (strType != "music")
+  if (section != MediaSection::MUSIC)
     choices.Add(WINDOW_MUSIC_NAV, 2);
-  if (strType != "video")
+  if (section != MediaSection::VIDEO)
     choices.Add(WINDOW_VIDEO_NAV, 3);
-  if (strType != "pictures")
+  if (section != MediaSection::PICTURES)
     choices.Add(WINDOW_PICTURES, 1);
-  if (strType != "files")
+  if (section != MediaSection::FILES)
     choices.Add(WINDOW_FILES, 7);
 
   int window = ShowAndGetChoice(choices);

@@ -20,6 +20,10 @@
 using namespace DirectX;
 #endif
 
+#if defined(HAS_GLES)
+#include "rendering/gles/RenderSystemGLES.h"
+#endif
+
 #if defined(HAS_GL) || defined(HAS_GLES)
 #include "utils/GLUtils.h"
 
@@ -48,12 +52,11 @@ CRPBaseRenderer* CRendererFactoryGuiTexture::CreateRenderer(
 
 RenderBufferPoolVector CRendererFactoryGuiTexture::CreateBufferPools(CRenderContext& context)
 {
-  return
-  {
+  return {
 #if !defined(HAS_DX)
-    std::make_shared<CRenderBufferPoolGuiTexture>(SCALINGMETHOD::NEAREST),
+      std::make_shared<CRenderBufferPoolGuiTexture>(SCALINGMETHOD::NEAREST),
 #endif
-        std::make_shared<CRenderBufferPoolGuiTexture>(SCALINGMETHOD::LINEAR),
+      std::make_shared<CRenderBufferPoolGuiTexture>(SCALINGMETHOD::LINEAR),
   };
 }
 
@@ -66,7 +69,14 @@ CRenderBufferPoolGuiTexture::CRenderBufferPoolGuiTexture(SCALINGMETHOD scalingMe
 
 bool CRenderBufferPoolGuiTexture::IsCompatible(const CRenderVideoSettings& renderSettings) const
 {
-  return renderSettings.GetScalingMethod() == m_scalingMethod;
+  if (renderSettings.GetScalingMethod() != m_scalingMethod)
+    return false;
+
+  // Shaders not supported
+  if (!renderSettings.GetShaderPreset().empty())
+    return false;
+
+  return true;
 }
 
 IRenderBuffer* CRenderBufferPoolGuiTexture::CreateRenderBuffer(void* header /* = nullptr */)
@@ -89,7 +99,7 @@ bool CRPRendererGuiTexture::Supports(RENDERFEATURE feature) const
          feature == RENDERFEATURE::PIXEL_RATIO || feature == RENDERFEATURE::ROTATION;
 }
 
-void CRPRendererGuiTexture::RenderInternal(bool clear, uint8_t alpha)
+void CRPRendererGuiTexture::RenderInternal(uint8_t alpha)
 {
   CRenderBufferGuiTexture* renderBuffer = static_cast<CRenderBufferGuiTexture*>(m_renderBuffer);
 
@@ -134,6 +144,7 @@ void CRPRendererGuiTexture::RenderInternal(bool clear, uint8_t alpha)
     auto dxTexture = static_cast<CDXTexture*>(renderBuffer->GetTexture());
     ID3D11ShaderResourceView* shaderRes = dxTexture->GetShaderResource();
     pGUIShader->SetShaderViews(1, &shaderRes);
+    pGUIShader->SetDepth(-1.f);
     pGUIShader->DrawQuad(vertex[0], vertex[1], vertex[2], vertex[3]);
   }
 
@@ -184,6 +195,7 @@ void CRPRendererGuiTexture::RenderInternal(bool clear, uint8_t alpha)
   GLint posLoc = m_context.GUIShaderGetPos();
   GLint tex0Loc = m_context.GUIShaderGetCoord0();
   GLint uniColLoc = m_context.GUIShaderGetUniCol();
+  GLint depthLoc = m_context.GUIShaderGetDepth();
 
   glGenBuffers(1, &vertexVBO);
   glBindBuffer(GL_ARRAY_BUFFER, vertexVBO);
@@ -212,12 +224,13 @@ void CRPRendererGuiTexture::RenderInternal(bool clear, uint8_t alpha)
 
   glUniform4f(uniColLoc, (colour[0] / 255.0f), (colour[1] / 255.0f), (colour[2] / 255.0f),
               (colour[3] / 255.0f));
+  glUniform1f(depthLoc, -1.0f);
 
   glGenBuffers(1, &indexVBO);
   glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, indexVBO);
   glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(GLubyte) * 4, idx, GL_STATIC_DRAW);
 
-  glDrawElements(GL_TRIANGLE_STRIP, 4, GL_UNSIGNED_BYTE, 0);
+  glDrawElements(GL_TRIANGLE_STRIP, 4, GL_UNSIGNED_BYTE, nullptr);
 
   glDisableVertexAttribArray(posLoc);
   glDisableVertexAttribArray(tex0Loc);
@@ -239,19 +252,9 @@ void CRPRendererGuiTexture::RenderInternal(bool clear, uint8_t alpha)
   m_context.EnableGUIShader(GL_SHADER_METHOD::TEXTURE);
 
   GLubyte col[4];
-  GLfloat ver[4][3];
-  GLfloat tex[4][2];
-  GLubyte idx[4] = {0, 1, 3, 2}; // Determines order of triangle strip
 
-  GLint posLoc = m_context.GUIShaderGetPos();
-  GLint tex0Loc = m_context.GUIShaderGetCoord0();
   GLint uniColLoc = m_context.GUIShaderGetUniCol();
-
-  glVertexAttribPointer(posLoc, 3, GL_FLOAT, 0, 0, ver);
-  glVertexAttribPointer(tex0Loc, 2, GL_FLOAT, 0, 0, tex);
-
-  glEnableVertexAttribArray(posLoc);
-  glEnableVertexAttribArray(tex0Loc);
+  GLint depthLoc = m_context.GUIShaderGetDepth();
 
   // Setup color values
   col[0] = UTILS::GL::GetChannelFromARGB(UTILS::GL::ColorChannel::R, color);
@@ -259,26 +262,15 @@ void CRPRendererGuiTexture::RenderInternal(bool clear, uint8_t alpha)
   col[2] = UTILS::GL::GetChannelFromARGB(UTILS::GL::ColorChannel::B, color);
   col[3] = UTILS::GL::GetChannelFromARGB(UTILS::GL::ColorChannel::A, color);
 
-  for (unsigned int i = 0; i < 4; i++)
-  {
-    // Setup vertex position values
-    ver[i][0] = m_rotatedDestCoords[i].x;
-    ver[i][1] = m_rotatedDestCoords[i].y;
-    ver[i][2] = 0.0f;
-  }
-
-  // Setup texture coordinates
-  tex[0][0] = tex[3][0] = u1;
-  tex[0][1] = tex[1][1] = v1;
-  tex[1][0] = tex[2][0] = u2;
-  tex[2][1] = tex[3][1] = v2;
-
   glUniform4f(uniColLoc, (col[0] / 255.0f), (col[1] / 255.0f), (col[2] / 255.0f),
               (col[3] / 255.0f));
-  glDrawElements(GL_TRIANGLE_STRIP, 4, GL_UNSIGNED_BYTE, idx);
+  glUniform1f(depthLoc, -1.0f);
 
-  glDisableVertexAttribArray(posLoc);
-  glDisableVertexAttribArray(tex0Loc);
+  // The destination corners are a rotated rectangle: top left, top right, bottom right, bottom left
+  const CRect texCoords(u1, v1, u2, v2);
+  dynamic_cast<CRenderSystemGLES&>(*m_context.Rendering())
+      .DrawGUIQuad(m_rotatedDestCoords[0], m_rotatedDestCoords[1], m_rotatedDestCoords[3],
+                   &texCoords);
 
   m_context.DisableGUIShader();
 

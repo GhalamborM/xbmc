@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2005-2018 Team Kodi
+ *  Copyright (C) 2005-2024 Team Kodi
  *  This file is part of Kodi - https://kodi.tv
  *
  *  SPDX-License-Identifier: GPL-2.0-or-later
@@ -9,10 +9,13 @@
 #pragma once
 
 #include "Peripheral.h"
-#include "input/XBMC_keyboard.h"
+#include "input/keyboard/XBMC_keyboard.h"
 
 namespace PERIPHERALS
 {
+/*!
+ * \ingroup peripherals
+ */
 class CPeripheralHID : public CPeripheral
 {
 public:
@@ -21,7 +24,7 @@ public:
                  CPeripheralBus* bus);
   ~CPeripheralHID(void) override;
   bool InitialiseFeature(const PeripheralFeature feature) override;
-  virtual bool LookupSymAndUnicode(XBMC_keysym& keysym, uint8_t* key, char* unicode)
+  virtual bool LookupSymAndUnicode(XBMC_keysym& keysym, uint16_t* key, char* unicode)
   {
     return false;
   }

@@ -10,19 +10,24 @@
 
 #include "settings/lib/Setting.h"
 
+#include <string_view>
 #include <vector>
 
 class CFileExtensionProvider;
+class TiXmlNode;
 
 class CSettingPath : public CSettingString
 {
 public:
-  CSettingPath(const std::string &id, CSettingsManager *settingsManager = nullptr);
-  CSettingPath(const std::string &id, int label, const std::string &value, CSettingsManager *settingsManager = nullptr);
-  CSettingPath(const std::string &id, const CSettingPath &setting);
+  CSettingPath(std::string_view id, CSettingsManager* settingsManager = nullptr);
+  CSettingPath(std::string_view id,
+               int label,
+               const std::string& value,
+               CSettingsManager* settingsManager = nullptr);
+  CSettingPath(std::string_view id, const CSettingPath& setting);
   ~CSettingPath() override = default;
 
-  SettingPtr Clone(const std::string &id) const override;
+  SettingPtr Clone(std::string_view id) const override;
 
   bool Deserialize(const TiXmlNode *node, bool update = false) override;
   bool SetValue(const std::string &value) override;
@@ -34,7 +39,7 @@ public:
   bool HideExtension() const { return m_hideExtension; }
   void SetHideExtension(bool hideExtension) { m_hideExtension = hideExtension; }
   std::string GetMasking(const CFileExtensionProvider& fileExtensionProvider) const;
-  void SetMasking(const std::string& masking) { m_masking = masking; }
+  void SetMasking(std::string_view masking) { m_masking = masking; }
 
 private:
   using CSettingString::copy;

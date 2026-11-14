@@ -9,6 +9,7 @@
 #include "GUIWindowLoginScreen.h"
 
 #include "FileItem.h"
+#include "FileItemList.h"
 #include "GUIPassword.h"
 #include "ServiceBroker.h"
 #include "addons/Skin.h"
@@ -16,8 +17,8 @@
 #include "guilib/GUIComponent.h"
 #include "guilib/GUIMessage.h"
 #include "guilib/GUIWindowManager.h"
-#include "guilib/LocalizeStrings.h"
-#include "input/Key.h"
+#include "input/actions/Action.h"
+#include "input/actions/ActionIDs.h"
 #include "interfaces/builtins/Builtins.h"
 #include "messaging/ApplicationMessenger.h"
 #include "messaging/helpers/DialogOKHelper.h"
@@ -25,9 +26,13 @@
 #include "profiles/ProfileManager.h"
 #include "profiles/dialogs/GUIDialogProfileSettings.h"
 #include "pvr/PVRManager.h"
-#include "pvr/guilib/PVRGUIActions.h"
+#include "pvr/guilib/PVRGUIActionsPowerManagement.h"
+#include "resources/LocalizeStrings.h"
+#include "resources/ResourcesComponent.h"
 #include "settings/Settings.h"
 #include "settings/SettingsComponent.h"
+#include "utils/ArtTypes.h"
+#include "utils/DefaultArt.h"
 #include "utils/StringUtils.h"
 #include "utils/Variant.h"
 #include "view/ViewState.h"
@@ -91,8 +96,8 @@ bool CGUIWindowLoginScreen::OnMessage(CGUIMessage& message)
 
           if (bOkay)
           {
-            if (iItem >= 0)
-              CApplicationMessenger::GetInstance().PostMsg(TMSG_LOADPROFILE, iItem);
+            if (iItem > INVALID_PROFILE_ID)
+              CServiceBroker::GetAppMessenger()->PostMsg(TMSG_LOADPROFILE, iItem);
           }
           else
           {
@@ -128,7 +133,7 @@ bool CGUIWindowLoginScreen::OnAction(const CAction &action)
     std::string actionName = action.GetName();
     StringUtils::ToLower(actionName);
     if ((actionName.find("shutdown") != std::string::npos) &&
-        CServiceBroker::GetPVRManager().GUIActions()->CanSystemPowerdown())
+        CServiceBroker::GetPVRManager().Get<PVR::GUI::PowerManagement>().CanSystemPowerdown())
       CBuiltins::GetInstance().Execute(action.GetName());
     return true;
   }
@@ -151,8 +156,9 @@ void CGUIWindowLoginScreen::FrameMove()
 
   const std::shared_ptr<CProfileManager> profileManager = CServiceBroker::GetSettingsComponent()->GetProfileManager();
 
-  std::string strLabel = StringUtils::Format(g_localizeStrings.Get(20114), m_iSelectedItem + 1,
-                                             profileManager->GetNumberOfProfiles());
+  std::string strLabel =
+      StringUtils::Format(CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(20114),
+                          m_iSelectedItem + 1, profileManager->GetNumberOfProfiles());
   SET_CONTROL_LABEL(CONTROL_LABEL_SELECTED_PROFILE,strLabel);
   CGUIWindow::FrameMove();
 }
@@ -167,7 +173,8 @@ void CGUIWindowLoginScreen::OnInitWindow()
   m_viewControl.SetCurrentView(DEFAULT_VIEW_LIST);
   Update();
   m_viewControl.SetFocused();
-  SET_CONTROL_LABEL(CONTROL_LABEL_HEADER,g_localizeStrings.Get(20115));
+  SET_CONTROL_LABEL(CONTROL_LABEL_HEADER,
+                    CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(20115));
   SET_CONTROL_VISIBLE(CONTROL_BIG_LIST);
 
   CGUIWindow::OnInitWindow();
@@ -201,14 +208,16 @@ void CGUIWindowLoginScreen::Update()
 
     std::string strLabel;
     if (profile->getDate().empty())
-      strLabel = g_localizeStrings.Get(20113);
+      strLabel = CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(20113);
     else
-      strLabel = StringUtils::Format(g_localizeStrings.Get(20112), profile->getDate());
+      strLabel = StringUtils::Format(
+          CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(20112),
+          profile->getDate());
 
     item->SetLabel2(strLabel);
-    item->SetArt("thumb", profile->getThumb());
+    item->SetArt(KODI::ART::TYPE::THUMB, profile->getThumb());
     if (profile->getThumb().empty())
-      item->SetArt("thumb", "DefaultUser.png");
+      item->SetArt(KODI::ART::TYPE::THUMB, KODI::ART::DEFAULT::USER);
     item->SetLabelPreformatted(true);
 
     m_vecItems->Add(item);
@@ -242,7 +251,7 @@ bool CGUIWindowLoginScreen::OnPopupMenu(int iItem)
     if (g_passwordManager.CheckLock(profileManager->GetMasterProfile().getLockMode(), profileManager->GetMasterProfile().getLockCode(), 20075))
       g_passwordManager.iMasterLockRetriesLeft = CServiceBroker::GetSettingsComponent()->GetSettings()->GetInt(CSettings::SETTING_MASTERLOCK_MAXRETRIES);
     else // be inconvenient
-      CApplicationMessenger::GetInstance().PostMsg(TMSG_SHUTDOWN);
+      CServiceBroker::GetAppMessenger()->PostMsg(TMSG_SHUTDOWN);
 
     return true;
   }

@@ -9,10 +9,13 @@
 #include "GUIColorButtonControl.h"
 
 #include "GUIInfoManager.h"
-#include "LocalizeStrings.h"
-#include "input/Key.h"
+#include "ServiceBroker.h"
 #include "utils/ColorUtils.h"
 #include "utils/StringUtils.h"
+#include "windowing/WinSystem.h"
+
+using namespace KODI;
+using namespace GUILIB;
 
 CGUIColorButtonControl::CGUIColorButtonControl(int parentID,
                                                int controlID,
@@ -33,9 +36,9 @@ CGUIColorButtonControl::CGUIColorButtonControl(int parentID,
 {
   m_colorPosX = 0;
   m_colorPosY = 0;
-  m_imgColorMask->SetAspectRatio(CAspectRatio::AR_KEEP);
-  m_imgColorDisabledMask->SetAspectRatio(CAspectRatio::AR_KEEP);
-  m_imgBoxColor = UTILS::COLOR::NONE;
+  m_imgColorMask->SetAspectRatio(CAspectRatio::KEEP);
+  m_imgColorDisabledMask->SetAspectRatio(CAspectRatio::KEEP);
+  m_imgBoxColor = GUIINFO::CGUIInfoColor(KODI::UTILS::COLOR::NONE);
   ControlType = GUICONTROL_COLORBUTTON;
   // offsetX is like a left/right padding, "hex" label does not require high values
   m_labelInfo.GetLabelInfo().offsetX = 2;
@@ -54,7 +57,6 @@ CGUIColorButtonControl::CGUIColorButtonControl(const CGUIColorButtonControl& con
 void CGUIColorButtonControl::Render()
 {
   CGUIButtonControl::Render();
-  RenderInfoText();
   if (IsDisabled())
     m_imgColorDisabledMask->Render();
   else
@@ -154,7 +156,7 @@ std::string CGUIColorButtonControl::GetDescription() const
   return CGUIButtonControl::GetDescription();
 }
 
-void CGUIColorButtonControl::SetImageBoxColor(KODI::GUILIB::GUIINFO::CGUIInfoColor color)
+void CGUIColorButtonControl::SetImageBoxColor(GUIINFO::CGUIInfoColor color)
 {
   m_imgBoxColor = color;
 }
@@ -162,29 +164,35 @@ void CGUIColorButtonControl::SetImageBoxColor(KODI::GUILIB::GUIINFO::CGUIInfoCol
 void CGUIColorButtonControl::SetImageBoxColor(const std::string& hexColor)
 {
   if (hexColor.empty())
-    m_imgBoxColor = UTILS::COLOR::NONE;
+    m_imgBoxColor = GUIINFO::CGUIInfoColor(KODI::UTILS::COLOR::NONE);
   else
-    m_imgBoxColor = UTILS::COLOR::ConvertHexToColor(hexColor);
+    m_imgBoxColor = GUIINFO::CGUIInfoColor(KODI::UTILS::COLOR::ConvertHexToColor(hexColor));
 }
 
 bool CGUIColorButtonControl::UpdateColors(const CGUIListItem* item)
 {
   bool changed = CGUIButtonControl::UpdateColors(nullptr);
+  changed |= m_imgBoxColor.Update();
   changed |= m_imgColorMask->SetDiffuseColor(m_imgBoxColor, item);
   changed |= m_imgColorDisabledMask->SetDiffuseColor(m_diffuseColor);
   changed |= m_labelInfo.UpdateColors();
   return changed;
 }
 
-void CGUIColorButtonControl::RenderInfoText()
+void CGUIColorButtonControl::RenderText()
 {
-  m_labelInfo.Render();
+  if (CServiceBroker::GetWinSystem()->GetGfxContext().GetRenderOrder() !=
+      RENDER_ORDER_FRONT_TO_BACK)
+    m_labelInfo.Render();
+
+  CGUIButtonControl::RenderText();
 }
 
 void CGUIColorButtonControl::ProcessInfoText(unsigned int currentTime)
 {
   CRect labelRenderRect = m_labelInfo.GetRenderRect();
-  bool changed = m_labelInfo.SetText(StringUtils::Format("#{:08X}", m_imgBoxColor));
+  bool changed = m_labelInfo.SetText(
+      StringUtils::Format("#{:08X}", static_cast<KODI::UTILS::COLOR::Color>(m_imgBoxColor)));
   // Set Label X position based on image mask control position
   float textWidth = m_labelInfo.GetTextWidth() + 2 * m_labelInfo.GetLabelInfo().offsetX;
   float textPosX = m_imgColorMask->GetXPosition() - textWidth;

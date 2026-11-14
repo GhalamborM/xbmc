@@ -14,6 +14,7 @@ set(SOURCES DDSImage.cpp
             GUIControlFactory.cpp
             GUIControlGroup.cpp
             GUIControlGroupList.cpp
+            GUIControlGroupMask.cpp
             GUIControlLookup.cpp
             GUIControlProfiler.cpp
             GUIDialog.cpp
@@ -50,28 +51,34 @@ set(SOURCES DDSImage.cpp
             GUISpinControl.cpp
             GUISpinControlEx.cpp
             GUIStaticItem.cpp
+            GUISurroundRenderer.cpp
             GUITextBox.cpp
             GUITextLayout.cpp
             GUITexture.cpp
+            GUITextureCallbackManager.cpp
             GUIToggleButtonControl.cpp
+            GUIUtils.cpp
             GUIVideoControl.cpp
             GUIVisualisationControl.cpp
             GUIWindow.cpp
             GUIWindowManager.cpp
             GUIWrappingListContainer.cpp
             imagefactory.cpp
+            ImageSettings.cpp
             IWindowManagerCallback.cpp
-            LocalizeStrings.cpp
+            SkinMapManager.cpp
             StereoscopicsManager.cpp
             TextureBundle.cpp
             TextureBundleXBT.cpp
             Texture.cpp
+            TextureBase.cpp
             TextureManager.cpp
             VisibleEffect.cpp
             XBTF.cpp
             XBTFReader.cpp)
 
-set(HEADERS DDSImage.h
+set(HEADERS AspectRatio.h
+            DDSImage.h
             DirtyRegion.h
             DirtyRegionSolvers.h
             DirtyRegionTracker.h
@@ -90,6 +97,7 @@ set(HEADERS DDSImage.h
             GUIControlFactory.h
             GUIControlGroup.h
             GUIControlGroupList.h
+            GUIControlGroupMask.h
             GUIControlProfiler.h
             GUIControlLookup.h
             GUIDialog.h
@@ -111,7 +119,9 @@ set(HEADERS DDSImage.h
             GUIListItem.h
             GUIListItemLayout.h
             GUIListLabel.h
+            GUIMacros.h
             GUIMessage.h
+            GUIMessageIDs.h
             GUIMoverControl.h
             GUIMultiImage.h
             GUIPanelContainer.h
@@ -127,10 +137,13 @@ set(HEADERS DDSImage.h
             GUISpinControl.h
             GUISpinControlEx.h
             GUIStaticItem.h
+            GUISurroundRenderer.h
             GUITextBox.h
             GUITextLayout.h
             GUITexture.h
+            GUITextureCallbackManager.h
             GUIToggleButtonControl.h
+            GUIUtils.h
             GUIVideoControl.h
             GUIVisualisationControl.h
             GUIWindow.h
@@ -141,38 +154,48 @@ set(HEADERS DDSImage.h
             IGUIContainer.h
             iimage.h
             imagefactory.h
+            ImageSettings.h
             IMsgTargetCallback.h
             IRenderingCallback.h
             ISliderCallback.h
             IWindowManagerCallback.h
-            LocalizeStrings.h
+            SkinMapManager.h
             StereoscopicsManager.h
             Texture.h
+            TextureBase.h
             TextureBundle.h
             TextureBundleXBT.h
+            TextureFormats.h
             TextureManager.h
+            TextureScaling.h
             Tween.h
             VisibleEffect.h
             WindowIDs.h
             XBTF.h
             XBTFReader.h)
 
-if(OPENGL_FOUND OR OPENGLES_FOUND)
-  list(APPEND SOURCES GUIFontTTFGL.cpp
-                      Shader.cpp
-                      TextureGL.cpp)
-  list(APPEND HEADERS GUIFontTTFGL.h
-                      Shader.h
-                      TextureGL.h)
+if(TARGET ${APP_NAME_LC}::OpenGl OR TARGET ${APP_NAME_LC}::OpenGLES)
+  list(APPEND SOURCES Shader.cpp)
+  list(APPEND HEADERS Shader.h)
 
-  if(OPENGL_FOUND)
-    list(APPEND SOURCES GUITextureGL.cpp)
-    list(APPEND HEADERS GUITextureGL.h)
+  if(TARGET ${APP_NAME_LC}::OpenGl)
+    list(APPEND SOURCES GUIFontTTFGL.cpp
+                        GUITextureGL.cpp
+                        TextureGL.cpp)
+    list(APPEND HEADERS GUIFontTTFGL.h
+                        GUITextureGL.h
+                        TextureGL.h)
   endif()
 
-  if(OPENGLES_FOUND)
-    list(APPEND SOURCES GUITextureGLES.cpp)
-    list(APPEND HEADERS GUITextureGLES.h)
+  if(TARGET ${APP_NAME_LC}::OpenGLES)
+    list(APPEND SOURCES GUIFontTTFGLES.cpp
+                        GUIQuadDrawerGLES.cpp
+                        GUITextureGLES.cpp
+                        TextureGLES.cpp)
+    list(APPEND HEADERS GUIFontTTFGLES.h
+                        GUIQuadDrawerGLES.h
+                        GUITextureGLES.h
+                        TextureGLES.h)
   endif()
 
 endif()
@@ -195,7 +218,8 @@ endif()
 core_add_library(guilib)
 
 if(CORE_SYSTEM_NAME STREQUAL windows OR CORE_SYSTEM_NAME STREQUAL windowsstore)
-  set(SHADERS_VERTEX guishader_vert.hlsl)
+  set(SHADERS_VERTEX guishader_clip_vert.hlsl
+                     guishader_vert.hlsl)
   set(SHADERS_PIXEL guishader_checkerboard_right.hlsl
                     guishader_checkerboard_left.hlsl
                     guishader_default.hlsl
@@ -203,13 +227,16 @@ if(CORE_SYSTEM_NAME STREQUAL windows OR CORE_SYSTEM_NAME STREQUAL windowsstore)
                     guishader_interlaced_right.hlsl
                     guishader_interlaced_left.hlsl
                     guishader_multi_texture_blend.hlsl
+                    guishader_multi_texture_blend_nearest.hlsl
                     guishader_texture.hlsl
+                    guishader_texture_nearest.hlsl
                     guishader_texture_noblend.hlsl)
   foreach(shader ${SHADERS_VERTEX})
     get_filename_component(file ${shader} NAME_WE)
     add_custom_command(OUTPUT ${file}.h
-                       COMMAND ${FXC} /Fh ${file}.h /E VS /T vs_4_0_level_9_1 /Vn ${file} /Qstrip_reflect
-                                      ${CMAKE_SOURCE_DIR}/system/shaders/${shader}
+                       COMMAND windows::FXC
+                       ARGS /Fh ${file}.h /E VS /T vs_4_0_level_9_1 /Vn ${file} /Qstrip_reflect
+                            ${CMAKE_SOURCE_DIR}/system/shaders/${shader}
                        DEPENDS ${CMAKE_SOURCE_DIR}/system/shaders/${shader}
                        COMMENT "FX compile vertex shader ${shader}"
                        VERBATIM)
@@ -218,8 +245,9 @@ if(CORE_SYSTEM_NAME STREQUAL windows OR CORE_SYSTEM_NAME STREQUAL windowsstore)
   foreach(shader ${SHADERS_PIXEL})
     get_filename_component(file ${shader} NAME_WE)
     add_custom_command(OUTPUT ${file}.h
-                       COMMAND ${FXC} /Fh ${file}.h /E PS /T ps_4_0_level_9_1 /Vn ${file} /Qstrip_reflect
-                                      ${CMAKE_SOURCE_DIR}/system/shaders/${shader}
+                       COMMAND windows::FXC
+                       ARGS /Fh ${file}.h /E PS /T ps_4_0_level_9_1 /Vn ${file} /Qstrip_reflect
+                            ${CMAKE_SOURCE_DIR}/system/shaders/${shader}
                        DEPENDS ${CMAKE_SOURCE_DIR}/system/shaders/${shader}
                        COMMENT "FX compile pixel shader ${shader}"
                        VERBATIM)

@@ -8,12 +8,15 @@
 
 #include "Encoder.h"
 
+#include "filesystem/File.h"
 #include "utils/log.h"
 
 #include <string.h>
 #include <utility>
 
 using namespace KODI::CDRIP;
+
+CEncoder::CEncoder() = default;
 
 CEncoder::~CEncoder()
 {
@@ -30,7 +33,7 @@ bool CEncoder::EncoderInit(const std::string& strFile, int iInChannels, int iInR
 
   if (!FileCreate(strFile))
   {
-    CLog::Log(LOGERROR, "CEncoder::{} - Cannot open file: {}", __func__, strFile);
+    CLog::LogF(LOGERROR, "Cannot open file: '{}'", strFile);
     return false;
   }
 
@@ -42,7 +45,7 @@ ssize_t CEncoder::EncoderEncode(uint8_t* pbtStream, size_t nNumBytesRead)
   const int iBytes = Encode(pbtStream, nNumBytesRead);
   if (iBytes < 0)
   {
-    CLog::Log(LOGERROR, "CEncoder::{} - Internal encoder error: {}", __func__, iBytes);
+    CLog::LogF(LOGERROR, "Internal encoder error: {}", iBytes);
     return 0;
   }
   return 1;

@@ -30,14 +30,14 @@
 //#define XBMC_ADDON_DEBUG_MEMORY
 
 #include "AddonString.h"
-#include "threads/SingleLock.h"
+
+#include <mutex>
 #ifdef XBMC_ADDON_DEBUG_MEMORY
 #include "utils/log.h"
 #endif
 #include "AddonUtils.h"
 
 #include <atomic>
-#include <typeindex>
 
 namespace XBMCAddon
 {
@@ -80,15 +80,9 @@ namespace XBMCAddon
      */
     virtual void deallocating()
     {
-      CSingleLock lock(*this);
+      std::unique_lock lock(*this);
       m_isDeallocating = true;
     }
-
-    /**
-     * This is meant to be called during static initialization and so isn't
-     * synchronized.
-     */
-    static short getNextClassIndex();
 
   public:
     AddonClass();
@@ -103,8 +97,6 @@ namespace XBMCAddon
      *  the time it's held.
      */
     bool isDeallocating() { XBMC_TRACE; return m_isDeallocating; }
-
-    static short getNumAddonClasses();
 
 #ifdef XBMC_ADDON_DEBUG_MEMORY
     virtual

@@ -11,8 +11,13 @@
 #include "GameClient.h"
 #include "GameClientProperties.h"
 #include "addons/kodi-dev-kit/include/kodi/addon-instance/Game.h"
+#include "games/addons/cheats/GameClientCheats.h"
+#include "games/addons/cheevos/GameClientCheevos.h"
+#include "games/addons/disc/GameClientDiscs.h"
 #include "games/addons/input/GameClientInput.h"
 #include "games/addons/streams/GameClientStreams.h"
+
+#include <memory>
 
 using namespace KODI;
 using namespace GAME;
@@ -20,7 +25,9 @@ using namespace GAME;
 CGameClientSubsystem::CGameClientSubsystem(CGameClient& gameClient,
                                            AddonInstance_Game& addonStruct,
                                            CCriticalSection& clientAccess)
-  : m_gameClient(gameClient), m_struct(addonStruct), m_clientAccess(clientAccess)
+  : m_gameClient(gameClient),
+    m_struct(addonStruct),
+    m_clientAccess(clientAccess)
 {
 }
 
@@ -32,18 +39,40 @@ GameClientSubsystems CGameClientSubsystem::CreateSubsystems(CGameClient& gameCli
 {
   GameClientSubsystems subsystems = {};
 
-  subsystems.Input.reset(new CGameClientInput(gameClient, gameStruct, clientAccess));
-  subsystems.AddonProperties.reset(new CGameClientProperties(gameClient, *gameStruct.props));
-  subsystems.Streams.reset(new CGameClientStreams(gameClient));
+  subsystems.Cheats = std::make_unique<CGameClientCheats>(gameClient, gameStruct, clientAccess);
+  subsystems.Cheevos = std::make_unique<CGameClientCheevos>(gameClient, gameStruct, clientAccess);
+  subsystems.Discs = std::make_unique<CGameClientDiscs>(gameClient, gameStruct, clientAccess);
+  subsystems.Input = std::make_unique<CGameClientInput>(gameClient, gameStruct, clientAccess);
+  subsystems.AddonProperties =
+      std::make_unique<CGameClientProperties>(gameClient, *gameStruct.props);
+  subsystems.Streams = std::make_unique<CGameClientStreams>(gameClient);
 
   return subsystems;
 }
 
 void CGameClientSubsystem::DestroySubsystems(GameClientSubsystems& subsystems)
 {
+  subsystems.Cheats.reset();
+  subsystems.Cheevos.reset();
+  subsystems.Discs.reset();
   subsystems.Input.reset();
   subsystems.AddonProperties.reset();
   subsystems.Streams.reset();
+}
+
+CGameClientCheats& CGameClientSubsystem::Cheats() const
+{
+  return m_gameClient.Cheats();
+}
+
+CGameClientCheevos& CGameClientSubsystem::Cheevos() const
+{
+  return m_gameClient.Cheevos();
+}
+
+CGameClientDiscs& CGameClientSubsystem::Discs() const
+{
+  return m_gameClient.Discs();
 }
 
 CGameClientInput& CGameClientSubsystem::Input() const

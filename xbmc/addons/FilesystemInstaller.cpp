@@ -8,7 +8,9 @@
 #include "FilesystemInstaller.h"
 
 #include "FileItem.h"
+#include "FileItemList.h"
 #include "filesystem/Directory.h"
+#include "filesystem/File.h"
 #include "filesystem/SpecialProtocol.h"
 #include "utils/FileOperationJob.h"
 #include "utils/StringUtils.h"
@@ -17,36 +19,89 @@
 
 using namespace XFILE;
 
-CFilesystemInstaller::CFilesystemInstaller()
+namespace
 {
-  m_addonFolder = CSpecialProtocol::TranslatePath("special://home/addons/");
-  m_tempFolder = CSpecialProtocol::TranslatePath("special://home/addons/temp/");
+class CUnpackJob : public CFileOperationJob
+{
+public:
+  CUnpackJob(CFileItemList& items,
+             const std::string& dest,
+             const CFilesystemInstaller::ProgressCallback& onProgress)
+    : CFileOperationJob(ActionCopy, items, dest),
+      m_onProgress(onProgress)
+  {
+  }
+
+  bool ShouldCancel(unsigned int progress, unsigned int total) const override
+  {
+    if (m_onProgress)
+      m_onProgress(progress, total);
+    return CFileOperationJob::ShouldCancel(progress, total);
+  }
+
+private:
+  CFilesystemInstaller::ProgressCallback m_onProgress;
+};
+
+bool UnpackArchive(std::string path,
+                   const std::string& dest,
+                   const CFilesystemInstaller::ProgressCallback& onProgress)
+{
+  if (!URIUtils::IsProtocol(path, "zip"))
+    path = URIUtils::CreateArchivePath("zip", CURL(path), "").Get();
+
+  CFileItemList files;
+  if (!CDirectory::GetDirectory(path, files, "", DIR_FLAG_DEFAULTS))
+    return false;
+
+  if (files.Size() == 1 && files[0]->IsFolder())
+  {
+    path = files[0]->GetPath();
+    files.Clear();
+    if (!CDirectory::GetDirectory(path, files, "", DIR_FLAG_DEFAULTS))
+      return false;
+  }
+  CLog::Log(LOGDEBUG, "Unpacking {} to {}", path, dest);
+
+  for (auto i = 0; i < files.Size(); ++i)
+    files[i]->Select(true);
+
+  CUnpackJob job(files, dest, onProgress);
+  return job.DoWork();
+}
+} // unnamed namespace
+
+CFilesystemInstaller::CFilesystemInstaller()
+  : m_addonFolder(CSpecialProtocol::TranslatePath("special://home/addons/")),
+    m_tempFolder(CSpecialProtocol::TranslatePath("special://home/addons/temp/"))
+{
 }
 
-bool CFilesystemInstaller::InstallToFilesystem(const std::string& archive, const std::string& addonId)
+bool CFilesystemInstaller::InstallToFilesystem(const std::string& archive,
+                                               const std::string& addonId,
+                                               const ProgressCallback& onProgress) const
 {
-  auto addonFolder = URIUtils::AddFileToFolder(m_addonFolder, addonId);
-  auto newAddonData = URIUtils::AddFileToFolder(m_tempFolder, StringUtils::CreateUUID());
-  auto oldAddonData = URIUtils::AddFileToFolder(m_tempFolder, StringUtils::CreateUUID());
+  const std::string addonFolder = URIUtils::AddFileToFolder(m_addonFolder, addonId);
+  const std::string newAddonData =
+      URIUtils::AddFileToFolder(m_tempFolder, StringUtils::CreateUUID());
+  const std::string oldAddonData =
+      URIUtils::AddFileToFolder(m_tempFolder, StringUtils::CreateUUID());
 
   if (!CDirectory::Create(newAddonData))
     return false;
 
-  if (!UnpackArchive(archive, newAddonData))
+  if (!UnpackArchive(archive, newAddonData, onProgress))
   {
     CLog::Log(LOGERROR, "Failed to unpack archive '{}' to '{}'", archive, newAddonData);
     return false;
   }
 
-  bool hasOldData = CDirectory::Exists(addonFolder);
-  if (hasOldData)
+  const bool hasOldData = CDirectory::Exists(addonFolder);
+  if (hasOldData && !CFile::Rename(addonFolder, oldAddonData))
   {
-    if (!CFile::Rename(addonFolder, oldAddonData))
-    {
-      CLog::Log(LOGERROR, "Failed to move old addon files from '{}' to '{}'", addonFolder,
-                oldAddonData);
-      return false;
-    }
+    CLog::Log(LOGERROR, "Failed to move old addon files from '{}' to '{}'", addonFolder,
+              oldAddonData);
+    return false;
   }
 
   if (!CFile::Rename(newAddonData, addonFolder))
@@ -56,19 +111,16 @@ bool CFilesystemInstaller::InstallToFilesystem(const std::string& archive, const
     return false;
   }
 
-  if (hasOldData)
+  if (hasOldData && !CDirectory::RemoveRecursive(oldAddonData))
   {
-    if (!CDirectory::RemoveRecursive(oldAddonData))
-    {
-      CLog::Log(LOGWARNING, "Failed to delete old addon files in '{}'", oldAddonData);
-    }
+    CLog::Log(LOGWARNING, "Failed to delete old addon files in '{}'", oldAddonData);
   }
   return true;
 }
 
-bool CFilesystemInstaller::UnInstallFromFilesystem(const std::string& addonFolder)
+bool CFilesystemInstaller::UnInstallFromFilesystem(const std::string& addonFolder) const
 {
-  auto tempFolder = URIUtils::AddFileToFolder(m_tempFolder, StringUtils::CreateUUID());
+  const std::string tempFolder = URIUtils::AddFileToFolder(m_tempFolder, StringUtils::CreateUUID());
   if (!CFile::Rename(addonFolder, tempFolder))
   {
     CLog::Log(LOGERROR, "Failed to move old addon files from '{}' to '{}'", addonFolder,
@@ -81,29 +133,4 @@ bool CFilesystemInstaller::UnInstallFromFilesystem(const std::string& addonFolde
     CLog::Log(LOGWARNING, "Failed to delete old addon files in '{}'", tempFolder);
   }
   return true;
-}
-
-bool CFilesystemInstaller::UnpackArchive(std::string path, const std::string& dest)
-{
-  if (!URIUtils::IsProtocol(path, "zip"))
-    path = URIUtils::CreateArchivePath("zip", CURL(path), "").Get();
-
-  CFileItemList files;
-  if (!CDirectory::GetDirectory(path, files, "", DIR_FLAG_DEFAULTS))
-    return false;
-
-  if (files.Size() == 1 && files[0]->m_bIsFolder)
-  {
-    path = files[0]->GetPath();
-    files.Clear();
-    if (!CDirectory::GetDirectory(path, files, "", DIR_FLAG_DEFAULTS))
-      return false;
-  }
-  CLog::Log(LOGDEBUG, "Unpacking {} to {}", path, dest);
-
-  for (auto i = 0; i < files.Size(); ++i)
-    files[i]->Select(true);
-
-  CFileOperationJob job(CFileOperationJob::ActionCopy, files, dest);
-  return job.DoWork();
 }

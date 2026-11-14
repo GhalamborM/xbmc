@@ -8,10 +8,10 @@
 
 #include "WinEventsWin10.h"
 
-#include "AppInboundProtocol.h"
-#include "Application.h"
 #include "GUIUserMessages.h"
 #include "ServiceBroker.h"
+#include "application/AppInboundProtocol.h"
+#include "application/Application.h"
 #include "guilib/GUIComponent.h"
 #include "guilib/GUIWindowManager.h"
 #include "input/actions/Action.h"
@@ -20,6 +20,7 @@
 #include "input/touch/generic/GenericTouchInputHandler.h"
 #include "interfaces/AnnouncementManager.h"
 #include "messaging/ApplicationMessenger.h"
+#include "peripherals/Peripherals.h"
 #include "rendering/dx/DeviceResources.h"
 #include "rendering/dx/RenderContext.h"
 #include "settings/AdvancedSettings.h"
@@ -47,7 +48,6 @@ using namespace winrt::Windows::UI::Input;
 using namespace winrt::Windows::UI::ViewManagement;
 
 using namespace PERIPHERALS;
-using namespace KODI::MESSAGING;
 
 static winrt::Point GetScreenPoint(winrt::Point point)
 {
@@ -91,6 +91,8 @@ bool CWinEventsWin10::MessagePump()
 
   // processes all pending events and exits immediately
   CoreWindow::GetForCurrentThread().Dispatcher().ProcessEvents(CoreProcessEventsOption::ProcessAllIfPresent);
+
+  TriggerGamepadScan();
 
   XBMC_Event pumpEvent;
   while (m_events.try_pop(pumpEvent))
@@ -158,10 +160,22 @@ void CWinEventsWin10::InitEventHandlers(const CoreWindow& window)
       m_smtc.ButtonPressed(CWinEventsWin10::OnSystemMediaButtonPressed);
     }
     m_smtc.IsEnabled(true);;
-    CServiceBroker::GetAnnouncementManager()->AddAnnouncer(this);
+    CServiceBroker::GetAnnouncementManager()->AddAnnouncer(this, ANNOUNCEMENT::Player);
   }
   if (CSysInfo::GetWindowsDeviceFamily() == CSysInfo::WindowsDeviceFamily::Xbox)
   {
+    using winrt::Windows::Gaming::Input::Gamepad;
+
+    m_gamepadScanRequested = std::make_shared<std::atomic<bool>>(false);
+    // WinRT callbacks can outlive unsubscription; defer service access to the UI thread.
+    const auto onGamepadChanged =
+        [scanRequested = m_gamepadScanRequested](const winrt::IInspectable&, const Gamepad&)
+    { scanRequested->store(true); };
+    m_gamepadAddedRevoker = Gamepad::GamepadAdded(winrt::auto_revoke, onGamepadChanged);
+    m_gamepadRemovedRevoker = Gamepad::GamepadRemoved(winrt::auto_revoke, onGamepadChanged);
+    if (Gamepad::Gamepads().Size() != 0)
+      m_gamepadScanRequested->store(true);
+
     m_remote = std::make_unique<CRemoteControlXbox>();
     m_remote->Initialize();
   }
@@ -171,10 +185,9 @@ void CWinEventsWin10::UpdateWindowSize()
 {
   auto size = DX::DeviceResources::Get()->GetOutputSize();
 
-  CLog::Log(LOGDEBUG, __FUNCTION__ ": window resize event {:f} x {:f} (as:{})", size.Width,
-            size.Height,
-            CServiceBroker::GetSettingsComponent()->GetAdvancedSettings()->m_fullScreen ? "true"
-                                                                                        : "false");
+  CLog::LogF(LOGDEBUG, "window resize event {:f} x {:f} (as:{})", size.Width, size.Height,
+             CServiceBroker::GetSettingsComponent()->GetAdvancedSettings()->m_fullScreen ? "true"
+                                                                                         : "false");
 
   auto appView = ApplicationView::GetForCurrentView();
   appView.SetDesiredBoundsMode(ApplicationViewBoundsMode::UseCoreWindow);
@@ -185,15 +198,32 @@ void CWinEventsWin10::UpdateWindowSize()
 
   XBMC_Event newEvent = {};
   newEvent.type = XBMC_VIDEORESIZE;
-  newEvent.resize.w = size.Width;
-  newEvent.resize.h = size.Height;
-  if (g_application.GetRenderGUI() && !DX::Windowing()->IsAlteringWindow() && newEvent.resize.w > 0 && newEvent.resize.h > 0)
+  newEvent.resize.width = size.Width;
+  newEvent.resize.height = size.Height;
+  newEvent.resize.scale = 1.0;
+  if (g_application.GetRenderGUI() && !DX::Windowing()->IsAlteringWindow() &&
+      newEvent.resize.width > 0 && newEvent.resize.height > 0)
     MessagePush(&newEvent);
+}
+
+bool CWinEventsWin10::HasJoystickPeripheral() const
+{
+  if (!CServiceBroker::IsServiceManagerUp())
+    return false;
+
+  return CServiceBroker::GetPeripherals().HasPeripheralWithFeature(FEATURE_JOYSTICK);
+}
+
+void CWinEventsWin10::TriggerGamepadScan()
+{
+  if (m_gamepadScanRequested && CServiceBroker::IsServiceManagerUp() &&
+      m_gamepadScanRequested->exchange(false))
+    CServiceBroker::GetPeripherals().TriggerDeviceScan(PERIPHERAL_BUS_ADDON);
 }
 
 void CWinEventsWin10::OnResize(float width, float height)
 {
-  CLog::Log(LOGDEBUG, __FUNCTION__": window size changed.");
+  CLog::LogF(LOGDEBUG, "window size changed.");
   m_logicalWidth = width;
   m_logicalHeight = height;
   m_bResized = true;
@@ -212,7 +242,7 @@ void CWinEventsWin10::OnWindowSizeChanged(const CoreWindow&, const WindowSizeCha
 
 void CWinEventsWin10::OnWindowResizeStarted(const CoreWindow& sender, const winrt::IInspectable&)
 {
-  CLog::Log(LOGDEBUG, __FUNCTION__": window resize started.");
+  CLog::LogF(LOGDEBUG, "window resize started.");
   m_logicalPosX = sender.Bounds().X;
   m_logicalPosY = sender.Bounds().Y;
   m_sizeChanging = true;
@@ -220,7 +250,7 @@ void CWinEventsWin10::OnWindowResizeStarted(const CoreWindow& sender, const winr
 
 void CWinEventsWin10::OnWindowResizeCompleted(const CoreWindow& sender, const winrt::IInspectable&)
 {
-  CLog::Log(LOGDEBUG, __FUNCTION__": window resize completed.");
+  CLog::LogF(LOGDEBUG, "window resize completed.");
   m_sizeChanging = false;
 
   if (m_logicalPosX != sender.Bounds().X || m_logicalPosY != sender.Bounds().Y)
@@ -231,7 +261,7 @@ void CWinEventsWin10::OnWindowResizeCompleted(const CoreWindow& sender, const wi
 
 void CWinEventsWin10::HandleWindowSizeChanged()
 {
-  CLog::Log(LOGDEBUG, __FUNCTION__": window size/move handled.");
+  CLog::LogF(LOGDEBUG, "window size/move handled.");
   if (m_bMoved)
   {
     // it will get position from CoreWindow
@@ -255,8 +285,7 @@ void CWinEventsWin10::OnVisibilityChanged(const CoreWindow& sender, const Visibi
 
   if (g_application.GetRenderGUI() != active)
     DX::Windowing()->NotifyAppActiveChange(g_application.GetRenderGUI());
-  CLog::Log(LOGDEBUG, __FUNCTION__ ": window is {}",
-            g_application.GetRenderGUI() ? "shown" : "hidden");
+  CLog::LogF(LOGDEBUG, "window is {}", g_application.GetRenderGUI() ? "shown" : "hidden");
 }
 
 void CWinEventsWin10::OnWindowActivationChanged(const CoreWindow& sender, const WindowActivatedEventArgs& args)
@@ -277,8 +306,9 @@ void CWinEventsWin10::OnWindowActivationChanged(const CoreWindow& sender, const 
   }
   if (g_application.GetRenderGUI() != active)
     DX::Windowing()->NotifyAppActiveChange(g_application.GetRenderGUI());
-  CLog::Log(LOGDEBUG, __FUNCTION__ ": window is {}",
-            g_application.GetRenderGUI() ? "active" : "inactive");
+
+  if (CServiceBroker::IsLoggingUp())
+    CLog::LogF(LOGDEBUG, "window is {}", g_application.GetRenderGUI() ? "active" : "inactive");
 }
 
 void CWinEventsWin10::OnWindowClosed(const CoreWindow& sender, const CoreWindowEventArgs& args)
@@ -398,7 +428,10 @@ void CWinEventsWin10::OnPointerWheelChanged(const CoreWindow&, const PointerEven
   MessagePush(&newEvent);
 }
 
-void CWinEventsWin10::Kodi_KeyEvent(unsigned int vkey, unsigned scancode, unsigned keycode, bool isDown)
+void CWinEventsWin10::Kodi_KeyEvent(unsigned int vkey,
+                                    uint32_t scancode,
+                                    unsigned keycode,
+                                    bool isDown)
 {
   using State = CoreVirtualKeyStates;
 
@@ -447,7 +480,8 @@ void CWinEventsWin10::Kodi_KeyEvent(unsigned int vkey, unsigned scancode, unsign
   MessagePush(&newEvent);
 }
 
-void CWinEventsWin10::OnAcceleratorKeyActivated(const CoreDispatcher&, const AcceleratorKeyEventArgs& args)
+void CWinEventsWin10::OnAcceleratorKeyActivated(const CoreDispatcher& sender,
+                                                const AcceleratorKeyEventArgs& args)
 {
   static auto lockedState = CoreVirtualKeyStates::Locked;
   static VirtualKey keyStore = VirtualKey::None;
@@ -455,6 +489,25 @@ void CWinEventsWin10::OnAcceleratorKeyActivated(const CoreDispatcher&, const Acc
   // skip if device is remote control
   if (m_remote && m_remote->IsRemoteDevice(args.DeviceId().c_str()))
     return;
+
+  // Xbox fallback when no joystick peripheral is registered.
+  if (CSysInfo::GetWindowsDeviceFamily() == CSysInfo::WindowsDeviceFamily::Xbox && m_remote &&
+      (args.EventType() == CoreAcceleratorKeyEventType::KeyDown ||
+       args.EventType() == CoreAcceleratorKeyEventType::SystemKeyDown ||
+       args.EventType() == CoreAcceleratorKeyEventType::KeyUp ||
+       args.EventType() == CoreAcceleratorKeyEventType::SystemKeyUp) &&
+      CRemoteControlXbox::IsMappedGamepadVirtualKey(args.VirtualKey()) && !HasJoystickPeripheral())
+  {
+    if ((!args.KeyStatus().WasKeyDown || args.KeyStatus().IsKeyReleased) &&
+        m_gamepadInputScanTimeout.IsTimePast())
+    {
+      m_gamepadInputScanTimeout.Set(std::chrono::seconds(5));
+      m_gamepadScanRequested->store(true);
+      TriggerGamepadScan();
+    }
+    m_remote->HandleAcceleratorKey(sender, args);
+    return;
+  }
 
   bool isDown = false;
   unsigned keyCode = 0;
@@ -540,7 +593,7 @@ void CWinEventsWin10::OnOrientationChanged(const DisplayInformation&, const winr
 
 void CWinEventsWin10::OnDisplayContentsInvalidated(const DisplayInformation&, const winrt::IInspectable&)
 {
-  CLog::Log(LOGDEBUG, __FUNCTION__": onevent.");
+  CLog::LogF(LOGDEBUG, "on event");
   DX::DeviceResources::Get()->ValidateDevice();
 }
 
@@ -549,7 +602,8 @@ void CWinEventsWin10::OnBackRequested(const winrt::IInspectable&, const BackRequ
   // handle this only on windows mobile
   if (CSysInfo::GetWindowsDeviceFamily() == CSysInfo::WindowsDeviceFamily::Mobile)
   {
-    CApplicationMessenger::GetInstance().PostMsg(TMSG_GUI_ACTION, WINDOW_INVALID, -1, static_cast<void*>(new CAction(ACTION_NAV_BACK)));
+    CServiceBroker::GetAppMessenger()->PostMsg(TMSG_GUI_ACTION, WINDOW_INVALID, -1,
+                                               static_cast<void*>(new CAction(ACTION_NAV_BACK)));
   }
   args.Handled(true);
 }
@@ -592,7 +646,8 @@ void CWinEventsWin10::OnSystemMediaButtonPressed(const SystemMediaTransportContr
   }
   if (action != ACTION_NONE)
   {
-    CApplicationMessenger::GetInstance().PostMsg(TMSG_GUI_ACTION, WINDOW_INVALID, -1, static_cast<void*>(new CAction(action)));
+    CServiceBroker::GetAppMessenger()->PostMsg(TMSG_GUI_ACTION, WINDOW_INVALID, -1,
+                                               static_cast<void*>(new CAction(action)));
   }
 }
 

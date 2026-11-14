@@ -8,10 +8,9 @@
 
 #pragma once
 
-#include "addons/IAddon.h"
 #include "settings/lib/ISettingCallback.h"
 
-#include <functional>
+#include <memory>
 #include <string>
 
 namespace ADDON
@@ -27,6 +26,14 @@ enum class AddonRepoUpdateMode
   ANY_REPOSITORY = 1
 };
 
+enum class AddonType;
+
+class CAddonInfo;
+using AddonInfoPtr = std::shared_ptr<CAddonInfo>;
+
+class IAddon;
+using AddonPtr = std::shared_ptr<IAddon>;
+
 class CAddonSystemSettings : public ISettingCallback
 {
 public:
@@ -34,9 +41,9 @@ public:
   void OnSettingAction(const std::shared_ptr<const CSetting>& setting) override;
   void OnSettingChanged(const std::shared_ptr<const CSetting>& setting) override;
 
-  bool GetActive(const TYPE& type, AddonPtr& addon);
-  bool SetActive(const TYPE& type, const std::string& addonID);
-  bool IsActive(const IAddon& addon);
+  bool GetActive(AddonType type, AddonPtr& addon) const;
+  bool SetActive(AddonType type, const std::string& addonID) const;
+  bool IsActive(const IAddon& addon) const;
 
   /*!
    * Gets Kodi addon auto update mode
@@ -57,14 +64,12 @@ public:
    * Attempt to unset addon as active. Returns true if addon is no longer active,
    * false if it could not be unset (e.g. if the addon is the default)
    */
-  bool UnsetActive(const AddonInfoPtr& addon);
+  bool UnsetActive(const AddonInfoPtr& addon) const;
 
 private:
-  CAddonSystemSettings();
+  CAddonSystemSettings() = default;
   CAddonSystemSettings(const CAddonSystemSettings&) = delete;
   CAddonSystemSettings& operator=(const CAddonSystemSettings&) = delete;
   ~CAddonSystemSettings() override = default;
-
-  const std::map<ADDON::TYPE, std::string> m_activeSettings;
 };
 };

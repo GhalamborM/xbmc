@@ -3,75 +3,49 @@
 # --------
 # Finds the fstrcmp library
 #
-# This will define the following variables::
+# This will define the following target:
 #
-# FSTRCMP_FOUND - system has libfstrcmp
-# FSTRCMP_INCLUDE_DIRS - the libfstrcmp include directory
-# FSTRCMP_LIBRARIES - the libfstrcmp libraries
+#   ${APP_NAME_LC}::Fstrcmp   - The fstrcmp library
 #
 
-if(ENABLE_INTERNAL_FSTRCMP)
-  find_program(LIBTOOL libtool REQUIRED)
-  include(ExternalProject)
+if(NOT TARGET ${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME})
+  include(cmake/scripts/common/ModuleHelpers.cmake)
 
-  file(STRINGS ${CMAKE_SOURCE_DIR}/tools/depends/target/libfstrcmp/Makefile VER)
-  string(REGEX MATCH "VERSION=[^ ]*" FSTRCMP_VER "${VER}")
-  list(GET FSTRCMP_VER 0 FSTRCMP_VER)
-  string(SUBSTRING "${FSTRCMP_VER}" 8 -1 FSTRCMP_VER)
+  set(${CMAKE_FIND_PACKAGE_NAME}_MODULE_LC fstrcmp)
 
-  # allow user to override the download URL with a local tarball
-  # needed for offline build envs
-  if(FSTRCMP_URL)
-    get_filename_component(FSTRCMP_URL "${FSTRCMP_URL}" ABSOLUTE)
+  SETUP_BUILD_VARS()
+
+  if(ENABLE_INTERNAL_FSTRCMP)
+    message(STATUS "Building ${${CMAKE_FIND_PACKAGE_NAME}_MODULE_LC}: \(version \"${${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_VER}\"\)")
+    find_program(LIBTOOL libtool REQUIRED)
+
+    find_program(AUTORECONF autoreconf REQUIRED)
+
+    set(CONFIGURE_COMMAND ${AUTORECONF} -vif
+                  COMMAND ./configure --prefix ${DEPENDS_PATH})
+    set(BUILD_COMMAND make lib/libfstrcmp.la)
+    set(BUILD_IN_SOURCE 1)
+    set(INSTALL_COMMAND make install-libdir install-include)
+
+    BUILD_DEP_TARGET()
   else()
-    set(FSTRCMP_URL http://mirrors.kodi.tv/build-deps/sources/fstrcmp-${FSTRCMP_VER}.tar.gz)
-  endif()
-  if(VERBOSE)
-    message(STATUS "FSTRCMPURL: ${FSTRCMP_URL}")
-  endif()
-
-  set(FSTRCMP_LIBRARY ${CMAKE_BINARY_DIR}/${CORE_BUILD_DIR}/lib/libfstrcmp.a)
-  set(FSTRCMP_INCLUDE_DIR ${CMAKE_BINARY_DIR}/${CORE_BUILD_DIR}/include)
-  externalproject_add(fstrcmp
-                      URL ${FSTRCMP_URL}
-                      DOWNLOAD_DIR ${CMAKE_BINARY_DIR}/${CORE_BUILD_DIR}/download
-                      PREFIX ${CORE_BUILD_DIR}/fstrcmp
-                      PATCH_COMMAND autoreconf -vif
-                      CONFIGURE_COMMAND ./configure --prefix ${CMAKE_BINARY_DIR}/${CORE_BUILD_DIR}
-                      BUILD_BYPRODUCTS ${FSTRCMP_LIBRARY}
-                      BUILD_COMMAND make lib/libfstrcmp.la
-                      BUILD_IN_SOURCE 1
-                      INSTALL_COMMAND make install-libdir install-include)
-
-  set_target_properties(fstrcmp PROPERTIES FOLDER "External Projects")
-else()
-  if(PKG_CONFIG_FOUND)
-    pkg_check_modules(PC_FSTRCMP fstrcmp QUIET)
+    SETUP_FIND_SPECS()
+  
+    SEARCH_EXISTING_PACKAGES()
   endif()
 
-  find_path(FSTRCMP_INCLUDE_DIR NAMES fstrcmp.h
-                                 PATHS ${PC_FSTRCMP_INCLUDEDIR})
-
-  find_library(FSTRCMP_LIBRARY NAMES fstrcmp
-                                PATHS ${PC_FSTRCMP_LIBDIR})
-
-  set(FSTRCMP_VERSION ${PC_FSTRCMP_VERSION})
+  if(${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME}_FOUND)
+    if(TARGET PkgConfig::${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME})
+      add_library(${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME} ALIAS PkgConfig::${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME})
+    elseif(TARGET fstrcmp::fstrcmp)
+      add_library(${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME} ALIAS fstrcmp::fstrcmp)
+    else()
+      SETUP_BUILD_TARGET()
+      add_dependencies(${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME} ${${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_BUILD_NAME})
+    endif()
+  else()
+    if(Fstrcmp_FIND_REQUIRED)
+      message(FATAL_ERROR "Fstrcmp libraries were not found. You may want to use -DENABLE_INTERNAL_FSTRCMP=ON")
+    endif()
+  endif()
 endif()
-
-include(FindPackageHandleStandardArgs)
-find_package_handle_standard_args(Fstrcmp
-                                  REQUIRED_VARS FSTRCMP_LIBRARY FSTRCMP_INCLUDE_DIR
-                                  VERSION_VAR FSTRCMP_VER)
-
-if(FSTRCMP_FOUND)
-  set(FSTRCMP_INCLUDE_DIRS ${FSTRCMP_INCLUDE_DIR})
-  set(FSTRCMP_LIBRARIES ${FSTRCMP_LIBRARY})
-endif()
-
-if(NOT TARGET fstrcmp)
-  add_library(fstrcmp UNKNOWN IMPORTED)
-  set_target_properties(fstrcmp PROPERTIES
-                                IMPORTED_LOCATION "${FSTRCMP_LIBRARY}"
-                                INTERFACE_INCLUDE_DIRECTORIES "${FSTRCMP_INCLUDE_DIR}")
-endif()
-mark_as_advanced(FSTRCMP_INCLUDE_DIR FSTRCMP_LIBRARY)

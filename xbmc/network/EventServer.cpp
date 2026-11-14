@@ -8,25 +8,28 @@
 
 #include "EventServer.h"
 
-#include "Application.h"
 #include "EventClient.h"
 #include "EventPacket.h"
 #include "ServiceBroker.h"
 #include "Socket.h"
-#include "Util.h"
 #include "Zeroconf.h"
+#include "application/Application.h"
 #include "guilib/GUIAudioManager.h"
-#include "input/Key.h"
+#include "input/actions/Action.h"
+#include "input/actions/ActionIDs.h"
 #include "input/actions/ActionTranslator.h"
 #include "interfaces/builtins/Builtins.h"
-#include "threads/SingleLock.h"
+#include "settings/Settings.h"
+#include "settings/SettingsComponent.h"
 #include "utils/SystemInfo.h"
 #include "utils/log.h"
 
 #include <cassert>
 #include <map>
+#include <mutex>
 #include <queue>
 
+using namespace KODI;
 using namespace EVENTSERVER;
 using namespace EVENTPACKET;
 using namespace EVENTCLIENT;
@@ -41,7 +44,6 @@ std::unique_ptr<CEventServer> CEventServer::m_pInstance;
 CEventServer::CEventServer() : CThread("EventServer")
 {
   m_bStop         = false;
-  m_bRunning      = false;
   m_bRefreshSettings = false;
 
   // default timeout in ms for receiving a single packet
@@ -63,7 +65,7 @@ CEventServer* CEventServer::GetInstance()
 
 void CEventServer::StartServer()
 {
-  CSingleLock lock(m_critSection);
+  std::unique_lock lock(m_critSection);
   if (m_bRunning)
     return;
 
@@ -94,14 +96,14 @@ void CEventServer::Cleanup()
   if (m_pSocket)
     m_pSocket->Close();
 
-  CSingleLock lock(m_critSection);
+  std::unique_lock lock(m_critSection);
 
   m_clients.clear();
 }
 
 int CEventServer::GetNumberOfClients()
 {
-  CSingleLock lock(m_critSection);
+  std::unique_lock lock(m_critSection);
   return m_clients.size();
 }
 
@@ -149,12 +151,10 @@ void CEventServer::Run()
   }
 
   // publish service
-  std::vector<std::pair<std::string, std::string> > txt;
-  CZeroconf::GetInstance()->PublishService("servers.eventserver",
-                               "_xbmc-events._udp",
-                               CSysInfo::GetDeviceName(),
-                               m_iPort,
-                               txt);
+  std::vector<std::pair<std::string, std::string>> txt;
+  CZeroconf::GetInstance()->PublishService("servers.eventserver", "_xbmc-events._udp",
+                                           CSysInfo::GetDeviceName() + " eventserver", m_iPort,
+                                           txt);
 
   // add our socket to the 'select' listener
   listener.AddSocket(m_pSocket.get());
@@ -219,7 +219,7 @@ void CEventServer::ProcessPacket(CAddress& addr, int pSize)
   if (!clientToken)
     clientToken = addr.ULong(); // use IP if packet doesn't have a token
 
-  CSingleLock lock(m_critSection);
+  std::unique_lock lock(m_critSection);
 
   // first check if we have a client for this address
   auto iter = m_clients.find(clientToken);
@@ -247,7 +247,7 @@ void CEventServer::ProcessPacket(CAddress& addr, int pSize)
 
 void CEventServer::RefreshClients()
 {
-  CSingleLock lock(m_critSection);
+  std::unique_lock lock(m_critSection);
   auto iter = m_clients.begin();
 
   while ( iter != m_clients.end() )
@@ -273,7 +273,7 @@ void CEventServer::RefreshClients()
 
 void CEventServer::ProcessEvents()
 {
-  CSingleLock lock(m_critSection);
+  std::unique_lock lock(m_critSection);
   auto iter = m_clients.begin();
 
   while (iter != m_clients.end())
@@ -285,7 +285,7 @@ void CEventServer::ProcessEvents()
 
 bool CEventServer::ExecuteNextAction()
 {
-  CSingleLock lock(m_critSection);
+  std::unique_lock lock(m_critSection);
 
   CEventAction actionEvent;
   auto iter = m_clients.begin();
@@ -295,7 +295,7 @@ bool CEventServer::ExecuteNextAction()
     if (iter->second->GetNextAction(actionEvent))
     {
       // Leave critical section before processing action
-      lock.Leave();
+      lock.unlock();
       switch(actionEvent.actionType)
       {
       case AT_EXEC_BUILTIN:
@@ -305,7 +305,7 @@ bool CEventServer::ExecuteNextAction()
       case AT_BUTTON:
         {
           unsigned int actionID;
-          CActionTranslator::TranslateString(actionEvent.actionName, actionID);
+          ACTION::CActionTranslator::TranslateString(actionEvent.actionName, actionID);
           CAction action(actionID, 1.0f, 0.0f, actionEvent.actionName);
           CGUIComponent* gui = CServiceBroker::GetGUI();
           if (gui)
@@ -325,7 +325,7 @@ bool CEventServer::ExecuteNextAction()
 
 unsigned int CEventServer::GetButtonCode(std::string& strMapName, bool& isAxis, float& fAmount, bool &isJoystick)
 {
-  CSingleLock lock(m_critSection);
+  std::unique_lock lock(m_critSection);
   auto iter = m_clients.begin();
   unsigned int bcode = 0;
 
@@ -341,7 +341,7 @@ unsigned int CEventServer::GetButtonCode(std::string& strMapName, bool& isAxis, 
 
 bool CEventServer::GetMousePos(float &x, float &y)
 {
-  CSingleLock lock(m_critSection);
+  std::unique_lock lock(m_critSection);
   auto iter = m_clients.begin();
 
   while (iter != m_clients.end())

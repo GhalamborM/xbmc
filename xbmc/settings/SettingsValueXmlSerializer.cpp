@@ -20,17 +20,17 @@ static constexpr char SETTINGS_XML_ROOT[] = "settings";
 std::string CSettingsValueXmlSerializer::SerializeValues(
   const CSettingsManager* settingsManager) const
 {
-  if (settingsManager == nullptr)
+  if (!settingsManager)
     return "";
 
   CXBMCTinyXML xmlDoc;
   TiXmlElement rootElement(SETTINGS_XML_ROOT);
   rootElement.SetAttribute(SETTING_XML_ROOT_VERSION, settingsManager->GetVersion());
   TiXmlNode* xmlRoot = xmlDoc.InsertEndChild(rootElement);
-  if (xmlRoot == nullptr)
+  if (!xmlRoot)
     return "";
 
-  const auto sections = settingsManager->GetSections();
+  const SettingSectionList sections = settingsManager->GetSections();
   for (const auto& section : sections)
     SerializeSection(xmlRoot, section);
 
@@ -43,10 +43,10 @@ std::string CSettingsValueXmlSerializer::SerializeValues(
 void CSettingsValueXmlSerializer::SerializeSection(
     TiXmlNode* parent, const std::shared_ptr<CSettingSection>& section) const
 {
-  if (section == nullptr)
+  if (!section)
     return;
 
-  const auto categories = section->GetCategories();
+  const SettingCategoryList& categories = section->GetCategories();
   for (const auto& category : categories)
     SerializeCategory(parent, category);
 }
@@ -54,10 +54,10 @@ void CSettingsValueXmlSerializer::SerializeSection(
 void CSettingsValueXmlSerializer::SerializeCategory(
     TiXmlNode* parent, const std::shared_ptr<CSettingCategory>& category) const
 {
-  if (category == nullptr)
+  if (!category)
     return;
 
-  const auto groups = category->GetGroups();
+  const SettingGroupList& groups = category->GetGroups();
   for (const auto& group : groups)
     SerializeGroup(parent, group);
 }
@@ -65,23 +65,23 @@ void CSettingsValueXmlSerializer::SerializeCategory(
 void CSettingsValueXmlSerializer::SerializeGroup(TiXmlNode* parent,
                                                  const std::shared_ptr<CSettingGroup>& group) const
 {
-  if (group == nullptr)
+  if (!group)
     return;
 
-  const auto settings = group->GetSettings();
+  const SettingList& settings = group->GetSettings();
   for (const auto& setting : settings)
     SerializeSetting(parent, setting);
 }
 
-void CSettingsValueXmlSerializer::SerializeSetting(TiXmlNode* parent,
-                                                   const std::shared_ptr<CSetting>& setting) const
+bool CSettingsValueXmlSerializer::SerializeSetting(TiXmlNode* parent,
+                                                   const std::shared_ptr<CSetting>& setting)
 {
-  if (setting == nullptr)
-    return;
+  if (!setting)
+    return true;
 
   // ignore references and action settings (which don't have a value)
   if (setting->IsReference() || setting->GetType() == SettingType::Action)
-    return;
+    return true;
 
   TiXmlElement settingElement(SETTING_XML_ELM_SETTING);
   settingElement.SetAttribute(SETTING_XML_ATTR_ID, setting->GetId());
@@ -92,10 +92,13 @@ void CSettingsValueXmlSerializer::SerializeSetting(TiXmlNode* parent,
 
   // add the value
   TiXmlText value(setting->ToString());
-  settingElement.InsertEndChild(value);
 
-  if (parent->InsertEndChild(settingElement) == nullptr)
-    CLog::Log(LOGWARNING,
-      "CSettingsValueXmlSerializer: unable to write <" SETTING_XML_ELM_SETTING " id=\"{}\"> tag",
-      setting->GetId());
+  if (settingElement.InsertEndChild(value) == nullptr ||
+      parent->InsertEndChild(settingElement) == nullptr)
+  {
+    CLog::Log(LOGWARNING, "CSettingsValueXmlSerializer: unable to write <{} id=\"{}\"> tag",
+              SETTING_XML_ELM_SETTING, setting->GetId());
+    return false;
+  }
+  return true;
 }

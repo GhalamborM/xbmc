@@ -10,6 +10,8 @@
 
 #include "guilib/GUIWindow.h"
 
+#include <map>
+#include <utility>
 #include <vector>
 
 class CGUIWindowSettingsScreenCalibration : public CGUIWindow
@@ -18,21 +20,25 @@ public:
   CGUIWindowSettingsScreenCalibration(void);
   ~CGUIWindowSettingsScreenCalibration(void) override;
   bool OnMessage(CGUIMessage& message) override;
-  bool OnAction(const CAction &action) override;
-  void DoProcess(unsigned int currentTime, CDirtyRegionList &dirtyregions) override;
+  bool OnAction(const CAction& action) override;
+  void DoProcess(unsigned int currentTime, CDirtyRegionList& dirtyregions) override;
   void FrameMove() override;
   void DoRender() override;
-  void AllocResources(bool forceLoad = false) override;
-  void FreeResources(bool forceUnLoad = false) override;
 
 protected:
   unsigned int FindCurrentResolution();
   void NextControl();
   void ResetControls();
   void EnableControl(int iControl);
-  void UpdateFromControl(int iControl);
-  unsigned int m_iCurRes;
+  bool UpdateFromControl(int iControl);
+  void ResetCalibration();
+
+private:
+  unsigned int m_iCurRes{0};
   std::vector<RESOLUTION> m_Res;
-  int m_iControl;
-  float m_fPixelRatioBoxHeight;
+  int m_iControl{0};
+  std::map<int, std::pair<float, float>> m_controlsSize;
+  int m_subtitlesHalfSpace{0};
+  int m_subtitleVerticalMargin{0};
+  bool m_isSubtitleBarEnabled{false};
 };

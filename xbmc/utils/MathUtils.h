@@ -8,10 +8,11 @@
 
 #pragma once
 
-#include <stdint.h>
 #include <assert.h>
 #include <climits>
 #include <cmath>
+#include <stdint.h>
+#include <type_traits>
 
 #if defined(HAVE_SSE2) && defined(__SSE2__)
 #include <emmintrin.h>
@@ -26,7 +27,9 @@
     defined(__alpha__) || \
     defined(__arc__) || \
     defined(__arm__) || \
+    defined(__loongarch__) || \
     defined(_M_ARM) || \
+    defined(_M_ARM64) || \
     defined(__mips__) || \
     defined(__or1k__) || \
     defined(__powerpc__) || \
@@ -35,7 +38,8 @@
     defined(__SH4__) || \
     defined(__s390x__) || \
     defined(__sparc__) || \
-    defined(__xtensa__)
+    defined(__xtensa__) || \
+    defined(__wasm__)
 #define DISABLE_MATHUTILS_ASM_ROUND_INT
 #endif
 // clang-format on
@@ -150,6 +154,14 @@ namespace MathUtils
 #endif
   }
 
+  /*! \brief Round to nearest integer.
+   \sa truncate_int, test
+  */
+  inline int round_int(float x)
+  {
+    return round_int(static_cast<double>(x));
+  }
+
   /*! \brief Truncate to nearest integer.
    This routine does fast truncation to an integer.
    It should simply drop the fractional portion of the floating point number.
@@ -167,14 +179,6 @@ namespace MathUtils
   inline int64_t abs(int64_t a)
   {
     return (a < 0) ? -a : a;
-  }
-
-  inline unsigned bitcount(unsigned v)
-  {
-    unsigned c = 0;
-    for (c = 0; v; c++)
-      v &= v - 1; // clear the least significant bit set
-    return c;
   }
 
   inline void hack()
@@ -198,6 +202,22 @@ namespace MathUtils
   inline bool FloatEquals(FloatT f1, FloatT f2, FloatT maxDelta)
   {
     return (std::abs(f2 - f1) < maxDelta);
+  }
+
+  /*!
+   * \brief Round a floating point number to nearest multiple
+   * \param value The value to round
+   * \param multiple The multiple
+   * \return The rounded value
+   */
+  template<typename T, std::enable_if_t<std::is_floating_point<T>::value, bool> = true>
+  inline T RoundF(const T value, const T multiple)
+  {
+    if (multiple == 0)
+      return value;
+
+    return static_cast<T>(std::round(static_cast<double>(value) / static_cast<double>(multiple)) *
+                          static_cast<double>(multiple));
   }
 
 #if 0

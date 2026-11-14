@@ -8,17 +8,19 @@
 
 #include "DialogGameVolume.h"
 
-#include "Application.h"
 #include "ServiceBroker.h"
+#include "application/ApplicationComponents.h"
+#include "application/ApplicationVolumeHandling.h"
 #include "dialogs/GUIDialogVolumeBar.h"
 #include "guilib/GUIComponent.h"
 #include "guilib/GUIDialog.h"
 #include "guilib/GUIMessage.h"
 #include "guilib/GUISliderControl.h"
 #include "guilib/GUIWindowManager.h"
-#include "guilib/LocalizeStrings.h"
 #include "guilib/WindowIDs.h"
 #include "interfaces/AnnouncementManager.h"
+#include "resources/LocalizeStrings.h"
+#include "resources/ResourcesComponent.h"
 #include "utils/Variant.h"
 
 #include <cmath>
@@ -74,7 +76,7 @@ void CDialogGameVolume::OnInitWindow()
   if (dialogVolumeBar != nullptr)
     dialogVolumeBar->RegisterCallback(this);
 
-  CServiceBroker::GetAnnouncementManager()->AddAnnouncer(this);
+  CServiceBroker::GetAnnouncementManager()->AddAnnouncer(this, ANNOUNCEMENT::Application);
 }
 
 void CDialogGameVolume::OnDeinitWindow(int nextWindowID)
@@ -96,7 +98,9 @@ void CDialogGameVolume::OnSliderChange(void* data, CGUISliderControl* slider)
   if (std::fabs(volumePercent - m_volumePercent) > 0.1f)
   {
     m_volumePercent = volumePercent;
-    g_application.SetVolume(volumePercent, true);
+    auto& components = CServiceBroker::GetAppComponents();
+    const auto appVolume = components.GetComponent<CApplicationVolumeHandling>();
+    appVolume->SetVolume(volumePercent, true);
   }
 }
 
@@ -110,7 +114,7 @@ void CDialogGameVolume::Announce(ANNOUNCEMENT::AnnouncementFlag flag,
                                  const std::string& message,
                                  const CVariant& data)
 {
-  if (flag == ANNOUNCEMENT::Application && message == "OnVolumeChanged")
+  if (message == "OnVolumeChanged")
   {
     const float volumePercent = static_cast<float>(data["volume"].asDouble());
 
@@ -135,10 +139,12 @@ void CDialogGameVolume::OnStateChanged()
 
 float CDialogGameVolume::GetVolumePercent() const
 {
-  return g_application.GetVolumePercent();
+  const auto& components = CServiceBroker::GetAppComponents();
+  const auto appVolume = components.GetComponent<CApplicationVolumeHandling>();
+  return appVolume->GetVolumePercent();
 }
 
 std::string CDialogGameVolume::GetLabel()
 {
-  return g_localizeStrings.Get(13376); // "Volume"
+  return CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(13376); // "Volume"
 }

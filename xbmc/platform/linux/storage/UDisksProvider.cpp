@@ -8,7 +8,8 @@
 #include "UDisksProvider.h"
 
 #include "ServiceBroker.h"
-#include "guilib/LocalizeStrings.h"
+#include "resources/LocalizeStrings.h"
+#include "resources/ResourcesComponent.h"
 #include "settings/AdvancedSettings.h"
 #include "settings/SettingsComponent.h"
 #include "utils/StringUtils.h"
@@ -48,6 +49,8 @@ void CUDiskDevice::Update()
     m_Label.clear();
     m_FileSystem.clear();
   }
+
+  m_DeviceFile = properties["DeviceFile"].asString();
 
   m_isMounted   = properties["DeviceIsMounted"].asBoolean();
   if (m_isMounted && !properties["DeviceMountPaths"].empty())
@@ -97,7 +100,7 @@ bool CUDiskDevice::Mount()
     return m_isMounted;
   }
   else
-    CLog::Log(LOGDEBUG, "UDisks: Is not able to mount {}", toString());
+    CLog::Log(LOGDEBUG, "UDisks: Is not able to mount {}", ToString());
 
   return false;
 }
@@ -118,41 +121,77 @@ bool CUDiskDevice::UnMount()
     return !m_isMounted;
   }
   else
-    CLog::Log(LOGDEBUG, "UDisks: Is not able to unmount {}", toString());
+    CLog::Log(LOGDEBUG, "UDisks: Is not able to unmount {}", ToString());
 
   return false;
 }
 
-CMediaSource CUDiskDevice::ToMediaShare()
+CMediaSource CUDiskDevice::ToMediaShare() const
 {
   CMediaSource source;
   source.strPath = m_MountPath;
+  source.strDevicePath = m_DeviceFile;
   if (m_Label.empty())
   {
     std::string strSize = StringUtils::SizeToString(m_PartitionSize);
-    source.strName = StringUtils::Format("{} {}", strSize, g_localizeStrings.Get(155));
+    source.strName = StringUtils::Format(
+        "{} {}", strSize, CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(155));
   }
   else
     source.strName = m_Label;
   if (m_isOptical)
-    source.m_iDriveType = CMediaSource::SOURCE_TYPE_DVD;
+    source.m_iDriveType = SourceType::OPTICAL_DISC;
   else if (m_isSystemInternal)
-    source.m_iDriveType = CMediaSource::SOURCE_TYPE_LOCAL;
+    source.m_iDriveType = SourceType::LOCAL;
   else
-    source.m_iDriveType = CMediaSource::SOURCE_TYPE_REMOVABLE;
+    source.m_iDriveType = SourceType::REMOVABLE;
   source.m_ignore = true;
   return source;
 }
 
-bool CUDiskDevice::IsApproved()
+bool CUDiskDevice::IsApproved() const
 {
-  return (m_isFileSystem && m_isMounted && m_UDI.length() > 0 && (m_FileSystem.length() > 0 && m_FileSystem != "swap")
-      && m_MountPath != "/" && m_MountPath != "/boot") || m_isOptical;
+  return (m_isFileSystem && m_isMounted && !m_UDI.empty() &&
+          (!m_FileSystem.empty() && m_FileSystem != "swap") && m_MountPath != "/" &&
+          m_MountPath != "/boot") ||
+         m_isOptical;
+}
+
+bool CUDiskDevice::IsOptical() const
+{
+  return m_isOptical;
+}
+
+MEDIA_DETECT::STORAGE::Type CUDiskDevice::GetStorageType() const
+{
+  if (IsOptical())
+    return MEDIA_DETECT::STORAGE::Type::OPTICAL;
+
+  return MEDIA_DETECT::STORAGE::Type::UNKNOWN;
+}
+
+bool CUDiskDevice::IsMounted() const
+{
+  return m_isMounted;
+}
+
+bool CUDiskDevice::IsSystemInternal() const
+{
+  return m_isSystemInternal;
+}
+
+MEDIA_DETECT::STORAGE::StorageDevice CUDiskDevice::ToStorageDevice() const
+{
+  MEDIA_DETECT::STORAGE::StorageDevice device;
+  device.label = GetDisplayName();
+  device.path = GetMountPoint();
+  device.type = GetStorageType();
+  return device;
 }
 
 #define BOOL2SZ(b) ((b) ? "true" : "false")
 
-std::string CUDiskDevice::toString()
+std::string CUDiskDevice::ToString() const
 {
   return StringUtils::Format("DeviceUDI {}: IsFileSystem {} HasFileSystem {} "
                              "IsSystemInternal {} IsMounted {} IsRemovable {} IsPartition {} "
@@ -212,7 +251,7 @@ bool CUDisksProvider::Eject(const std::string& mountpath)
   for (auto& itr : m_AvailableDevices)
   {
     CUDiskDevice* device = itr.second;
-    if (device->m_MountPath == path)
+    if (device->GetMountPoint() == path)
       return device->UnMount();
   }
 
@@ -270,16 +309,21 @@ void CUDisksProvider::DeviceAdded(const char *object, IStorageEventsCallback *ca
     device = new CUDiskDevice(object);
   m_AvailableDevices[object] = device;
 
-  if (CServiceBroker::GetSettingsComponent()->GetAdvancedSettings()->m_handleMounting)
-    device->Mount();
-
-  CLog::Log(LOGDEBUG, LOGDBUS, "UDisks: DeviceAdded - {}", device->toString());
-
-  if (device->m_isMounted && device->IsApproved())
+  // optical drives should be always mounted by default unless explicitly disabled by the user
+  if (CServiceBroker::GetSettingsComponent()->GetAdvancedSettings()->m_handleMounting ||
+      (device->IsOptical() &&
+       CServiceBroker::GetSettingsComponent()->GetAdvancedSettings()->m_autoMountOpticalMedia))
   {
-    CLog::Log(LOGINFO, "UDisks: Added {}", device->m_MountPath);
+    device->Mount();
+  }
+
+  CLog::Log(LOGDEBUG, LOGDBUS, "UDisks: DeviceAdded - {}", device->ToString());
+
+  if (device->IsMounted() && device->IsApproved())
+  {
+    CLog::Log(LOGINFO, "UDisks: Added {}", device->GetMountPoint());
     if (callback)
-      callback->OnStorageAdded(device->m_Label, device->m_MountPath);
+      callback->OnStorageAdded(device->ToStorageDevice());
   }
 }
 
@@ -290,8 +334,8 @@ void CUDisksProvider::DeviceRemoved(const char *object, IStorageEventsCallback *
   CUDiskDevice *device = m_AvailableDevices[object];
   if (device)
   {
-    if (device->m_isMounted && callback)
-      callback->OnStorageUnsafelyRemoved(device->m_Label);
+    if (device->IsMounted() && callback)
+      callback->OnStorageUnsafelyRemoved(device->ToStorageDevice());
 
     delete m_AvailableDevices[object];
     m_AvailableDevices.erase(object);
@@ -310,19 +354,25 @@ void CUDisksProvider::DeviceChanged(const char *object, IStorageEventsCallback *
   }
   else
   {
-    bool mounted = device->m_isMounted;
-    /* make sure to not silently remount ejected usb thumb drives
-       that user wants to eject, but make sure to mount blurays */
-    if (!mounted && CServiceBroker::GetSettingsComponent()->GetAdvancedSettings()->m_handleMounting && device->m_isOptical)
-      device->Mount();
+    bool mounted = device->IsMounted();
+    // make sure to not silently remount ejected usb thumb drives that user wants to eject
+    // optical drives should be always mounted by default unless explicitly disabled by the user
+    const auto advancedSettings = CServiceBroker::GetSettingsComponent()->GetAdvancedSettings();
+    if (!mounted && device->IsOptical())
+    {
+      if (advancedSettings->m_handleMounting || advancedSettings->m_autoMountOpticalMedia)
+      {
+        device->Mount();
+      }
+    }
 
     device->Update();
-    if (!mounted && device->m_isMounted && callback)
-      callback->OnStorageAdded(device->m_Label, device->m_MountPath);
-    else if (mounted && !device->m_isMounted && callback)
-      callback->OnStorageSafelyRemoved(device->m_Label);
+    if (!mounted && device->IsMounted() && callback)
+      callback->OnStorageAdded(device->ToStorageDevice());
+    else if (mounted && !device->IsMounted() && callback)
+      callback->OnStorageSafelyRemoved(device->ToStorageDevice());
 
-    CLog::Log(LOGDEBUG, LOGDBUS, "UDisks: DeviceChanged - {}", device->toString());
+    CLog::Log(LOGDEBUG, LOGDBUS, "UDisks: DeviceChanged - {}", device->ToString());
   }
 }
 
@@ -348,12 +398,12 @@ std::vector<std::string> CUDisksProvider::EnumerateDisks()
   return devices;
 }
 
-void CUDisksProvider::GetDisks(VECSOURCES& devices, bool EnumerateRemovable)
+void CUDisksProvider::GetDisks(std::vector<CMediaSource>& devices, bool EnumerateRemovable)
 {
   for (auto& itr : m_AvailableDevices)
   {
     CUDiskDevice* device = itr.second;
-    if (device && device->IsApproved() && device->m_isSystemInternal != EnumerateRemovable)
+    if (device && device->IsApproved() && device->IsSystemInternal() != EnumerateRemovable)
       devices.push_back(device->ToMediaShare());
   }
 }

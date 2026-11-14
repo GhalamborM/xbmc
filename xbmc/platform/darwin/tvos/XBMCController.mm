@@ -8,11 +8,14 @@
 
 #import "platform/darwin/tvos/XBMCController.h"
 
-#include "AppParamParser.h"
-#include "Application.h"
 #include "CompileInfo.h"
 #include "FileItem.h"
 #include "ServiceBroker.h"
+#include "application/AppEnvironment.h"
+#include "application/AppParams.h"
+#include "application/Application.h"
+#include "application/ApplicationComponents.h"
+#include "application/ApplicationPowerHandling.h"
 #include "cores/AudioEngine/Interfaces/AE.h"
 #include "guilib/GUIComponent.h"
 #include "guilib/GUIWindowManager.h"
@@ -22,7 +25,6 @@
 #include "network/NetworkServices.h"
 #include "platform/xbmc.h"
 #include "powermanagement/PowerManager.h"
-#include "pvr/PVRManager.h"
 #include "settings/AdvancedSettings.h"
 #include "settings/SettingsComponent.h"
 #include "utils/log.h"
@@ -40,10 +42,15 @@
 #import "platform/darwin/tvos/input/LibInputTouch.h"
 #include "platform/darwin/tvos/powermanagement/TVOSPowerSyscall.h"
 
+#import <AVFoundation/AVSampleBufferDisplayLayer.h>
 #import <AVKit/AVDisplayManager.h>
-#import <AVKit/UIWindow.h>
+#if __TV_OS_VERSION_MAX_ALLOWED >= 170000
+#import <AVFoundation/AVSampleBufferVideoRenderer.h>
+#endif
+#include <cmath>
 
-using namespace KODI::MESSAGING;
+#import <AVKit/UIWindow.h>
+#include <unistd.h>
 
 XBMCController* g_xbmcController;
 
@@ -55,6 +62,9 @@ XBMCController* g_xbmcController;
 @synthesize displayManager;
 @synthesize inputHandler;
 @synthesize glView;
+@synthesize videoLayer;
+@synthesize videoLayerContainer;
+@synthesize videoLayerGeneration;
 
 #pragma mark - UIView Keyboard
 
@@ -71,7 +81,7 @@ XBMCController* g_xbmcController;
   [self becomeFirstResponder];
 }
 
-- (void)nativeKeyboardActive:(bool)active;
+- (void)nativeKeyboardActive:(bool)active
 {
   // Not used on tvOS
 }
@@ -158,6 +168,140 @@ XBMCController* g_xbmcController;
     return FALSE;
 }
 
+- (BOOL)enableVideoLayer
+{
+#if __TV_OS_VERSION_MAX_ALLOWED >= 170000
+  if (@available(tvOS 17.0, *))
+  {
+    __block BOOL enabled = NO;
+    void (^configure)(void) = ^{
+      if (self.videoLayer == nil)
+      {
+        self.videoLayerGeneration = self.videoLayerGeneration + 1;
+        self.videoLayerContainer = [CALayer layer];
+        self.videoLayerContainer.frame = self.view.bounds;
+        self.videoLayerContainer.masksToBounds = YES;
+        self.videoLayer = [AVSampleBufferDisplayLayer layer];
+        self.videoLayer.videoGravity = AVLayerVideoGravityResize;
+        self.videoLayer.frame = self.videoLayerContainer.bounds;
+        [self.videoLayerContainer addSublayer:self.videoLayer];
+        [self.view.layer insertSublayer:self.videoLayerContainer below:self.glView.layer];
+      }
+      self.glView.opaque = NO;
+      self.glView.layer.opaque = NO;
+      enabled = self.videoLayer != nil;
+    };
+    if ([NSThread isMainThread])
+      configure();
+    else
+      dispatch_sync(dispatch_get_main_queue(), configure);
+    return enabled;
+  }
+#endif
+  return NO;
+}
+
+- (void)disableVideoLayer
+{
+  void (^disable)(void) = ^{
+#if __TV_OS_VERSION_MAX_ALLOWED >= 170000
+    if (@available(tvOS 17.0, *))
+      [self.videoLayer.sampleBufferRenderer flush];
+#endif
+    self.videoLayerGeneration = self.videoLayerGeneration + 1;
+    [self.videoLayer removeFromSuperlayer];
+    self.videoLayer = nil;
+    [self.videoLayerContainer removeFromSuperlayer];
+    self.videoLayerContainer = nil;
+    self.glView.layer.opaque = YES;
+    self.glView.opaque = YES;
+  };
+  if ([NSThread isMainThread])
+    disable();
+  else
+    dispatch_sync(dispatch_get_main_queue(), disable);
+}
+
+- (void)setVideoLayerFrame:(CGRect)frame
+                sourceRect:(CGRect)sourceRect
+               orientation:(unsigned int)orientation
+{
+  const NSUInteger generation = self.videoLayerGeneration;
+  dispatch_async(dispatch_get_main_queue(), ^{
+    if (self.videoLayerGeneration == generation)
+    {
+      [CATransaction begin];
+      [CATransaction setDisableActions:YES];
+      self.videoLayerContainer.frame = frame;
+      self.videoLayerContainer.hidden = CGRectIsEmpty(frame) || CGRectIsEmpty(sourceRect);
+      if (self.videoLayerContainer.hidden)
+      {
+        [CATransaction commit];
+        return;
+      }
+
+      const CGAffineTransform rotation = CGAffineTransformMakeRotation(orientation * M_PI / 180.0);
+      const CGRect unit = CGRectApplyAffineTransform(CGRectMake(0, 0, 1, 1), rotation);
+      CGRect source = CGRectApplyAffineTransform(sourceRect, rotation);
+      source.origin.x -= unit.origin.x;
+      source.origin.y -= unit.origin.y;
+      const CGSize fullSize =
+          CGSizeMake(frame.size.width / source.size.width, frame.size.height / source.size.height);
+      const CGSize size = orientation == 90 || orientation == 270
+                              ? CGSizeMake(fullSize.height, fullSize.width)
+                              : fullSize;
+      self.videoLayer.bounds = CGRectMake(0.0, 0.0, size.width, size.height);
+      self.videoLayer.position = CGPointMake((0.5 - source.origin.x) * fullSize.width,
+                                             (0.5 - source.origin.y) * fullSize.height);
+      [self.videoLayer setAffineTransform:rotation];
+      [CATransaction commit];
+    }
+  });
+}
+
+- (void)enqueueVideoSampleBuffer:(CMSampleBufferRef)sampleBuffer
+{
+#if __TV_OS_VERSION_MAX_ALLOWED >= 170000
+  if (@available(tvOS 17.0, *))
+  {
+    const NSUInteger generation = self.videoLayerGeneration;
+    CFRetain(sampleBuffer);
+    dispatch_async(dispatch_get_main_queue(), ^{
+      AVSampleBufferVideoRenderer* renderer =
+          self.videoLayerGeneration == generation ? self.videoLayer.sampleBufferRenderer : nil;
+      if (renderer != nil)
+      {
+        if (renderer.status == AVQueuedSampleBufferRenderingStatusFailed)
+        {
+          CLog::Log(LOGWARNING, "XBMCController: video renderer failed (code {}), flushing",
+                    renderer.error.code);
+          [renderer flush];
+        }
+        if (renderer.readyForMoreMediaData)
+          [renderer enqueueSampleBuffer:sampleBuffer];
+      }
+      CFRelease(sampleBuffer);
+    });
+  }
+#endif
+}
+
+- (void)flushVideoLayer
+{
+#if __TV_OS_VERSION_MAX_ALLOWED >= 170000
+  if (@available(tvOS 17.0, *))
+  {
+    // Frames submitted before a seek must not arrive after the flush.
+    const NSUInteger generation = self.videoLayerGeneration + 1;
+    self.videoLayerGeneration = generation;
+    dispatch_async(dispatch_get_main_queue(), ^{
+      if (self.videoLayerGeneration == generation)
+        [self.videoLayer.sampleBufferRenderer flush];
+    });
+  }
+#endif
+}
+
 - (CGRect)fullscreenSubviewFrame
 {
     return UIScreen.mainScreen.bounds;
@@ -172,7 +316,7 @@ XBMCController* g_xbmcController;
 
 #pragma mark - BackgroundTask
 
-- (void)beginEnterBackgroundTask;
+- (void)beginEnterBackgroundTask
 {
   CLog::Log(LOGDEBUG, "{}", __PRETTY_FUNCTION__);
   // we have to alloc the background task for keep network working after screen lock and dark.
@@ -181,7 +325,7 @@ XBMCController* g_xbmcController;
         [[UIApplication sharedApplication] beginBackgroundTaskWithExpirationHandler:nil];
 }
 
-- (void)endEnterBackgroundTask;
+- (void)endEnterBackgroundTask
 {
   CLog::Log(LOGDEBUG, "{}", __PRETTY_FUNCTION__);
   if (m_enterBackgroundTaskId != UIBackgroundTaskInvalid)
@@ -289,13 +433,17 @@ XBMCController* g_xbmcController;
 - (void)pauseAnimation
 {
   m_pause = YES;
-  g_application.SetRenderGUI(false);
+  auto& components = CServiceBroker::GetAppComponents();
+  const auto appPower = components.GetComponent<CApplicationPowerHandling>();
+  appPower->SetRenderGUI(false);
 }
 
 - (void)resumeAnimation
 {
   m_pause = NO;
-  g_application.SetRenderGUI(true);
+  auto& components = CServiceBroker::GetAppComponents();
+  const auto appPower = components.GetComponent<CApplicationPowerHandling>();
+  appPower->SetRenderGUI(true);
 }
 
 - (void)startAnimation
@@ -320,7 +468,7 @@ XBMCController* g_xbmcController;
     m_animating = NO;
     if (!g_application.m_bStop)
     {
-      CApplicationMessenger::GetInstance().PostMsg(TMSG_QUIT);
+      CServiceBroker::GetAppMessenger()->PostMsg(TMSG_QUIT);
     }
 
     CAnnounceReceiver::GetInstance()->DeInitialize();
@@ -360,7 +508,9 @@ XBMCController* g_xbmcController;
       // start up with gui enabled
       status = KODI_Run(true);
       // we exited or died.
-      g_application.SetRenderGUI(false);
+      auto& components = CServiceBroker::GetAppComponents();
+      const auto appPower = components.GetComponent<CApplicationPowerHandling>();
+      appPower->SetRenderGUI(false);
     }
     catch (...)
     {
@@ -383,8 +533,9 @@ int KODI_Run(bool renderGUI)
 {
   int status = -1;
 
-  CAppParamParser appParamParser; //! @todo : proper params
-  if (!g_application.Create(appParamParser))
+  CAppEnvironment::SetUp(std::make_shared<CAppParams>()); //! @todo : proper params
+
+  if (!g_application.Create())
   {
     CLog::Log(LOGERROR, "ERROR: Unable to create application. Exiting");
     return status;
@@ -415,23 +566,29 @@ int KODI_Run(bool renderGUI)
   if (renderGUI && !g_application.CreateGUI())
   {
     CLog::Log(LOGERROR, "ERROR: Unable to create GUI. Exiting");
+    if (g_application.Stop(EXITCODE_QUIT))
+      g_application.Cleanup();
     return status;
   }
   if (!g_application.Initialize())
   {
     CLog::Log(LOGERROR, "ERROR: Unable to Initialize. Exiting");
+    if (g_application.Stop(EXITCODE_QUIT))
+      g_application.Cleanup();
     return status;
   }
 
   try
   {
-    status = g_application.Run(appParamParser);
+    status = g_application.Run();
   }
   catch (...)
   {
     CLog::Log(LOGERROR, "ERROR: Exception caught on main loop. Exiting");
     status = -1;
   }
+
+  CAppEnvironment::TearDown();
 
   return status;
 }
@@ -455,7 +612,7 @@ int KODI_Run(bool renderGUI)
 
 #pragma mark - remoteControlReceivedWithEvent forwarder
 //  remoteControlReceived requires subclassing of UIViewController
-//  Just implement as a forwarding class to CLibRemote so it doesnt need to subclass
+//  Just implement as a forwarding class to CLibRemote so it doesn't need to subclass
 - (void)remoteControlReceivedWithEvent:(UIEvent*)receivedEvent
 {
   if (receivedEvent.type == UIEventTypeRemoteControl)

@@ -13,6 +13,7 @@
 #include "windowing/gbm/WinSystemGbmEGLContext.h"
 
 #include <gbm.h>
+#include <unistd.h>
 
 using namespace KODI::WINDOWING::GBM;
 
@@ -29,7 +30,7 @@ void CGBMBufferObject::Register()
 CGBMBufferObject::CGBMBufferObject()
 {
   m_device =
-      static_cast<CWinSystemGbmEGLContext*>(CServiceBroker::GetWinSystem())->GetGBMDevice()->Get();
+      static_cast<CWinSystemGbmEGLContext*>(CServiceBroker::GetWinSystem())->GetGBMDevice().Get();
 }
 
 CGBMBufferObject::~CGBMBufferObject()

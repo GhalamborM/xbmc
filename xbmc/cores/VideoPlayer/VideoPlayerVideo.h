@@ -14,6 +14,7 @@
 #include "DVDOverlayContainer.h"
 #include "DVDStreamInfo.h"
 #include "IVideoPlayer.h"
+#include "LiveGeometryMonitor.h"
 #include "PTSTracker.h"
 #include "cores/VideoPlayer/VideoRenderers/RenderManager.h"
 #include "threads/Thread.h"
@@ -45,11 +46,12 @@ public:
 class CVideoPlayerVideo : public CThread, public IDVDStreamPlayerVideo
 {
 public:
-  CVideoPlayerVideo(CDVDClock* pClock
-                 ,CDVDOverlayContainer* pOverlayContainer
-                 ,CDVDMessageQueue& parent
-                 ,CRenderManager& renderManager,
-                 CProcessInfo &processInfo);
+  CVideoPlayerVideo(CDVDClock* pClock,
+                    CDVDOverlayContainer* pOverlayContainer,
+                    CDVDMessageQueue& parent,
+                    CRenderManager& renderManager,
+                    CProcessInfo& processInfo,
+                    double messageQueueTimeSize);
   ~CVideoPlayerVideo() override;
 
   bool OpenStream(CDVDStreamInfo hint) override;
@@ -72,6 +74,7 @@ public:
   std::string GetPlayerInfo() override;
   int GetVideoBitrate() override;
   void SetSpeed(int iSpeed) override;
+  std::string GetContentGeometryInfo() override { return m_liveGeometry.GetDebugInfo(); }
 
   // classes
   CDVDOverlayContainer* m_pOverlayContainer;
@@ -91,18 +94,20 @@ protected:
   void Process() override;
 
   bool ProcessDecoderOutput(double &frametime, double &pts);
+  void UpdatePlayerInfo();
   void SendMessageBack(const std::shared_ptr<CDVDMsg>& pMsg, int priority = 0);
   MsgQueueReturnCode GetMessage(std::shared_ptr<CDVDMsg>& pMsg,
-                                unsigned int iTimeoutInMilliSeconds,
+                                std::chrono::milliseconds timeout,
                                 int& priority);
 
-  EOutputState OutputPicture(const VideoPicture* src);
+  EOutputState OutputPicture(VideoPicture* src);
   void ProcessOverlays(const VideoPicture* pSource, double pts);
   void OpenStream(CDVDStreamInfo& hint, std::unique_ptr<CDVDVideoCodec> codec);
 
   void ResetFrameRateCalc();
   void CalcFrameRate();
   int CalcDropRequirement(double pts);
+  void ResetSeekDrop();
 
   double m_iSubtitleDelay;
 
@@ -118,15 +123,24 @@ protected:
   int m_iFrameRateLength;    //how many seconds we should measure the framerate
                              //this is increased exponentially from CVideoPlayerVideo::CalcFrameRate()
 
+  bool m_seenKeyFrame{false}; // demuxer reports keyframes for this stream
+  bool m_skipToKeyFrame{false}; // too late, packets are skipped until the next keyframe
+
   bool m_bFpsInvalid;        // needed to ignore fps (e.g. dvd stills)
   bool m_bRenderSubs;
   float m_fForcedAspectRatio;
   int m_speed;
-  std::atomic_bool m_stalled;
+  std::atomic_bool m_stalled = false;
   std::atomic_bool m_rewindStalled;
   bool m_paused;
   IDVDStreamPlayer::ESyncState m_syncState;
   std::atomic_bool m_bAbortOutput;
+
+  // Pictures of packets dropped to reach a seek target, see ProcessDecoderOutput()
+  bool m_awaitingFirstKeptPacket{true};
+  bool m_seekDropping{false};
+  double m_seekDropBeforePts{DVD_NOPTS_VALUE};
+  int m_seekDroppedPictures{0};
 
   BitstreamStats m_videoStats;
 
@@ -139,6 +153,7 @@ protected:
   CDroppingStats m_droppingStats;
   CRenderManager& m_renderManager;
   VideoPicture m_picture;
+  CLiveGeometryMonitor m_liveGeometry;
 
-  EOutputState m_outputSate;
+  EOutputState m_outputSate{OUTPUT_NORMAL};
 };

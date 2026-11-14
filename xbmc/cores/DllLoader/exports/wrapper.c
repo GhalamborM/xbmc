@@ -23,7 +23,8 @@
 #include <dirent.h>
 #include <dlfcn.h>
 
-#if defined(TARGET_DARWIN) || defined(TARGET_FREEBSD) || defined(TARGET_ANDROID)
+#if defined(TARGET_DARWIN) || defined(TARGET_FREEBSD) || defined(TARGET_ANDROID) || \
+    defined(TARGET_WASM)
 typedef off_t     __off_t;
 typedef int64_t   off64_t;
 typedef off64_t   __off64_t;
@@ -95,6 +96,7 @@ FILE* dll_popen(const char *command, const char *mode);
 void* dll_dlopen(const char *filename, int flag);
 int dll_setvbuf(FILE *stream, char *buf, int type, size_t size);
 struct mntent *dll_getmntent(FILE *fp);
+struct mntent* dll_getmntent_r(FILE* fp, struct mntent* result, char* buffer, int bufsize);
 
 void *__wrap_dlopen(const char *filename, int flag)
 {
@@ -387,6 +389,11 @@ int __wrap_stat(const char *path, struct _stat *buffer)
   return dll_stat(path, buffer);
 }
 
+int __wrap_stat64(const char* path, struct stat64* buffer)
+{
+  return dll_stat64(path, buffer);
+}
+
 int __wrap___xstat(int __ver, const char *__filename, struct stat *__stat_buf)
 {
   return dll_stat(__filename, __stat_buf);
@@ -432,6 +439,11 @@ int __wrap_fstat(int fd, struct _stat *buf)
   return dll_fstat(fd, buf);
 }
 
+int __wrap_fstat64(int fd, struct stat64* buf)
+{
+  return dll_fstat64(fd, buf);
+}
+
 int __wrap_setvbuf(FILE *stream, char *buf, int type, size_t size)
 {
    return dll_setvbuf(stream, buf, type, size);
@@ -441,6 +453,14 @@ struct mntent *__wrap_getmntent(FILE *fp)
 {
 #ifdef TARGET_POSIX
   return dll_getmntent(fp);
+#endif
+  return NULL;
+}
+
+struct mntent* __wrap_getmntent_r(FILE* fp, struct mntent* result, char* buffer, int bufsize)
+{
+#ifdef TARGET_POSIX
+  return dll_getmntent_r(fp, result, buffer, bufsize);
 #endif
   return NULL;
 }

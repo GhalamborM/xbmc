@@ -20,6 +20,7 @@ static const DWORD WINDOWED_STYLE = WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN;
 static const DWORD WINDOWED_EX_STYLE = NULL;
 static const DWORD FULLSCREEN_WINDOW_STYLE = WS_POPUP | WS_SYSMENU | WS_CLIPCHILDREN;
 static const DWORD FULLSCREEN_WINDOW_EX_STYLE = WS_EX_APPWINDOW;
+static const UINT ID_TIMER_HDR = 34U;
 
 /* Controls the way the window appears and behaves. */
 enum WINDOW_STATE
@@ -67,11 +68,8 @@ struct MONITOR_DETAILS
   std::wstring MonitorNameW;
   std::wstring CardNameW;
   std::wstring DeviceNameW;
+  std::wstring DeviceStringW; // GDI device, for migration of the monitor setting from Kodi < 21
 };
-
-#ifdef IsMinimized
-#undef IsMinimized
-#endif
 
 class CIRServerSuite;
 
@@ -86,6 +84,7 @@ public:
   bool DestroyWindowSystem() override;
   bool ResizeWindow(int newWidth, int newHeight, int newLeft, int newTop) override;
   void FinishWindowResize(int newWidth, int newHeight) override;
+  void ForceFullScreen(const RESOLUTION_INFO& resInfo) override;
   void UpdateResolutions() override;
   bool CenterWindow() override;
   virtual void NotifyAppFocusChange(bool bGaining) override;
@@ -97,11 +96,12 @@ public:
   bool Show(bool raise = true) override;
   std::string GetClipboardText() override;
   bool UseLimitedColor() override;
+  float GetGuiSdrPeakLuminance() const override;
+  bool HasSystemSdrPeakLuminance() override;
 
   // videosync
-  std::unique_ptr<CVideoSync> GetVideoSync(void *clock) override;
+  std::unique_ptr<CVideoSync> GetVideoSync(CVideoReferenceClock* clock) override;
 
-  bool WindowedMode() const { return m_state != WINDOW_STATE_FULLSCREEN; }
   bool SetFullScreen(bool fullScreen, RESOLUTION_INFO& res, bool blankOtherDisplays) override;
 
   std::vector<std::string> GetConnectedOutputs() override;
@@ -110,19 +110,12 @@ public:
   HWND GetHwnd() const { return m_hWnd; }
   bool IsAlteringWindow() const { return m_IsAlteringWindow; }
   void SetAlteringWindow(bool altering) { m_IsAlteringWindow = altering; }
+  bool IsTogglingHDR() const { return m_IsTogglingHDR; }
+  void SetTogglingHDR(bool toggling);
   virtual bool DPIChanged(WORD dpi, RECT windowRect) const;
   bool IsMinimized() const { return m_bMinimized; }
   void SetMinimized(bool minimized);
-
-  // touchscreen support
-  typedef BOOL(WINAPI *pGetGestureInfo)(HGESTUREINFO, PGESTUREINFO);
-  typedef BOOL(WINAPI *pSetGestureConfig)(HWND, DWORD, UINT, PGESTURECONFIG, UINT);
-  typedef BOOL(WINAPI *pCloseGestureInfoHandle)(HGESTUREINFO);
-  typedef BOOL(WINAPI *pEnableNonClientDpiScaling)(HWND);
-  pGetGestureInfo         PtrGetGestureInfo;
-  pSetGestureConfig       PtrSetGestureConfig;
-  pCloseGestureInfoHandle PtrCloseGestureInfoHandle;
-  pEnableNonClientDpiScaling PtrEnableNonClientDpiScaling;
+  void CacheSystemSdrPeakLuminance();
 
   void SetSizeMoveMode(bool mode) { m_bSizeMoveEnabled = mode; }
   bool IsInSizeMoveMode() const { return m_bSizeMoveEnabled; }
@@ -140,6 +133,7 @@ protected:
   virtual void ResizeDeviceBuffers() = 0;
   virtual bool IsStereoEnabled() = 0;
   virtual void OnScreenChange(HMONITOR monitor) = 0;
+  virtual bool CanUseExclusiveFullscreen() const { return true; }
   virtual void AdjustWindow(bool forceResize = false);
   void CenterCursor() const;
 
@@ -167,6 +161,17 @@ protected:
   void OnDisplayBack();
   void ResolutionChanged();
   static void SetForegroundWindowInternal(HWND hWnd);
+  static RECT GetVirtualScreenRect();
+  /*!
+   * Retrieve the work area of the screen (exclude task bar and other occlusions)
+   */
+  RECT GetScreenWorkArea(HMONITOR handle) const;
+  /*!
+   * Retrieve size of the title bar and borders
+   * Add to coordinates to convert client coordinates to window coordinates
+   * Substract from coordinates to convert from window coordinates to client coordinates
+   */
+  RECT GetNcAreaOffsets(DWORD dwStyle, BOOL bMenu, DWORD dwExStyle) const;
 
   HWND m_hWnd;
   HMONITOR m_hMonitor;
@@ -176,11 +181,12 @@ protected:
   HICON m_hIcon;
   bool m_ValidWindowedPosition;
   bool m_IsAlteringWindow;
+  bool m_IsTogglingHDR{false};
 
   CCriticalSection m_resourceSection;
   std::vector<IDispResource*> m_resources;
   bool m_delayDispReset;
-  XbmcThreads::EndTime m_dispResetTimer;
+  XbmcThreads::EndTime<> m_dispResetTimer;
 
   WINDOW_STATE m_state;                       // the state of the window
   WINDOW_FULLSCREEN_STATE m_fullscreenState;  // the state of the window when in fullscreen
@@ -195,6 +201,12 @@ protected:
   std::vector<MONITOR_DETAILS> m_displays;
 
   NOTIFYICONDATA m_trayIcon = {};
+
+  static const char* SETTING_WINDOW_TOP;
+  static const char* SETTING_WINDOW_LEFT;
+
+  bool m_validSystemSdrPeakLuminance{false};
+  float m_systemSdrPeakLuminance{.0f};
 };
 
 extern HWND g_hWnd;

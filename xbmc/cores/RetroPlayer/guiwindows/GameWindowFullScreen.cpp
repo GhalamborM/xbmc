@@ -8,15 +8,16 @@
 
 #include "GameWindowFullScreen.h"
 
-#include "Application.h" //! @todo Remove me
-#include "ApplicationPlayer.h" //! @todo Remove me
 #include "GUIInfoManager.h" //! @todo Remove me
 #include "GameWindowFullScreenText.h"
 #include "ServiceBroker.h"
+#include "application/ApplicationComponents.h"
+#include "application/ApplicationPlayer.h" //! @todo Remove me
 #include "cores/RetroPlayer/guibridge/GUIGameRenderManager.h"
 #include "cores/RetroPlayer/guibridge/GUIRenderHandle.h"
 #include "games/GameServices.h"
 #include "games/GameSettings.h"
+#include "games/dialogs/osd/DialogGameIndicators.h"
 #include "guilib/GUIComponent.h"
 #include "guilib/GUIControl.h"
 #include "guilib/GUIDialog.h"
@@ -25,6 +26,7 @@
 #include "input/actions/Action.h"
 #include "input/actions/ActionIDs.h"
 #include "windowing/GraphicContext.h" //! @todo Remove me
+#include "windowing/WinSystem.h"
 
 using namespace KODI;
 using namespace KODI::GUILIB;
@@ -175,12 +177,15 @@ void CGameWindowFullScreen::OnInitWindow()
   GUIINFO::CPlayerGUIInfo& guiInfo =
       CServiceBroker::GetGUI()->GetInfoManager().GetInfoProviders().GetPlayerInfoProvider();
   guiInfo.SetShowInfo(false);
-  guiInfo.SetDisplayAfterSeek(0); // Make sure display after seek is off
 
   // Switch resolution
   CServiceBroker::GetWinSystem()->GetGfxContext().SetFullScreenVideo(true); //! @todo
 
+  CServiceBroker::GetWinSystem()->SetLowLatencyPresentation(true);
+
   CGUIWindow::OnInitWindow();
+
+  GAME::CDialogGameIndicators::SetOverGame(true);
 
   // Show OSD help
   GAME::CGameSettings& gameSettings = CServiceBroker::GetGameServices().GameSettings();
@@ -191,7 +196,9 @@ void CGameWindowFullScreen::OnInitWindow()
     //! @todo We need to route this check through the GUI bridge. By adding the
     //        dependency to the application player here, we are prevented from
     //        having multiple players.
-    if (!g_application.GetAppPlayer().HasGameAgent())
+    const auto& components = CServiceBroker::GetAppComponents();
+    const auto appPlayer = components.GetComponent<CApplicationPlayer>();
+    if (!appPlayer->HasGameAgent())
     {
       gameSettings.SetShowOSDHelp(true);
       TriggerOSD();
@@ -204,7 +211,11 @@ void CGameWindowFullScreen::OnDeinitWindow(int nextWindowID)
   // Close all active modal dialogs
   CServiceBroker::GetGUI()->GetWindowManager().CloseInternalModalDialogs(true);
 
+  GAME::CDialogGameIndicators::SetOverGame(false);
+
   CGUIWindow::OnDeinitWindow(nextWindowID);
+
+  CServiceBroker::GetWinSystem()->SetLowLatencyPresentation(false);
 
   CServiceBroker::GetWinSystem()->GetGfxContext().SetFullScreenVideo(false); //! @todo
 }

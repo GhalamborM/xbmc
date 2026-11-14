@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2015-2018 Team Kodi
+ *  Copyright (C) 2015-2024 Team Kodi
  *  This file is part of Kodi - https://kodi.tv
  *
  *  SPDX-License-Identifier: GPL-2.0-or-later
@@ -8,8 +8,9 @@
 
 #include "JoystickMonitor.h"
 
-#include "Application.h"
 #include "ServiceBroker.h"
+#include "application/ApplicationComponents.h"
+#include "application/ApplicationPowerHandling.h"
 #include "games/controllers/ControllerIDs.h"
 #include "input/InputManager.h"
 
@@ -22,13 +23,15 @@ using namespace JOYSTICK;
 
 std::string CJoystickMonitor::ControllerID() const
 {
-  return DEFAULT_CONTROLLER_ID;
+  return GAME::DEFAULT_CONTROLLER_ID;
 }
 
 bool CJoystickMonitor::AcceptsInput(const FeatureName& feature) const
 {
   // Only accept input when screen saver is active
-  return g_application.IsInScreenSaver();
+  auto& components = CServiceBroker::GetAppComponents();
+  const auto appPower = components.GetComponent<CApplicationPowerHandling>();
+  return appPower->IsInScreenSaver();
 }
 
 bool CJoystickMonitor::OnButtonPress(const FeatureName& feature, bool bPressed)
@@ -98,7 +101,11 @@ bool CJoystickMonitor::OnThrottleMotion(const FeatureName& feature,
 
 bool CJoystickMonitor::ResetTimers(void)
 {
-  g_application.ResetSystemIdleTimer();
-  g_application.ResetScreenSaver();
-  return g_application.WakeUpScreenSaverAndDPMS();
+  auto& components = CServiceBroker::GetAppComponents();
+  const auto appPower = components.GetComponent<CApplicationPowerHandling>();
+  appPower->ResetSystemIdleTimer();
+  appPower->ResetScreenSaver();
+  return appPower->WakeUpScreenSaverAndDPMS();
+
+  return true;
 }

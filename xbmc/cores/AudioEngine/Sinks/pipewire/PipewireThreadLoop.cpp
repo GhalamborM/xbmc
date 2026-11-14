@@ -12,12 +12,8 @@
 
 #include <stdexcept>
 
-namespace AE
-{
-namespace SINK
-{
-namespace PIPEWIRE
-{
+using namespace KODI;
+using namespace PIPEWIRE;
 
 CPipewireThreadLoop::CPipewireThreadLoop()
 {
@@ -39,19 +35,22 @@ void CPipewireThreadLoop::Stop()
   pw_thread_loop_stop(m_mainloop.get());
 }
 
-void CPipewireThreadLoop::Lock()
+void CPipewireThreadLoop::Lock() const
 {
   pw_thread_loop_lock(m_mainloop.get());
 }
 
-void CPipewireThreadLoop::Unlock()
+void CPipewireThreadLoop::Unlock() const
 {
   pw_thread_loop_unlock(m_mainloop.get());
 }
 
-void CPipewireThreadLoop::Wait()
+int CPipewireThreadLoop::Wait(std::chrono::nanoseconds timeout)
 {
-  pw_thread_loop_wait(m_mainloop.get());
+  timespec abstime;
+  pw_thread_loop_get_time(m_mainloop.get(), &abstime, timeout.count());
+
+  return pw_thread_loop_timed_wait_full(m_mainloop.get(), &abstime);
 }
 
 void CPipewireThreadLoop::Signal(bool accept)
@@ -59,6 +58,7 @@ void CPipewireThreadLoop::Signal(bool accept)
   pw_thread_loop_signal(m_mainloop.get(), accept);
 }
 
-} // namespace PIPEWIRE
-} // namespace SINK
-} // namespace AE
+void CPipewireThreadLoop::Accept()
+{
+  pw_thread_loop_accept(m_mainloop.get());
+}

@@ -8,9 +8,11 @@
 
 #include "utils/MemUtils.h"
 
-#include "platform/android/activity/XBMCApp.h"
-
 #include <stdlib.h>
+
+#include <androidjni/ActivityManager.h>
+#include <androidjni/Context.h>
+#include <androidjni/jutils-details.hpp>
 
 namespace KODI
 {
@@ -35,16 +37,25 @@ void GetMemoryStatus(MemoryStatus* buffer)
   if (!buffer)
     return;
 
-  long availMem = 0;
-  long totalMem = 0;
+  auto activityManager = std::make_unique<CJNIActivityManager>(
+      CJNIContext::getSystemService(CJNIContext::ACTIVITY_SERVICE));
 
-  if (CXBMCApp::get()->GetMemoryInfo(availMem, totalMem))
+  if (activityManager)
   {
+    CJNIActivityManager::MemoryInfo info;
+    activityManager->getMemoryInfo(info);
+    if (xbmc_jnienv()->ExceptionCheck())
+    {
+      xbmc_jnienv()->ExceptionClear();
+      return;
+    }
+
     *buffer = {};
-    buffer->totalPhys = static_cast<unsigned long>(totalMem);
-    buffer->availPhys = static_cast<unsigned long>(availMem);
+    // The libandroidjni accessors return long, which truncates Java long values on 32-bit Android.
+    buffer->totalPhys = static_cast<uint64_t>(jni::get_field<jlong>(info.get_raw(), "totalMem"));
+    buffer->availPhys = static_cast<uint64_t>(jni::get_field<jlong>(info.get_raw(), "availMem"));
   }
 }
 
-}
-}
+} // namespace MEMORY
+} // namespace KODI

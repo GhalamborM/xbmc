@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2016-2018 Team Kodi
+ *  Copyright (C) 2016-2024 Team Kodi
  *  This file is part of Kodi - https://kodi.tv
  *
  *  SPDX-License-Identifier: GPL-2.0-or-later
@@ -16,7 +16,8 @@ using namespace KODI;
 using namespace JOYSTICK;
 
 CDriverReceiving::CDriverReceiving(IDriverReceiver* receiver, IButtonMap* buttonMap)
-  : m_receiver(receiver), m_buttonMap(buttonMap)
+  : m_receiver(receiver),
+    m_buttonMap(buttonMap)
 {
 }
 

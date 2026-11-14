@@ -8,9 +8,15 @@
 
 #include "TextureOperations.h"
 
+#include "FileItem.h"
+#include "FileItemList.h"
+#include "ServiceBroker.h"
 #include "TextureCache.h"
 #include "TextureDatabase.h"
+#include "imagefiles/ImageFileURL.h"
 #include "utils/Variant.h"
+
+#include <algorithm>
 
 using namespace JSONRPC;
 
@@ -67,13 +73,13 @@ JSONRPC_STATUS CTextureOperations::GetTextures(const std::string &method, ITrans
       for (const auto& i : fields)
         item->erase(i);
     }
-    if (fields.find("url") == fields.end())
+    if (!fields.contains("url"))
     {
       // wrap cached url to something retrieval from Files.GetFiles()
       for (CVariant::iterator_array item = items.begin_array(); item != items.end_array(); ++item)
       {
         CVariant &cachedUrl = (*item)["url"];
-        cachedUrl = CTextureUtils::GetWrappedImageURL(cachedUrl.asString());
+        cachedUrl = IMAGE_FILES::URLFromFile(cachedUrl.asString());
       }
     }
   }
@@ -86,7 +92,7 @@ JSONRPC_STATUS CTextureOperations::RemoveTexture(const std::string &method, ITra
 {
   int id = (int)parameterObject["textureid"].asInteger();
 
-  if (!CTextureCache::GetInstance().ClearCachedImage(id))
+  if (!CServiceBroker::GetTextureCache()->ClearCachedImage(id))
     return InvalidParams;
 
   return ACK;

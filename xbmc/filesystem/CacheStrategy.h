@@ -32,7 +32,7 @@ public:
   virtual size_t GetMaxWriteSize(const size_t& iRequestSize) = 0;
   virtual int WriteToCache(const char *pBuffer, size_t iSize) = 0;
   virtual int ReadFromCache(char *pBuffer, size_t iMaxSize) = 0;
-  virtual int64_t WaitForData(unsigned int iMinAvail, unsigned int iMillis) = 0;
+  virtual int64_t WaitForData(uint32_t iMinAvail, std::chrono::milliseconds timeout) = 0;
 
   virtual int64_t Seek(int64_t iFilePosition) = 0;
 
@@ -73,7 +73,7 @@ public:
   size_t GetMaxWriteSize(const size_t& iRequestSize) override;
   int WriteToCache(const char *pBuffer, size_t iSize) override;
   int ReadFromCache(char *pBuffer, size_t iMaxSize) override;
-  int64_t WaitForData(unsigned int iMinAvail, unsigned int iMillis) override;
+  int64_t WaitForData(uint32_t iMinAvail, std::chrono::milliseconds timeout) override;
 
   int64_t Seek(int64_t iFilePosition) override;
   bool Reset(int64_t iSourcePosition) override;
@@ -93,9 +93,9 @@ protected:
   IFile*   m_cacheFileRead;
   IFile*   m_cacheFileWrite;
   CEvent*  m_hDataAvailEvent;
-  volatile int64_t m_nStartPosition = 0;
-  volatile int64_t m_nWritePosition = 0;
-  volatile int64_t m_nReadPosition = 0;
+  int64_t m_nStartPosition = 0;
+  int64_t m_nWritePosition = 0;
+  int64_t m_nReadPosition = 0;
 };
 
 class CDoubleCache : public CCacheStrategy{
@@ -109,7 +109,7 @@ public:
   size_t GetMaxWriteSize(const size_t& iRequestSize) override;
   int WriteToCache(const char *pBuffer, size_t iSize) override;
   int ReadFromCache(char *pBuffer, size_t iMaxSize) override;
-  int64_t WaitForData(unsigned int iMinAvail, unsigned int iMillis) override;
+  int64_t WaitForData(uint32_t iMinAvail, std::chrono::milliseconds timeout) override;
 
   int64_t Seek(int64_t iFilePosition) override;
   bool Reset(int64_t iSourcePosition) override;

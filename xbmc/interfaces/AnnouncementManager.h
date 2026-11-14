@@ -8,16 +8,18 @@
 
 #pragma once
 
-#include "FileItem.h"
 #include "IAnnouncer.h"
+#include "threads/Condition.h"
 #include "threads/CriticalSection.h"
 #include "threads/Event.h"
 #include "threads/Thread.h"
 #include "utils/Variant.h"
 
 #include <list>
-#include <vector>
+#include <memory>
+#include <unordered_map>
 
+class CFileItem;
 class CVariant;
 
 namespace ANNOUNCEMENT
@@ -32,6 +34,7 @@ namespace ANNOUNCEMENT
     void Deinitialize();
 
     void AddAnnouncer(IAnnouncer *listener);
+    void AddAnnouncer(IAnnouncer* listener, int flagMask);
     void RemoveAnnouncer(IAnnouncer *listener);
 
     void Announce(AnnouncementFlag flag, const std::string& message);
@@ -65,7 +68,7 @@ namespace ANNOUNCEMENT
     void DoAnnounce(AnnouncementFlag flag,
                     const std::string& sender,
                     const std::string& message,
-                    const CFileItemPtr& item,
+                    const std::shared_ptr<CFileItem>& item,
                     const CVariant& data);
     void DoAnnounce(AnnouncementFlag flag,
                     const std::string& sender,
@@ -77,7 +80,7 @@ namespace ANNOUNCEMENT
       AnnouncementFlag flag;
       std::string sender;
       std::string message;
-      CFileItemPtr item;
+      std::shared_ptr<CFileItem> item;
       CVariant data;
     };
     std::list<CAnnounceData> m_announcementQueue;
@@ -89,6 +92,10 @@ namespace ANNOUNCEMENT
 
     CCriticalSection m_announcersCritSection;
     CCriticalSection m_queueCritSection;
-    std::vector<IAnnouncer *> m_announcers;
+    std::unordered_map<IAnnouncer*, int> m_announcers;
+
+    //! The announcer being called by DoAnnounce(), which runs without m_announcersCritSection.
+    IAnnouncer* m_announcing{nullptr};
+    XbmcThreads::ConditionVariable m_announced;
   };
 }

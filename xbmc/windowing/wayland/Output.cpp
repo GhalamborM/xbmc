@@ -10,6 +10,7 @@
 
 #include <cassert>
 #include <cmath>
+#include <mutex>
 #include <set>
 #include <stdexcept>
 #include <utility>
@@ -18,20 +19,23 @@ using namespace KODI::WINDOWING::WAYLAND;
 
 COutput::COutput(std::uint32_t globalName,
                  wayland::output_t const& output,
-                 std::function<void()> doneHandler)
-  : m_globalName{globalName}, m_output{output}, m_doneHandler{std::move(doneHandler)}
+                 std::function<void(bool)> doneHandler)
+  : m_globalName{globalName},
+    m_output{output},
+    m_doneHandler{std::move(doneHandler)}
 {
   assert(m_output);
 
   m_output.on_geometry() = [this](std::int32_t x, std::int32_t y, std::int32_t physWidth,
                                   std::int32_t physHeight, wayland::output_subpixel,
                                   std::string const& make, std::string const& model,
-                                  const wayland::output_transform&) {
-    CSingleLock lock(m_geometryCriticalSection);
+                                  const wayland::output_transform&)
+  {
+    std::unique_lock lock(m_geometryCriticalSection);
     m_position = {x, y};
-    // Some monitors report invalid (negative) values that would cause an exception
-    // with CSizeInt
-    if (physWidth < 0 || physHeight < 0)
+    // Some monitors report invalid (non-positive) values that would cause an exception
+    // with CSizeInt and/or lead to nonsensical DPI values.
+    if (physWidth <= 0 || physHeight <= 0)
       m_physicalSize = {};
     else
       m_physicalSize = {physWidth, physHeight};
@@ -44,7 +48,7 @@ COutput::COutput(std::uint32_t globalName,
     // element and boolean information whether the element was actually added
     // which we do not need
     auto modeIterator = m_modes.emplace(CSizeInt{width, height}, refresh).first;
-    CSingleLock lock(m_iteratorCriticalSection);
+    std::unique_lock lock(m_iteratorCriticalSection);
     // Remember current and preferred mode
     // Current mode is the last one that was sent with current flag set
     if (flags & wayland::output_mode::current)
@@ -55,15 +59,43 @@ COutput::COutput(std::uint32_t globalName,
     {
       m_preferredMode = modeIterator;
     }
+#ifdef TARGET_WEBOS
+    // on_done() is never executed on webOS 3.x
+    m_doneHandler(false);
+#endif
   };
   m_output.on_scale() = [this](std::int32_t scale)
   {
     m_scale = scale;
   };
 
+#if WAYLANDPP_VERSION_MAJOR >= 1
+  m_output.on_name() = [this](std::string const& name)
+  {
+    std::unique_lock lock(m_geometryCriticalSection);
+    m_labelChanged |= m_name != name;
+    m_name = name;
+  };
+
+  m_output.on_description() = [this](std::string const& description)
+  {
+    std::unique_lock lock(m_geometryCriticalSection);
+    m_labelChanged |= m_description != description;
+    m_description = description;
+  };
+#endif
+
   m_output.on_done() = [this]()
   {
-    m_doneHandler();
+    bool labelChanged;
+    {
+      std::unique_lock lock(m_geometryCriticalSection);
+      labelChanged = std::exchange(m_labelChanged, false);
+    }
+#ifdef TARGET_WEBOS
+    if (labelChanged)
+#endif
+      m_doneHandler(labelChanged);
   };
 }
 
@@ -75,11 +107,15 @@ COutput::~COutput() noexcept
   m_output.on_mode() = nullptr;
   m_output.on_done() = nullptr;
   m_output.on_scale() = nullptr;
+#if WAYLANDPP_VERSION_MAJOR >= 1
+  m_output.on_name() = nullptr;
+  m_output.on_description() = nullptr;
+#endif
 }
 
 const COutput::Mode& COutput::GetCurrentMode() const
 {
-  CSingleLock lock(m_iteratorCriticalSection);
+  std::unique_lock lock(m_iteratorCriticalSection);
   if (m_currentMode == m_modes.end())
   {
     throw std::runtime_error("Current mode not set");
@@ -89,7 +125,7 @@ const COutput::Mode& COutput::GetCurrentMode() const
 
 const COutput::Mode& COutput::GetPreferredMode() const
 {
-  CSingleLock lock(m_iteratorCriticalSection);
+  std::unique_lock lock(m_iteratorCriticalSection);
   if (m_preferredMode == m_modes.end())
   {
     throw std::runtime_error("Preferred mode not set");
@@ -99,7 +135,7 @@ const COutput::Mode& COutput::GetPreferredMode() const
 
 float COutput::GetPixelRatioForMode(const Mode& mode) const
 {
-  CSingleLock lock(m_geometryCriticalSection);
+  std::unique_lock lock(m_geometryCriticalSection);
   if (m_physicalSize.IsZero() || mode.size.IsZero())
   {
     return 1.0f;
@@ -116,7 +152,7 @@ float COutput::GetPixelRatioForMode(const Mode& mode) const
 
 float COutput::GetDpiForMode(const Mode& mode) const
 {
-  CSingleLock lock(m_geometryCriticalSection);
+  std::unique_lock lock(m_geometryCriticalSection);
   if (m_physicalSize.IsZero())
   {
     // We really have no idea, so use a "sane" default

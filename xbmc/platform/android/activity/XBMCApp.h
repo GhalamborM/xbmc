@@ -20,10 +20,11 @@
 #include "threads/Event.h"
 #include "utils/Geometry.h"
 
+#include <atomic>
 #include <map>
-#include <math.h>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <android/native_activity.h>
@@ -32,16 +33,13 @@
 #include <androidjni/BroadcastReceiver.h>
 #include <androidjni/SurfaceHolder.h>
 #include <androidjni/View.h>
-#include <pthread.h>
 
 // forward declares
-class CJNIWakeLock;
 class CAESinkAUDIOTRACK;
 class CVariant;
 class IInputDeviceCallbacks;
 class IInputDeviceEventHandler;
 class CVideoSyncAndroid;
-class CJNIActivityManager;
 
 typedef struct _JNIEnv JNIEnv;
 
@@ -59,35 +57,45 @@ struct androidPackage
   int icon;
 };
 
-class CActivityResultEvent : public CEvent
+class CNativeWindow
 {
 public:
-  explicit CActivityResultEvent(int requestcode)
-    : m_requestcode(requestcode), m_resultcode(0)
-  {}
-  int GetRequestCode() const { return m_requestcode; }
-  int GetResultCode() const { return m_resultcode; }
-  void SetResultCode(int resultcode) { m_resultcode = resultcode; }
-  CJNIIntent GetResultData() const { return m_resultdata; }
-  void SetResultData(const CJNIIntent &resultdata) { m_resultdata = resultdata; }
+  static std::shared_ptr<CNativeWindow> CreateFromSurface(CJNISurfaceHolder holder);
+  ~CNativeWindow();
 
-protected:
-  int m_requestcode;
-  CJNIIntent m_resultdata;
-  int m_resultcode;
+  bool SetBuffersGeometry(int width, int height, int format);
+  int32_t GetWidth() const;
+  int32_t GetHeight() const;
+
+  ANativeWindow* GetWindow() const { return m_window; }
+
+private:
+  explicit CNativeWindow(ANativeWindow* window);
+
+  CNativeWindow() = delete;
+  CNativeWindow(const CNativeWindow&) = delete;
+  CNativeWindow& operator=(const CNativeWindow&) = delete;
+
+  ANativeWindow* m_window{nullptr};
 };
 
-class CXBMCApp
-    : public IActivityHandler
-    , public CJNIMainActivity
-    , public CJNIBroadcastReceiver
-    , public ANNOUNCEMENT::IAnnouncer
-    , public CJNISurfaceHolderCallback
+class CXBMCApp : public IActivityHandler,
+                 public jni::CJNIMainActivity,
+                 public CJNIBroadcastReceiver,
+                 public ANNOUNCEMENT::IAnnouncer,
+                 public CJNISurfaceHolderCallback
 {
 public:
-  explicit CXBMCApp(ANativeActivity* nativeActivity, IInputHandler& inputhandler);
+  static CXBMCApp& Create(ANativeActivity* nativeActivity, IInputHandler& inputhandler)
+  {
+    m_appinstance.reset(new CXBMCApp(nativeActivity, inputhandler));
+    return *m_appinstance;
+  }
+  static CXBMCApp& Get() { return *m_appinstance; }
+  static void Destroy() { m_appinstance.reset(); }
+
+  CXBMCApp() = delete;
   ~CXBMCApp() override;
-  static CXBMCApp* get() { return m_xbmcappinstance; }
 
   // IAnnouncer IF
   void Announce(ANNOUNCEMENT::AnnouncementFlag flag,
@@ -115,7 +123,6 @@ public:
   jni::jhobject getDisplayListener() { return m_displayListener.get_raw(); }
 
   bool isValid() { return m_activity != NULL; }
-  const ANativeActivity *getActivity() const { return m_activity; }
 
   void onStart() override;
   void onResume() override;
@@ -136,37 +143,38 @@ public:
   void Initialize();
   void Deinitialize();
 
-  static ANativeWindow* GetNativeWindow(int timeout);
-  static int SetBuffersGeometry(int width, int height, int format);
+  bool Stop(int exitCode);
+  void Quit();
+
+  std::shared_ptr<CNativeWindow> GetNativeWindow(int timeout) const;
+
+  bool SetBuffersGeometry(int width, int height, int format);
   static int android_printf(const char *format, ...);
 
-  static int GetBatteryLevel();
-  static bool EnableWakeLock(bool on);
-  static bool HasFocus() { return m_hasFocus; }
-  static bool IsHeadsetPlugged();
-  static bool IsHDMIPlugged();
+  int GetBatteryLevel() const;
+  void KeepScreenOn(bool on);
+  bool HasFocus() const { return m_hasFocus; }
 
-  static bool StartActivity(const std::string &package, const std::string &intent = std::string(), const std::string &dataType = std::string(), const std::string &dataURI = std::string());
-  static std::vector <androidPackage> GetApplications();
+  static bool StartActivity(const std::string& package,
+                            const std::string& intent = std::string(),
+                            const std::string& dataType = std::string(),
+                            const std::string& dataURI = std::string(),
+                            const std::string& flags = std::string(),
+                            const std::string& extras = std::string(),
+                            const std::string& action = std::string(),
+                            const std::string& category = std::string(),
+                            const std::string& className = std::string());
+  std::vector<androidPackage> GetApplications() const;
 
-  /*!
-   * \brief If external storage is available, it returns the path for the external storage (for the specified type)
-   * \param path will contain the path of the external storage (for the specified type)
-   * \param type optional type. Possible values are "", "files", "music", "videos", "pictures", "photos, "downloads"
-   * \return true if external storage is available and a valid path has been stored in the path parameter
-   */
-  static bool GetExternalStorage(std::string &path, const std::string &type = "");
-  static bool GetStorageUsage(const std::string &path, std::string &usage);
   static int GetMaxSystemVolume();
   static float GetSystemVolume();
   static void SetSystemVolume(float percent);
 
-  static void SetRefreshRate(float rate);
-  static void SetDisplayMode(int mode, float rate);
-  static int GetDPI();
+  void SetDisplayMode(int mode, float rate);
+  int GetDPI() const;
+  void SetVideoLayoutBackgroundColor(const int color);
 
-  static CRect MapRenderToDroid(const CRect& srcRect);
-  static int WaitForActivityResult(const CJNIIntent &intent, int requestCode, CJNIIntent& result);
+  CRect MapRenderToDroid(const CRect& srcRect);
 
   // Playback callbacks
   void OnPlayBackStarted();
@@ -178,29 +186,25 @@ public:
   void UpdateSessionState();
 
   // input device methods
-  static void RegisterInputDeviceCallbacks(IInputDeviceCallbacks* handler);
-  static void UnregisterInputDeviceCallbacks();
+  void RegisterInputDeviceCallbacks(IInputDeviceCallbacks* handler);
+  void UnregisterInputDeviceCallbacks();
   static const CJNIViewInputDevice GetInputDevice(int deviceId);
   static std::vector<int> GetInputDeviceIds();
 
-  static void RegisterInputDeviceEventHandler(IInputDeviceEventHandler* handler);
-  static void UnregisterInputDeviceEventHandler();
-  static bool onInputDeviceEvent(const AInputEvent* event);
+  void RegisterInputDeviceEventHandler(IInputDeviceEventHandler* handler);
+  void UnregisterInputDeviceEventHandler();
+  bool onInputDeviceEvent(const AInputEvent* event);
 
-  static void InitFrameCallback(CVideoSyncAndroid *syncImpl);
-  static void DeinitFrameCallback();
+  void InitFrameCallback(CVideoSyncAndroid* syncImpl);
+  void DeinitFrameCallback();
 
   // Application slow ping
   void ProcessSlow();
 
-  static bool WaitVSync(unsigned int milliSeconds);
-  static int64_t GetNextFrameTime();
-  static float GetFrameLatencyMs();
+  bool WaitVSync(unsigned int milliSeconds);
+  int64_t GetNextFrameTime() const;
+  float GetFrameLatencyMs() const;
 
-  bool getVideosurfaceInUse();
-  void setVideosurfaceInUse(bool videosurfaceInUse);
-
-  bool GetMemoryInfo(long& availMem, long& totalMem);
 protected:
   // limit who can access Volume
   friend class CAESinkAUDIOTRACK;
@@ -208,62 +212,65 @@ protected:
   static int GetMaxSystemVolume(JNIEnv *env);
   bool AcquireAudioFocus();
   bool ReleaseAudioFocus();
-  static void RequestVisibleBehind(bool requested);
+  void RequestVisibleBehind(bool requested);
 
 private:
-  static CXBMCApp* m_xbmcappinstance;
-  CJNIXBMCAudioManagerOnAudioFocusChangeListener m_audioFocusListener;
-  CJNIXBMCDisplayManagerDisplayListener m_displayListener;
-  static std::unique_ptr<CJNIXBMCMainView> m_mainView;
+  static std::unique_ptr<CXBMCApp> m_appinstance;
+
+  CXBMCApp(ANativeActivity* nativeActivity, IInputHandler& inputhandler);
+
+  jni::CJNIXBMCAudioManagerOnAudioFocusChangeListener m_audioFocusListener;
+  jni::CJNIXBMCDisplayManagerDisplayListener m_displayListener;
+  std::unique_ptr<jni::CJNIXBMCMainView> m_mainView;
   std::unique_ptr<jni::CJNIXBMCMediaSession> m_mediaSession;
-  static bool HasLaunchIntent(const std::string &package);
   std::string GetFilenameFromIntent(const CJNIIntent &intent);
 
   void run();
   void stop();
   void SetupEnv();
-  static void SetRefreshRateCallback(CVariant *rate);
-  static void SetDisplayModeCallback(CVariant *mode);
-  static void RegisterDisplayListener(CVariant*);
+  static void SetDisplayModeCallback(void* modeVariant);
+  static void KeepScreenOnCallback(void* onVariant);
+  static void SetViewBackgroundColorCallback(void* mapVariant);
 
-  static ANativeActivity *m_activity;
+  static void RegisterDisplayListenerCallback(void*);
+  void UnregisterDisplayListener();
+
+  ANativeActivity* m_activity{nullptr};
   IInputHandler& m_inputHandler;
-  static CJNIWakeLock *m_wakeLock;
-  static int m_batteryLevel;
-  static bool m_hasFocus;
-  static bool m_headsetPlugged;
-  static bool m_hdmiPlugged;
-  static bool m_hdmiReportedState;
-  static bool m_hdmiSource;
-  static IInputDeviceCallbacks* m_inputDeviceCallbacks;
-  static IInputDeviceEventHandler* m_inputDeviceEventHandler;
-  static bool m_hasReqVisible;
-  bool m_videosurfaceInUse;
-  bool m_firstrun;
-  bool m_exiting;
-  bool m_bResumePlayback = false;
-  pthread_t m_thread;
-  static CCriticalSection m_applicationsMutex;
-  static CCriticalSection m_activityResultMutex;
-  static std::vector<androidPackage> m_applications;
-  static std::vector<CActivityResultEvent*> m_activityResultEvents;
+  int m_batteryLevel{0};
+  bool m_hasFocus{false};
+  bool m_headsetPlugged{false};
+  bool m_hdmiSource{false};
+  bool m_wakeUp{false};
+  bool m_aeReset{false};
+  bool m_hdmiPlugged{true};
+  bool m_mediaSessionUpdated{false};
+  IInputDeviceCallbacks* m_inputDeviceCallbacks{nullptr};
+  IInputDeviceEventHandler* m_inputDeviceEventHandler{nullptr};
+  bool m_hasReqVisible{false};
+  bool m_firstrun{true};
+  std::atomic<bool> m_exiting{false};
+  int m_exitCode{0};
+  bool m_bResumePlayback{false};
+  std::thread m_thread;
+  mutable CCriticalSection m_applicationsMutex;
+  mutable std::vector<androidPackage> m_applications;
 
-  static ANativeWindow* m_window;
+  std::shared_ptr<CNativeWindow> m_window;
 
-  static CVideoSyncAndroid* m_syncImpl;
-  static CEvent m_vsyncEvent;
-  static CEvent m_displayChangeEvent;
+  CVideoSyncAndroid* m_syncImpl{nullptr};
+  CEvent m_vsyncEvent;
+  CEvent m_displayChangeEvent;
 
-  std::unique_ptr<CJNIActivityManager> m_activityManager;
-
-  void XBMC_Pause(bool pause);
-  void XBMC_Stop();
   bool XBMC_DestroyDisplay();
   bool XBMC_SetupDisplay();
 
-  static uint32_t m_playback_state;
-  static int64_t m_frameTimeNanos;
-  static float m_refreshRate;
+  void OnSleep();
+  void OnWakeup();
+
+  uint32_t m_playback_state{0};
+  int64_t m_frameTimeNanos{0};
+  float m_refreshRate{0.0f};
 
 public:
   // CJNISurfaceHolderCallback interface

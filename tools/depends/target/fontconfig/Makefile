@@ -1,48 +1,47 @@
-include ../../Makefile.include
-DEPS= ../../Makefile.include 01-disable-test.patch lconv.patch fix-aarch64_atomics.patch Makefile
-
-# lib name, version
-LIBNAME=fontconfig
-VERSION=2.13.1
-SOURCE=$(LIBNAME)-$(VERSION)
-ARCHIVE=$(SOURCE).tar.bz2
+include ../../Makefile.include FONTCONFIG-VERSION ../../download-files.include
+DEPS = ../../Makefile.include FONTCONFIG-VERSION Makefile ../../download-files.include
 
 # configuration settings
-CONFIGURE=./configure --prefix=$(PREFIX) \
-  --disable-libxml2 --disable-docs --with-arch=$(PLATFORM) --disable-shared
+MESON_BUILD_TYPE=release
 
-ifeq ($(OS),android)
-  # Freetype with Harfbuzz support requires stdc++ lib linking
-  # Fontconfig uses clang and not clang++, therefore we need the explicit stdc++ link
-  export LDFLAGS+= -lstdc++
+ifeq ($(DEBUG_BUILD), yes)
+  MESON_BUILD_TYPE=debug
 endif
 
-LIBDYLIB=$(PLATFORM)/src/.libs/lib$(LIBNAME).a
+# configuration settings
+CONFIGURE = $(NATIVEPREFIX)/bin/python3 $(NATIVEPREFIX)/bin/meson \
+                --buildtype=$(MESON_BUILD_TYPE) \
+                --prefix=$(PREFIX) \
+                -Ddoc=disabled \
+                -Dtests=disabled \
+                -Dtools=disabled \
+                -Ddefault_library=static
+
+ifeq ($(CROSS_COMPILING), yes)
+  CONFIGURE += -Dcache-build=disabled \
+               --cross-file $(PREFIX)/share/cross-file.meson
+endif
+
+LIBDYLIB=$(PLATFORM)/build/src/$(BYPRODUCT)
 
 all: .installed-$(PLATFORM)
 
-$(TARBALLS_LOCATION)/$(ARCHIVE):
-	cd $(TARBALLS_LOCATION); $(RETRIEVE_TOOL) $(RETRIEVE_TOOL_FLAGS) $(BASE_URL)/$(ARCHIVE)
-
-$(PLATFORM): $(TARBALLS_LOCATION)/$(ARCHIVE) $(DEPS)
+.configured-$(PLATFORM): $(DEPS) | $(TARBALLS_LOCATION)/$(ARCHIVE).$(HASH_TYPE)
 	rm -rf $(PLATFORM)/*; mkdir -p $(PLATFORM)
 	cd $(PLATFORM); $(ARCHIVE_TOOL) $(ARCHIVE_TOOL_FLAGS) $(TARBALLS_LOCATION)/$(ARCHIVE)
-	cd $(PLATFORM); patch -p1 -i ../01-disable-test.patch
-	cd $(PLATFORM); patch -p1 -i ../lconv.patch
-	cd $(PLATFORM); patch -p1 -i ../fix-aarch64_atomics.patch
-	cd $(PLATFORM); $(AUTORECONF) -vif
-	cd $(PLATFORM); $(CONFIGURE)
+	cd $(PLATFORM); $(CONFIGURE) . build
+	touch $@
 
-$(LIBDYLIB): $(PLATFORM)
-	$(MAKE) -C $(PLATFORM)
+$(LIBDYLIB): .configured-$(PLATFORM)
+	cd $(PLATFORM)/build; $(NATIVEPREFIX)/bin/ninja -v
 
 .installed-$(PLATFORM): $(LIBDYLIB)
-	$(MAKE) -C $(PLATFORM) install
+	cd $(PLATFORM)/build; $(NATIVEPREFIX)/bin/ninja -v install
 	touch $@
 
 clean:
 	$(MAKE) -C $(PLATFORM) clean
-	rm -f .installed-$(PLATFORM)
+	rm -f .installed-$(PLATFORM) .configured-$(PLATFORM)
 
 distclean::
-	rm -rf $(PLATFORM) .installed-$(PLATFORM)
+	rm -rf $(PLATFORM) .installed-$(PLATFORM) .configured-$(PLATFORM)

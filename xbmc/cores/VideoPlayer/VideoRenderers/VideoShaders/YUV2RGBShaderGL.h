@@ -31,10 +31,15 @@ namespace GL
 class BaseYUV2RGBGLSLShader : public CGLSLShaderProgram
 {
 public:
-  BaseYUV2RGBGLSLShader(bool rect, EShaderFormat format, bool stretch,
-                        AVColorPrimaries dst, AVColorPrimaries src,
+  BaseYUV2RGBGLSLShader(bool rect,
+                        EShaderFormat format,
+                        bool stretch,
+                        AVColorPrimaries dst,
+                        AVColorPrimaries src,
                         bool toneMap,
-                        int toneMapMethod,
+                        ETONEMAPMETHOD toneMapMethod,
+                        AVColorTransferCharacteristic hueSatTransfer,
+                        bool gamma,
                         std::shared_ptr<GLSLOutput> output);
   ~BaseYUV2RGBGLSLShader() override;
 
@@ -45,11 +50,15 @@ public:
   void SetColParams(AVColorSpace colSpace, int bits, bool limited, int textureBits);
   void SetBlack(float black) { m_black = black; }
   void SetContrast(float contrast) { m_contrast = contrast; }
+  void SetHue(float hue) { m_hue = hue; }
+  void SetSaturation(float saturation) { m_saturation = saturation; }
+  void SetGamma(float exponent) { m_gammaExponent = exponent; }
   void SetNonLinStretch(float stretch) { m_stretch = stretch; }
-  void SetDisplayMetadata(bool hasDisplayMetadata, AVMasteringDisplayMetadata displayMetadata,
-                          bool hasLightMetadata, AVContentLightMetadata lightMetadata);
-  void SetToneMapParam(int method, float param);
-  float GetLuminanceValue() const;
+  void SetDisplayMetadata(bool hasDisplayMetadata,
+                          const AVMasteringDisplayMetadata& displayMetadata,
+                          bool hasLightMetadata,
+                          AVContentLightMetadata lightMetadata);
+  void SetToneMapParam(ETONEMAPMETHOD method, float param);
 
   void SetConvertFullColorRange(bool convertFullRange) { m_convertFullRange = convertFullRange; }
 
@@ -78,13 +87,17 @@ protected:
   bool m_hasLightMetadata = false;
   AVContentLightMetadata m_lightMetadata;
   bool m_toneMapping = false;
-  int m_toneMappingMethod = VS_TONEMAPMETHOD_REINHARD;
+  ETONEMAPMETHOD m_toneMappingMethod = VS_TONEMAPMETHOD_OFF;
   float m_toneMappingParam = 1.0;
+  AVColorTransferCharacteristic m_hueSatTransfer = AVCOL_TRC_UNSPECIFIED;
 
   bool m_colorConversion{false};
 
   float m_black;
   float m_contrast;
+  float m_hue;
+  float m_saturation;
+  float m_gammaExponent{1.0f};
   float m_stretch;
 
   const GLfloat *m_proj = nullptr;
@@ -109,6 +122,12 @@ protected:
   GLint m_hToneP1 = -1;
   GLint m_hCoefsDst = -1;
   GLint m_hLuminance = -1;
+  GLint m_hHsMat = -1;
+  GLint m_hHsCoefs = -1;
+  GLint m_hHsPeak = -1;
+  GLint m_hHsRange = -1;
+  GLint m_hGammaInv = -1;
+  GLint m_hGammaRange = -1;
 
   // vertex shader attribute handles
   GLint m_hVertex = -1;
@@ -126,10 +145,14 @@ public:
   YUV2RGBProgressiveShader(bool rect,
                            EShaderFormat format,
                            bool stretch,
-                           AVColorPrimaries dstPrimaries, AVColorPrimaries srcPrimaries,
+                           AVColorPrimaries dstPrimaries,
+                           AVColorPrimaries srcPrimaries,
                            bool toneMap,
-                           int toneMapMethod,
-                           std::shared_ptr<GLSLOutput> output);
+                           ETONEMAPMETHOD toneMapMethod,
+                           AVColorTransferCharacteristic hueSatTransfer,
+                           bool gamma,
+                           std::shared_ptr<GLSLOutput> output,
+                           bool gammaCorrection);
 };
 
 class YUV2RGBFilterShader4 : public BaseYUV2RGBGLSLShader
@@ -138,9 +161,12 @@ public:
   YUV2RGBFilterShader4(bool rect,
                        EShaderFormat format,
                        bool stretch,
-                       AVColorPrimaries dstPrimaries, AVColorPrimaries srcPrimaries,
+                       AVColorPrimaries dstPrimaries,
+                       AVColorPrimaries srcPrimaries,
                        bool toneMap,
-                       int toneMapMethod,
+                       ETONEMAPMETHOD toneMapMethod,
+                       AVColorTransferCharacteristic hueSatTransfer,
+                       bool gamma,
                        ESCALINGMETHOD method,
                        std::shared_ptr<GLSLOutput> output);
   ~YUV2RGBFilterShader4() override;

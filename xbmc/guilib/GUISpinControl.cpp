@@ -9,13 +9,25 @@
 #include "GUISpinControl.h"
 
 #include "GUIMessage.h"
-#include "input/Key.h"
+#include "ServiceBroker.h"
+#include "input/actions/Action.h"
+#include "input/actions/ActionIDs.h"
+#include "input/mouse/MouseEvent.h"
 #include "utils/StringUtils.h"
+#include "windowing/WinSystem.h"
 
 #include <stdio.h>
 
 #define SPIN_BUTTON_DOWN 1
 #define SPIN_BUTTON_UP   2
+
+using namespace KODI;
+
+namespace
+{
+// Additional space between text and spin buttons
+constexpr float TEXT_SPACE = 5.0f;
+} // unnamed namespace
 
 CGUISpinControl::CGUISpinControl(int parentID,
                                  int controlID,
@@ -474,16 +486,15 @@ void CGUISpinControl::Process(unsigned int currentTime, CDirtyRegionList &dirtyr
   bool arrowsOnRight(0 != (m_label.GetLabelInfo().align & (XBFONT_RIGHT | XBFONT_CENTER_X)));
   if (!arrowsOnRight)
   {
-    const float space = 5;
-    changed |= m_imgspinDownFocus->SetPosition(m_posX + textWidth + space, m_posY);
-    changed |= m_imgspinDown->SetPosition(m_posX + textWidth + space, m_posY);
-    changed |= m_imgspinDownDisabled->SetPosition(m_posX + textWidth + space, m_posY);
-    changed |= m_imgspinUpFocus->SetPosition(m_posX + textWidth + space + m_imgspinDown->GetWidth(),
-                                             m_posY);
-    changed |=
-        m_imgspinUp->SetPosition(m_posX + textWidth + space + m_imgspinDown->GetWidth(), m_posY);
+    changed |= m_imgspinDownFocus->SetPosition(m_posX + textWidth + TEXT_SPACE, m_posY);
+    changed |= m_imgspinDown->SetPosition(m_posX + textWidth + TEXT_SPACE, m_posY);
+    changed |= m_imgspinDownDisabled->SetPosition(m_posX + textWidth + TEXT_SPACE, m_posY);
+    changed |= m_imgspinUpFocus->SetPosition(
+        m_posX + textWidth + TEXT_SPACE + m_imgspinDown->GetWidth(), m_posY);
+    changed |= m_imgspinUp->SetPosition(m_posX + textWidth + TEXT_SPACE + m_imgspinDown->GetWidth(),
+                                        m_posY);
     changed |= m_imgspinUpDisabled->SetPosition(
-        m_posX + textWidth + space + m_imgspinDownDisabled->GetWidth(), m_posY);
+        m_posX + textWidth + TEXT_SPACE + m_imgspinDownDisabled->GetWidth(), m_posY);
   }
 
   changed |= m_imgspinDownFocus->Process(currentTime);
@@ -502,7 +513,23 @@ void CGUISpinControl::Process(unsigned int currentTime, CDirtyRegionList &dirtyr
 
 void CGUISpinControl::Render()
 {
-  if ( HasFocus() )
+  if (m_label.GetLabelInfo().font)
+  {
+    float textWidth = m_label.GetTextWidth() + 2 * m_label.GetLabelInfo().offsetX;
+    // Position the arrows
+    bool arrowsOnRight(0 != (m_label.GetLabelInfo().align & (XBFONT_RIGHT | XBFONT_CENTER_X)));
+
+    if (arrowsOnRight)
+      RenderText(m_posX - TEXT_SPACE - textWidth, m_posY, textWidth, m_height);
+    else
+      RenderText(m_posX + m_imgspinDown->GetWidth() + m_imgspinUp->GetWidth() + TEXT_SPACE, m_posY,
+                 textWidth, m_height);
+
+    // set our hit rectangle for MouseOver events
+    m_hitRect = m_label.GetRenderRect();
+  }
+
+  if (HasFocus())
   {
     if (m_iSelect == SPIN_BUTTON_UP)
       m_imgspinUpFocus->Render();
@@ -514,7 +541,7 @@ void CGUISpinControl::Render()
     else
       m_imgspinDown->Render();
   }
-  else if ( !HasFocus() && !IsDisabled() )
+  else if (!HasFocus() && !IsDisabled())
   {
     m_imgspinUp->Render();
     m_imgspinDown->Render();
@@ -525,27 +552,14 @@ void CGUISpinControl::Render()
     m_imgspinDownDisabled->Render();
   }
 
-  if (m_label.GetLabelInfo().font)
-  {
-    const float space = 5;
-    float textWidth = m_label.GetTextWidth() + 2 * m_label.GetLabelInfo().offsetX;
-    // Position the arrows
-    bool arrowsOnRight(0 != (m_label.GetLabelInfo().align & (XBFONT_RIGHT | XBFONT_CENTER_X)));
-
-    if (arrowsOnRight)
-      RenderText(m_posX - space - textWidth, m_posY, textWidth, m_height);
-    else
-      RenderText(m_posX + m_imgspinDown->GetWidth() + m_imgspinUp->GetWidth() + space, m_posY,
-                 textWidth, m_height);
-
-    // set our hit rectangle for MouseOver events
-    m_hitRect = m_label.GetRenderRect();
-  }
   CGUIControl::Render();
 }
 
 void CGUISpinControl::RenderText(float posX, float posY, float width, float height)
 {
+  if (CServiceBroker::GetWinSystem()->GetGfxContext().GetRenderOrder() ==
+      RENDER_ORDER_FRONT_TO_BACK)
+    return;
   m_label.SetMaxRect(posX, posY, width, height);
   m_label.SetColor(GetTextColor());
   m_label.Render();
@@ -570,22 +584,6 @@ void CGUISpinControl::SetFloatRange(float fStart, float fEnd)
 {
   m_fStart = fStart;
   m_fEnd = fEnd;
-}
-
-void CGUISpinControl::SetValueFromLabel(const std::string &label)
-{
-  if (m_iType == SPIN_CONTROL_TYPE_TEXT)
-  {
-    m_iValue = 0;
-    for (unsigned int i = 0; i < m_vecLabels.size(); i++)
-      if (label == m_vecLabels[i])
-        m_iValue = i;
-  }
-  else
-    m_iValue = atoi(label.c_str());
-
-  MarkDirtyRegion();
-  SetInvalid();
 }
 
 void CGUISpinControl::SetValue(int iValue)
@@ -850,7 +848,7 @@ void CGUISpinControl::MoveUp(bool bTestReverse)
     {
       if (m_fValue - m_fInterval >= m_fStart)
         m_fValue -= m_fInterval;
-      else if (m_fValue - m_fInterval < m_fStart)
+      else
         m_fValue = m_fEnd;
       CGUIMessage msg(GUI_MSG_CLICKED, GetID(), GetParentID());
       SendWindowMessage(msg);
@@ -901,7 +899,7 @@ void CGUISpinControl::MoveDown(bool bTestReverse)
     {
       if (m_fValue + m_fInterval <= m_fEnd)
         m_fValue += m_fInterval;
-      else if (m_fValue + m_fInterval > m_fEnd)
+      else
         m_fValue = m_fStart;
       CGUIMessage msg(GUI_MSG_CLICKED, GetID(), GetParentID());
       SendWindowMessage(msg);
@@ -1000,7 +998,7 @@ bool CGUISpinControl::OnMouseOver(const CPoint &point)
   return CGUIControl::OnMouseOver(point);
 }
 
-EVENT_RESULT CGUISpinControl::OnMouseEvent(const CPoint &point, const CMouseEvent &event)
+EVENT_RESULT CGUISpinControl::OnMouseEvent(const CPoint& point, const MOUSE::CMouseEvent& event)
 {
   if (event.m_id == ACTION_MOUSE_LEFT_CLICK)
   {

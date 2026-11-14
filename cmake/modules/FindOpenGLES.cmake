@@ -1,50 +1,76 @@
 #.rst:
 # FindOpenGLES
 # ------------
-# Finds the OpenGLES2 library
+# Finds the OpenGLES library
 #
-# This will define the following variables::
+# This will define the following target:
 #
-# OPENGLES_FOUND - system has OpenGLES
-# OPENGLES_INCLUDE_DIRS - the OpenGLES include directory
-# OPENGLES_LIBRARIES - the OpenGLES libraries
-# OPENGLES_DEFINITIONS - the OpenGLES definitions
+#   ${APP_NAME_LC}::OpenGLES - The OpenGLES IMPORTED library
 
-if(PKG_CONFIG_FOUND)
-  pkg_check_modules(PC_OPENGLES glesv2 QUIET)
-endif()
+if(NOT TARGET ${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME})
+  find_package(PkgConfig ${SEARCH_QUIET})
+  if(PKG_CONFIG_FOUND)
+    pkg_check_modules(PC_OPENGLES glesv2 ${SEARCH_QUIET})
+  endif()
 
-if(NOT CORE_SYSTEM_NAME STREQUAL darwin_embedded)
-  find_path(OPENGLES_INCLUDE_DIR GLES2/gl2.h
-                                 PATHS ${PC_OPENGLES_INCLUDEDIR})
-  find_library(OPENGLES_gl_LIBRARY NAMES GLESv2
-                                   PATHS ${PC_OPENGLES_LIBDIR})
-else()
-  find_library(OPENGLES_gl_LIBRARY NAMES OpenGLES
-                                   PATHS ${CMAKE_OSX_SYSROOT}/System/Library
-                                   PATH_SUFFIXES Frameworks
-                                   NO_DEFAULT_PATH)
-  set(OPENGLES_INCLUDE_DIR ${OPENGLES_gl_LIBRARY}/Headers)
-endif()
+  find_library(OPENGLES_gl_LIBRARY NAMES GLESv2 OpenGLES
+                                   HINTS ${PC_OPENGLES_LIBDIR} ${CMAKE_OSX_SYSROOT}/System/Library
+                                   PATH_SUFFIXES Frameworks)
+  find_library(OPENGLES3_gl_LIBRARY NAMES GLESv3
+                                    HINTS ${PC_OPENGLES_LIBDIR})
+  if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
+    # Emscripten exposes GLES via the GL link name instead of a filesystem library.
+    set(OPENGLES_gl_LIBRARY GL)
+  endif()
+  find_path(OPENGLES_INCLUDE_DIR NAMES GLES2/gl2.h ES2/gl.h
+                                 HINTS ${PC_OPENGLES_INCLUDEDIR} ${OPENGLES_gl_LIBRARY}/Headers)
+  find_path(OPENGLES3_INCLUDE_DIR NAMES GLES3/gl3.h ES3/gl.h
+                                  HINTS ${PC_OPENGLES_INCLUDEDIR} ${OPENGLES_gl_LIBRARY}/Headers)
 
-find_path(OPENGLES3_INCLUDE_DIR GLES3/gl3.h)
+  if(NOT VERBOSE_FIND)
+     set(${CMAKE_FIND_PACKAGE_NAME}_FIND_QUIETLY TRUE)
+   endif()
 
-include(FindPackageHandleStandardArgs)
-find_package_handle_standard_args(OpenGLES
-                                  REQUIRED_VARS OPENGLES_gl_LIBRARY OPENGLES_INCLUDE_DIR)
+  if(NOT CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
+    include(FindPackageHandleStandardArgs)
+    find_package_handle_standard_args(OpenGLES
+                                      REQUIRED_VARS OPENGLES_gl_LIBRARY OPENGLES_INCLUDE_DIR)
+  endif()
 
-find_path(OPENGLES3_INCLUDE_DIR GLES3/gl3.h
-                                PATHS ${PC_OPENGLES_INCLUDEDIR})
+  if(OPENGLES_FOUND OR CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
+    if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
+      add_library(${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME} INTERFACE IMPORTED)
+      set_target_properties(${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME} PROPERTIES
+                                              INTERFACE_LINK_LIBRARIES "${OPENGLES_gl_LIBRARY}"
+                                              INTERFACE_COMPILE_DEFINITIONS HAS_GLES=3)
+    else()
+      if(${OPENGLES_gl_LIBRARY} MATCHES ".+\.so$")
+        add_library(${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME} SHARED IMPORTED)
+      else()
+        add_library(${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME} UNKNOWN IMPORTED)
+      endif()
 
-if(OPENGLES_FOUND)
-  set(OPENGLES_LIBRARIES ${OPENGLES_gl_LIBRARY})
-  if(OPENGLES3_INCLUDE_DIR)
-    set(OPENGLES_INCLUDE_DIRS ${OPENGLES_INCLUDE_DIR} ${OPENGLES3_INCLUDE_DIR})
-    set(OPENGLES_DEFINITIONS -DHAS_GLES=3)
-    mark_as_advanced(OPENGLES_INCLUDE_DIR OPENGLES3_INCLUDE_DIR OPENGLES_gl_LIBRARY)
-  else()
-    set(OPENGLES_INCLUDE_DIRS ${OPENGLES_INCLUDE_DIR})
-    set(OPENGLES_DEFINITIONS -DHAS_GLES=2)
-    mark_as_advanced(OPENGLES_INCLUDE_DIR OPENGLES_gl_LIBRARY)
+      set_target_properties(${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME} PROPERTIES
+                                              IMPORTED_LOCATION "${OPENGLES_gl_LIBRARY}"
+                                              INTERFACE_INCLUDE_DIRECTORIES "${OPENGLES_INCLUDE_DIR}"
+                                              IMPORTED_NO_SONAME TRUE)
+
+      if(OPENGLES3_INCLUDE_DIR)
+        set_property(TARGET ${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME} APPEND PROPERTY
+                                                                            INTERFACE_INCLUDE_DIRECTORIES "${OPENGLES3_INCLUDE_DIR}")
+        set_target_properties(${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME} PROPERTIES
+                                                                         INTERFACE_COMPILE_DEFINITIONS HAS_GLES=3)
+        # Android splits the ES3 entry points (glBlitFramebuffer et al) into a
+        # separate stub; Mesa exports them from libGLESv2 and ships no libGLESv3,
+        # so link the ES3 stub only where it exists
+        if(OPENGLES3_gl_LIBRARY)
+          set_property(TARGET ${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME} APPEND PROPERTY
+                                                                              INTERFACE_LINK_LIBRARIES "${OPENGLES3_gl_LIBRARY}")
+        endif()
+      else()
+        set_target_properties(${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME} PROPERTIES
+                                                                         INTERFACE_COMPILE_DEFINITIONS HAS_GLES=2)
+      endif()
+    endif()
   endif()
 endif()

@@ -137,6 +137,30 @@
           <default>true</default>
           <control type="toggle" />
         </setting>
+        <setting id="videoplayer.usevaapiav1" type="boolean" parent="videoplayer.usevaapi" label="13468" help="13469">
+          <requirement>HAVE_LIBVA</requirement>
+          <visible>false</visible>
+          <dependencies>
+            <dependency type="enable">
+              <condition setting="videoplayer.usevaapi" operator="is">true</condition>
+            </dependency>
+          </dependencies>
+          <level>3</level>
+          <default>true</default>
+          <control type="toggle" />
+        </setting>
+        <setting id="videoplayer.usevaapiavc" type="boolean" parent="videoplayer.usevaapi" label="13470" help="13471">
+          <requirement>HAVE_LIBVA</requirement>
+          <visible>false</visible>
+          <dependencies>
+            <dependency type="enable">
+              <condition setting="videoplayer.usevaapi" operator="is">true</condition>
+            </dependency>
+          </dependencies>
+          <level>3</level>
+          <default>true</default>
+          <control type="toggle" />
+        </setting>
         <setting id="videoplayer.prefervaapirender" type="boolean" parent="videoplayer.usevaapi" label="13457" help="36433">
           <requirement>HAVE_LIBVA</requirement>
           <visible>false</visible>
@@ -190,14 +214,8 @@
         <setting id="videoscreen.fakefullscreen">
           <visible>false</visible>
         </setting>
-        <setting id="videoscreen.hwscalingfilter" type="boolean" label="39151" help="39152">
-          <visible>false</visible>
-          <level>3</level>
-          <default>true</default>
-          <control type="toggle" />
-        </setting>
         <setting id="videoscreen.limitguisize" type="integer" label="37021" help="36548">
-          <visible>false</visible>
+          <visible>true</visible>
           <level>3</level>
           <default>0</default>
           <constraints>
@@ -209,6 +227,14 @@
               <option label="13467">4</option> <!-- Unlimited / 1080 (>30Hz) -->
             </options>
           </constraints>
+          <dependencies>
+            <dependency type="visible">
+              <and>
+                <condition setting="videoplayer.useprimedecoder" operator="is">true</condition>
+                <condition setting="videoplayer.useprimerenderer" operator="is">0</condition>
+              </and>
+            </dependency>
+          </dependencies>
           <control type="list" format="string" />
         </setting>
         <setting id="videoscreen.limitedrange" type="boolean" label="36042" help="36359">

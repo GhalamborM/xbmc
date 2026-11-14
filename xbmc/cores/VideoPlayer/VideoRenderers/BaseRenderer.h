@@ -9,7 +9,6 @@
 #pragma once
 
 #include "DebugInfo.h"
-#include "RenderCapture.h"
 #include "RenderInfo.h"
 #include "VideoShaders/ShaderFormats.h"
 #include "cores/IPlayer.h"
@@ -45,6 +44,12 @@ enum RenderMethods
 
 struct VideoPicture;
 
+namespace KODI::RENDERING::CAPTURE
+{
+struct CaptureSpec;
+struct CaptureResult;
+} // namespace KODI::RENDERING::CAPTURE
+
 class CBaseRenderer
 {
 public:
@@ -62,41 +67,61 @@ public:
   virtual void ReleaseBuffer(int idx) { }
   virtual bool NeedBuffer(int idx) { return false; }
   virtual bool IsGuiLayer() { return true; }
+  //! True when video never reaches the framebuffer: a DRM plane, an Android
+  //! SurfaceView, the Amlogic video layer. Such a renderer must produce its
+  //! own capture frame; every other renderer is served by reading the framebuffer.
+  virtual bool VideoBypassesFramebuffer() { return !IsGuiLayer(); }
+  //! \brief Render this renderer's video frame for screencap into result.
+  //! Overridden by renderers whose VideoBypassesFramebuffer() is true.
+  //! Default: capture unavailable.
+  virtual bool CaptureVideoFrame(const KODI::RENDERING::CAPTURE::CaptureSpec& spec,
+                                 KODI::RENDERING::CAPTURE::CaptureResult& result)
+  {
+    return false;
+  }
+  //! Composite externally rendered video into a finished framebuffer capture.
+  virtual bool CompositeVideoCapture(KODI::RENDERING::CAPTURE::CaptureResult& result)
+  {
+    return true;
+  }
   // Render info, can be called before configure
   virtual CRenderInfo GetRenderInfo() { return CRenderInfo(); }
   virtual void Update() = 0;
-  virtual void RenderUpdate(int index, int index2, bool clear, unsigned int flags, unsigned int alpha) = 0;
-  virtual bool RenderCapture(CRenderCapture* capture) = 0;
+  virtual void RenderUpdate(
+      int index, int index2, bool clear, unsigned int flags, unsigned int alpha) = 0;
   virtual bool ConfigChanged(const VideoPicture &picture) = 0;
 
   // Feature support
   virtual bool SupportsMultiPassRendering() = 0;
-  virtual bool Supports(ERENDERFEATURE feature) { return false; }
-  virtual bool Supports(ESCALINGMETHOD method) = 0;
+  virtual bool Supports(ERENDERFEATURE feature) const { return false; }
+  virtual bool Supports(ESCALINGMETHOD method) const = 0;
 
   virtual bool WantsDoublePass() { return false; }
 
+  void SetFps(float fps) { m_fps = fps; }
   void SetViewMode(int viewMode);
+
+  //! \brief Take VideoPicture::contentRect for the frame about to be drawn. Empty leaves the
+  //! stored measurement in charge.
+  void SetFrameContentRect(const CRectInt& rect) { m_frameContentRect = rect; }
 
   /*! \brief Get video rectangle and view window
   \param source is original size of the video
   \param dest is the target rendering area honoring aspect ratio of source
   \param view is the entire target rendering area for the video (including black bars)
   */
-  void GetVideoRect(CRect &source, CRect &dest, CRect &view);
+  void GetVideoRect(CRect& source, CRect& dest, CRect& view) const;
   float GetAspectRatio() const;
+  unsigned int GetOrientation() const { return m_renderOrientation; }
 
   static void SettingOptionsRenderMethodsFiller(const std::shared_ptr<const CSetting>& setting,
                                                 std::vector<IntegerSettingOption>& list,
-                                                int& current,
-                                                void* data);
+                                                int& current);
 
   void SetVideoSettings(const CVideoSettings &settings);
 
   // Gets debug info from render buffer
   virtual DEBUG_INFO_VIDEO GetDebugInfo(int idx) { return {}; }
-
-  virtual CRenderCapture* GetRenderCapture() { return nullptr; }
 
 protected:
   void CalcDestRect(float offsetX,
@@ -111,9 +136,14 @@ protected:
                             float inputFrameRatio, float zoomAmount, float verticalShift);
   void CalculateFrameAspectRatio(unsigned int desired_width, unsigned int desired_height);
   virtual void ManageRenderArea();
+
+  //! \brief The content geometry's part of ManageRenderArea(): cut to the frame's own
+  //! measurement, fit the mask opening, then honour a maintained ratio.
+  CRect ApplyContentGeometry(float& contentRatio);
   virtual void ReorderDrawPoints();
   virtual EShaderFormat GetShaderFormat();
   void MarkDirty();
+  void EnableAlwaysClip();
 
   //@todo drop those
   void saveRotatedCoords();//saves the current state of m_rotatedDestCoords
@@ -135,10 +165,14 @@ protected:
   CRect m_destRect;
   CRect m_sourceRect;
   CRect m_viewRect;
+  CRectInt m_frameContentRect;
 
   // rendering flags
   unsigned m_iFlags = 0;
   AVPixelFormat m_format = AV_PIX_FMT_NONE;
 
   CVideoSettings m_videoSettings;
+
+private:
+  bool m_alwaysClip = false;
 };

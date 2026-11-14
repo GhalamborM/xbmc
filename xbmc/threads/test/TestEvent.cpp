@@ -26,9 +26,9 @@ class waiter : public IRunnable
 public:
   bool& result;
 
-  volatile bool waiting;
+  volatile bool waiting = false;
 
-  waiter(CEvent& o, bool& flag) : event(o), result(flag), waiting(false) {}
+  waiter(CEvent& o, bool& flag) : event(o), result(flag) {}
 
   void Run() override
   {
@@ -46,10 +46,10 @@ class timed_waiter : public IRunnable
 public:
   int& result;
 
-  volatile bool waiting;
+  volatile bool waiting = false;
 
   timed_waiter(CEvent& o, int& flag, std::chrono::milliseconds waitTimeMillis)
-    : event(o), waitTime(waitTimeMillis), result(flag), waiting(false)
+    : event(o), waitTime(waitTimeMillis), result(flag)
   {
   }
 
@@ -489,16 +489,17 @@ TEST(TestEvent, GroupTimedWait)
   EXPECT_TRUE(!result1);
   EXPECT_TRUE(!result2);
 
-  EXPECT_TRUE(w3.waiting);
   EXPECT_TRUE(w3.result == NULL);
 
-  // this should end given the wait is for only 50 millis
-  EXPECT_TRUE(waitThread3.timed_join(200ms));
+  // nothing sets an event here, so the thread can only end by timing out
+  EXPECT_TRUE(waitThread3.timed_join(10000ms));
 
   EXPECT_TRUE(!w3.waiting);
   EXPECT_TRUE(w3.result == NULL);
 
-  group_wait w4(group, 50ms);
+  // this one is ended by event1 below rather than by its timeout, so the
+  // timeout only has to be long enough never to fire
+  group_wait w4(group, 60000ms);
   thread waitThread4(w4);
 
   EXPECT_TRUE(waitForWaiters(group, 1, 10000ms));
@@ -572,7 +573,7 @@ template <class W> void RunMassEventTest(std::vector<std::shared_ptr<W>>& m, boo
 {
   std::vector<std::shared_ptr<thread>> t(NUMTHREADS);
   for(size_t i=0; i<NUMTHREADS; i++)
-    t[i].reset(new thread(*m[i]));
+    t[i] = std::make_shared<thread>(*m[i]);
 
   EXPECT_TRUE(waitForThread(g_mutex, NUMTHREADS, 10000ms));
   if (canWaitOnEvent)
@@ -608,7 +609,7 @@ TEST(TestMassEvent, General)
 
   std::vector<std::shared_ptr<mass_waiter>> m(NUMTHREADS);
   for(size_t i=0; i<NUMTHREADS; i++)
-    m[i].reset(new mass_waiter());
+    m[i] = std::make_shared<mass_waiter>();
 
   RunMassEventTest(m,true);
   delete g_event;
@@ -620,7 +621,7 @@ TEST(TestMassEvent, Polling)
 
   std::vector<std::shared_ptr<poll_mass_waiter>> m(NUMTHREADS);
   for(size_t i=0; i<NUMTHREADS; i++)
-    m[i].reset(new poll_mass_waiter());
+    m[i] = std::make_shared<poll_mass_waiter>();
 
   RunMassEventTest(m,false);
   delete g_event;

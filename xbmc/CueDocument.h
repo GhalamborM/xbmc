@@ -8,14 +8,15 @@
 
 #pragma once
 
-#include "music/Song.h"
+#include "music/tags/ReplayGain.h"
 
 #include <string>
 #include <vector>
 
-#define MAX_PATH_SIZE 1024
-
+class CFileItem;
+class CFileItemList;
 class CueReader;
+class CSong;
 
 class CCueDocument
 {
@@ -30,18 +31,22 @@ class CCueDocument
     int iEndTime = 0;
     ReplayGain::Info replayGain;
   };
+
 public:
-  ~CCueDocument(void);
+  ~CCueDocument();
   // USED
   bool ParseFile(const std::string &strFilePath);
   bool ParseTag(const std::string &strContent);
-  void GetSongs(VECSONGS &songs);
+  void GetSongs(std::vector<CSong>& songs);
   std::string GetMediaPath();
-  std::string GetMediaTitle();
+  const std::string& GetMediaTitle() const { return m_strAlbum; }
   void GetMediaFiles(std::vector<std::string>& mediaFiles);
   void UpdateMediaFile(const std::string& oldMediaFile, const std::string& mediaFile);
   bool IsOneFilePerTrack() const;
   bool IsLoaded() const;
+
+  bool LoadTracks(CFileItemList& scannedItems, const CFileItem& item);
+
 private:
   void Clear();
   bool Parse(CueReader& reader, const std::string& strFile = std::string());
@@ -58,7 +63,7 @@ private:
   bool m_bOneFilePerTrack = false;
 
   // cuetrack array
-  typedef std::vector<CCueTrack> Tracks;
+  using Tracks = std::vector<CCueTrack>;
   Tracks m_tracks;
 
   std::string ExtractInfo(const std::string &line);

@@ -29,10 +29,12 @@ protected:
   // override base class methods
   bool Update(const std::string &strDirectory, bool updateFilterPath = true) override;
   bool GetDirectory(const std::string &strDirectory, CFileItemList &items) override;
+  void OnFilterItems(const std::string& filter) override;
   void UpdateButtons() override;
   void PlayItem(int iItem) override;
   void OnWindowLoaded() override;
   void GetContextButtons(int itemNumber, CContextButtons &buttons) override;
+  bool OnPopupMenu(int iItem) override;
   bool OnContextButton(int itemNumber, CONTEXT_BUTTON button) override;
   bool OnClick(int iItem, const std::string &player = "") override;
   std::string GetStartFolder(const std::string &url) override;
@@ -40,7 +42,7 @@ protected:
   bool GetSongsFromPlayList(const std::string& strPlayList, CFileItemList &items);
   bool ManageInfoProvider(const CFileItemPtr& item);
 
-  VECSOURCES m_shares;
+  std::vector<CMediaSource> m_shares;
 
   // searching
   void OnSearchUpdate();

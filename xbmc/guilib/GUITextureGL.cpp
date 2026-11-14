@@ -10,6 +10,7 @@
 
 #include "ServiceBroker.h"
 #include "Texture.h"
+#include "rendering/MatrixGL.h"
 #include "rendering/gl/RenderSystemGL.h"
 #include "utils/GLUtils.h"
 #include "utils/Geometry.h"
@@ -18,9 +19,12 @@
 
 #include <cstddef>
 
+#include "PlatformDefs.h"
+
 void CGUITextureGL::Register()
 {
-  CGUITexture::Register(CGUITextureGL::CreateTexture, CGUITextureGL::DrawQuad);
+  CGUITexture::Register(CGUITextureGL::CreateTexture, CGUITextureGL::DrawQuad,
+                        CGUITextureGL::DrawStencilQuad);
 }
 
 CGUITexture* CGUITextureGL::CreateTexture(
@@ -41,7 +45,7 @@ CGUITextureGL* CGUITextureGL::Clone() const
   return new CGUITextureGL(*this);
 }
 
-void CGUITextureGL::Begin(UTILS::COLOR::Color color)
+void CGUITextureGL::Begin(KODI::UTILS::COLOR::Color color)
 {
   CTexture* texture = m_texture.m_textures[m_currentFrame].get();
   texture->LoadToGPU();
@@ -94,25 +98,37 @@ void CGUITextureGL::Begin(UTILS::COLOR::Color color)
   {
     glDisable(GL_BLEND);
   }
+
   m_packedVertices.clear();
   m_idx.clear();
 }
 
 void CGUITextureGL::End()
 {
-  if (m_packedVertices.size())
+  const STENCIL_LAYER oldLayer = CServiceBroker::GetWinSystem()->GetGfxContext().GetStencilLayer();
+  if (!m_packedVertices.empty() && oldLayer != STENCIL_LAYER::INVALID)
   {
     GLint posLoc  = m_renderSystem->ShaderGetPos();
     GLint tex0Loc = m_renderSystem->ShaderGetCoord0();
     GLint tex1Loc = m_renderSystem->ShaderGetCoord1();
     GLint uniColLoc = m_renderSystem->ShaderGetUniCol();
+    GLint depthLoc = m_renderSystem->ShaderGetDepth();
 
     GLuint VertexVBO;
     GLuint IndexVBO;
 
+    if (oldLayer != STENCIL_LAYER::NONE)
+    {
+      glEnable(GL_STENCIL_TEST);
+      glStencilFunc(GL_EQUAL, 0xFF, 0x1 << (int)oldLayer);
+    }
+
     glGenBuffers(1, &VertexVBO);
     glBindBuffer(GL_ARRAY_BUFFER, VertexVBO);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(PackedVertex)*m_packedVertices.size(), &m_packedVertices[0], GL_STATIC_DRAW);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(PackedVertex) * m_packedVertices.size(),
+                 m_packedVertices.data(), GL_STATIC_DRAW);
+
+    glUniform1f(depthLoc, m_depth);
 
     if (uniColLoc >= 0)
     {
@@ -138,6 +154,7 @@ void CGUITextureGL::End()
     glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(ushort)*m_idx.size(), m_idx.data(), GL_STATIC_DRAW);
 
     glDrawElements(GL_TRIANGLES, m_packedVertices.size()*6 / 4, GL_UNSIGNED_SHORT, 0);
+    CRenderSystemBase::m_GUIElementCount++;
 
     if (m_diffuse.size())
       glDisableVertexAttribArray(tex1Loc);
@@ -154,6 +171,8 @@ void CGUITextureGL::End()
   if (m_diffuse.size())
     glActiveTexture(GL_TEXTURE0);
   glEnable(GL_BLEND);
+  glStencilFunc(GL_ALWAYS, 0x0, 0xFF);
+  glDisable(GL_STENCIL_TEST);
 
   m_renderSystem->DisableShader();
 }
@@ -250,11 +269,99 @@ void CGUITextureGL::Draw(float *x, float *y, float *z, const CRect &texture, con
   }
 }
 
-void CGUITextureGL::DrawQuad(const CRect& rect,
-                             UTILS::COLOR::Color color,
-                             CTexture* texture,
-                             const CRect* texCoords)
+void CGUITextureGL::DrawStencilQuad(const CRect& rect, const STENCIL_LAYER stencilMask)
 {
+  if (stencilMask == STENCIL_LAYER::INVALID || stencilMask == STENCIL_LAYER::NONE)
+    return;
+
+  const STENCIL_LAYER currentStencilLayer =
+      CServiceBroker::GetWinSystem()->GetGfxContext().GetStencilLayer();
+
+  glEnable(GL_STENCIL_TEST);
+  glStencilMask(0x1 << (int)stencilMask);
+  glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
+  if (currentStencilLayer == STENCIL_LAYER::NONE)
+    glStencilFunc(GL_ALWAYS, 0xFF, 0xFF);
+  else
+    glStencilFunc(GL_EQUAL, 0xFF, 0x1 << (int)currentStencilLayer);
+
+  const GLboolean depthTestEnabled = glIsEnabled(GL_DEPTH_TEST);
+  glDisable(GL_DEPTH_TEST);
+  struct PackedVertex
+  {
+    float x, y;
+  } vertex[4];
+
+  // top left
+  vertex[0].x = rect.x1;
+  vertex[0].y = rect.y2;
+  // top right
+  vertex[1].x = rect.x2;
+  vertex[1].y = rect.y2;
+  // bottom left
+  vertex[2].x = rect.x1;
+  vertex[2].y = rect.y1;
+  // bottom right
+  vertex[3].x = rect.x2;
+  vertex[3].y = rect.y1;
+
+  CRenderSystemGL* renderSystem = dynamic_cast<CRenderSystemGL*>(CServiceBroker::GetRenderSystem());
+  renderSystem->EnableShader(ShaderMethodGL::SM_STENCIL);
+
+  const CWinSystemBase* const winSystem = CServiceBroker::GetWinSystem();
+  const CGraphicContext& context = winSystem->GetGfxContext();
+  CMatrixGL matrix = glMatrixProject.Get();
+  matrix.MultMatrixf(glMatrixModview.Get());
+  matrix.MultMatrixf(CMatrixGL(context.GetGUIMatrix()));
+
+  const GLint matrixUniformLoc = renderSystem->ShaderGetMatrix();
+  const GLint posLoc = renderSystem->ShaderGetPos();
+
+  glUniformMatrix4fv(matrixUniformLoc, 1, GL_FALSE, matrix);
+
+  GLuint VBO{0};
+
+  glGenBuffers(1, &VBO);
+  glBindBuffer(GL_ARRAY_BUFFER, VBO);
+  glBufferData(GL_ARRAY_BUFFER, sizeof(PackedVertex) * 4, &vertex[0], GL_STATIC_DRAW);
+
+  glVertexAttribPointer(posLoc, 2, GL_FLOAT, 0, sizeof(PackedVertex), 0);
+  glEnableVertexAttribArray(posLoc);
+
+  GLboolean colorMask[4];
+  glGetBooleanv(GL_COLOR_WRITEMASK, colorMask);
+  glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+
+  glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+
+  glColorMask(colorMask[0], colorMask[1], colorMask[2], colorMask[3]);
+
+  glBindBuffer(GL_ARRAY_BUFFER, 0);
+  glDisableVertexAttribArray(posLoc);
+
+  glDeleteBuffers(1, &VBO);
+
+  renderSystem->DisableShader();
+
+  if (depthTestEnabled)
+    glEnable(GL_DEPTH_TEST);
+  glStencilFunc(GL_ALWAYS, 0x0, 0xFF);
+  glStencilMask(0x0);
+  glDisable(GL_STENCIL_TEST);
+}
+
+void CGUITextureGL::DrawQuad(const CRect& rect,
+                             KODI::UTILS::COLOR::Color color,
+                             CTexture* texture,
+                             const CRect* texCoords,
+                             const float depth,
+                             const bool blending)
+{
+  const STENCIL_LAYER stencilLayer =
+      CServiceBroker::GetWinSystem()->GetGfxContext().GetStencilLayer();
+  if (stencilLayer == STENCIL_LAYER::INVALID)
+    return;
+
   CRenderSystemGL *renderSystem = dynamic_cast<CRenderSystemGL*>(CServiceBroker::GetRenderSystem());
   if (texture)
   {
@@ -262,13 +369,23 @@ void CGUITextureGL::DrawQuad(const CRect& rect,
     texture->BindToUnit(0);
   }
 
-  glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
-  glEnable(GL_BLEND);          // Turn Blending On
+  if (blending)
+  {
+    if (CServiceBroker::GetWinSystem()->IsHdrComposite())
+      glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE_MINUS_DST_ALPHA, GL_ONE);
+    else
+      glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glEnable(GL_BLEND);
+  }
+  else
+  {
+    glDisable(GL_BLEND);
+  }
 
   VerifyGLState();
 
   GLubyte col[4];
-  GLubyte idx[4] = {0, 1, 3, 2};  //determines order of the vertices
+  GLubyte idx[4] = {0, 1, 3, 2}; // Determines order of triangle strip
   GLuint vertexVBO;
   GLuint indexVBO;
 
@@ -276,7 +393,7 @@ void CGUITextureGL::DrawQuad(const CRect& rect,
   {
     float x, y, z;
     float u1, v1;
-  }vertex[4];
+  } vertex[4];
 
   if (texture)
     renderSystem->EnableShader(ShaderMethodGL::SM_TEXTURE);
@@ -286,6 +403,7 @@ void CGUITextureGL::DrawQuad(const CRect& rect,
   GLint posLoc = renderSystem->ShaderGetPos();
   GLint tex0Loc = renderSystem->ShaderGetCoord0();
   GLint uniColLoc = renderSystem->ShaderGetUniCol();
+  GLint depthLoc = renderSystem->ShaderGetDepth();
 
   // Setup Colors
   col[0] = KODI::UTILS::GL::GetChannelFromARGB(KODI::UTILS::GL::ColorChannel::R, color);
@@ -294,6 +412,7 @@ void CGUITextureGL::DrawQuad(const CRect& rect,
   col[3] = KODI::UTILS::GL::GetChannelFromARGB(KODI::UTILS::GL::ColorChannel::A, color);
 
   glUniform4f(uniColLoc, col[0] / 255.0f, col[1] / 255.0f, col[2] / 255.0f, col[3] / 255.0f);
+  glUniform1f(depthLoc, depth);
 
   // bottom left
   vertex[0].x = rect.x1;
@@ -317,6 +436,7 @@ void CGUITextureGL::DrawQuad(const CRect& rect,
 
   if (texture)
   {
+    // Setup texture coordinates
     CRect coords = texCoords ? *texCoords : CRect(0.0f, 0.0f, 1.0f, 1.0f);
     vertex[0].u1 = vertex[3].u1 = coords.x1;
     vertex[0].v1 = vertex[1].v1 = coords.y1;
@@ -343,7 +463,33 @@ void CGUITextureGL::DrawQuad(const CRect& rect,
   glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, indexVBO);
   glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(GLubyte)*4, idx, GL_STATIC_DRAW);
 
-  glDrawElements(GL_TRIANGLE_STRIP, 4, GL_UNSIGNED_BYTE, 0);
+  GLboolean stencilTestEnabled = GL_FALSE;
+  GLint stencilFunc[2]{};
+  GLint stencilRef[2]{};
+  GLint stencilMask[2]{};
+  if (stencilLayer != STENCIL_LAYER::NONE)
+  {
+    stencilTestEnabled = glIsEnabled(GL_STENCIL_TEST);
+    glGetIntegerv(GL_STENCIL_FUNC, &stencilFunc[0]);
+    glGetIntegerv(GL_STENCIL_REF, &stencilRef[0]);
+    glGetIntegerv(GL_STENCIL_VALUE_MASK, &stencilMask[0]);
+    glGetIntegerv(GL_STENCIL_BACK_FUNC, &stencilFunc[1]);
+    glGetIntegerv(GL_STENCIL_BACK_REF, &stencilRef[1]);
+    glGetIntegerv(GL_STENCIL_BACK_VALUE_MASK, &stencilMask[1]);
+    glEnable(GL_STENCIL_TEST);
+    glStencilFunc(GL_EQUAL, 0xFF, 0x1 << static_cast<int>(stencilLayer));
+  }
+
+  glDrawElements(GL_TRIANGLE_STRIP, 4, GL_UNSIGNED_BYTE, nullptr);
+  CRenderSystemBase::m_GUIElementCount++;
+
+  if (stencilLayer != STENCIL_LAYER::NONE)
+  {
+    glStencilFuncSeparate(GL_FRONT, stencilFunc[0], stencilRef[0], stencilMask[0]);
+    glStencilFuncSeparate(GL_BACK, stencilFunc[1], stencilRef[1], stencilMask[1]);
+    if (!stencilTestEnabled)
+      glDisable(GL_STENCIL_TEST);
+  }
 
   glDisableVertexAttribArray(posLoc);
   if (texture)
@@ -356,4 +502,3 @@ void CGUITextureGL::DrawQuad(const CRect& rect,
 
   renderSystem->DisableShader();
 }
-

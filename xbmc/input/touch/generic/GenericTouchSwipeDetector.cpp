@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2013-2018 Team Kodi
+ *  Copyright (C) 2013-2024 Team Kodi
  *  This file is part of Kodi - https://kodi.tv
  *
  *  SPDX-License-Identifier: GPL-2.0-or-later
@@ -26,11 +26,7 @@
 #define SWIPE_MAX_VARIANCE_ANGLE 0.36397023f
 
 CGenericTouchSwipeDetector::CGenericTouchSwipeDetector(ITouchActionHandler* handler, float dpi)
-  : IGenericTouchGestureDetector(handler, dpi),
-    m_directions(TouchMoveDirectionLeft | TouchMoveDirectionRight | TouchMoveDirectionUp |
-                 TouchMoveDirectionDown),
-    m_swipeDetected(false),
-    m_size(0)
+  : IGenericTouchGestureDetector(handler, dpi)
 {
 }
 

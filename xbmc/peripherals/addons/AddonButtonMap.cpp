@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2014-2018 Team Kodi
+ *  Copyright (C) 2014-2024 Team Kodi
  *  This file is part of Kodi - https://kodi.tv
  *
  *  SPDX-License-Identifier: GPL-2.0-or-later
@@ -9,12 +9,17 @@
 #include "AddonButtonMap.h"
 
 #include "PeripheralAddonTranslator.h"
+#include "games/controllers/Controller.h"
+#include "games/controllers/ControllerManager.h"
+#include "games/controllers/input/PhysicalFeature.h"
 #include "input/joysticks/JoystickUtils.h"
+#include "peripherals/Peripherals.h"
 #include "peripherals/devices/Peripheral.h"
 #include "utils/log.h"
 
 #include <algorithm>
 #include <assert.h>
+#include <mutex>
 #include <vector>
 
 using namespace KODI;
@@ -23,8 +28,12 @@ using namespace PERIPHERALS;
 
 CAddonButtonMap::CAddonButtonMap(CPeripheral* device,
                                  const std::weak_ptr<CPeripheralAddon>& addon,
-                                 const std::string& strControllerId)
-  : m_device(device), m_addon(addon), m_strControllerId(strControllerId)
+                                 const std::string& strControllerId,
+                                 CPeripherals& manager)
+  : m_device(device),
+    m_addon(addon),
+    m_strControllerId(strControllerId),
+    m_manager(manager)
 {
   auto peripheralAddon = m_addon.lock();
   assert(peripheralAddon != nullptr);
@@ -40,11 +49,12 @@ CAddonButtonMap::~CAddonButtonMap(void)
 
 std::string CAddonButtonMap::Location(void) const
 {
-  return m_device->Location();
+  return m_device->FileLocation();
 }
 
 bool CAddonButtonMap::Load(void)
 {
+  std::string controllerAppearance;
   FeatureMap features;
   DriverMap driverMap;
   PrimitiveVector ignoredPrimitives;
@@ -52,8 +62,32 @@ bool CAddonButtonMap::Load(void)
   bool bSuccess = false;
   if (auto addon = m_addon.lock())
   {
+    bSuccess |= addon->GetAppearance(m_device, controllerAppearance);
     bSuccess |= addon->GetFeatures(m_device, m_strControllerId, features);
     bSuccess |= addon->GetIgnoredPrimitives(m_device, ignoredPrimitives);
+  }
+
+  if (features.empty())
+  {
+    // Check if we can initialize a buttonmap from the peripheral bus
+    PeripheralBusPtr peripheralBus = m_manager.GetBusByType(m_device->GetBusType());
+    if (peripheralBus)
+    {
+      CLog::Log(LOGDEBUG,
+                "Buttonmap not found for {}, attempting to initialize from peripheral bus",
+                m_device->Location());
+      if (peripheralBus->InitializeButtonMap(*m_device, *this))
+      {
+        bSuccess = true;
+
+        if (auto addon = m_addon.lock())
+        {
+          addon->GetAppearance(m_device, controllerAppearance);
+          addon->GetFeatures(m_device, m_strControllerId, features);
+          addon->GetIgnoredPrimitives(m_device, ignoredPrimitives);
+        }
+      }
+    }
   }
 
   // GetFeatures() was changed to always return false if no features were
@@ -68,7 +102,8 @@ bool CAddonButtonMap::Load(void)
     CLog::Log(LOGDEBUG, "Failed to load button map for \"{}\"", m_device->Location());
 
   {
-    CSingleLock lock(m_mutex);
+    std::unique_lock lock(m_mutex);
+    m_controllerAppearance = std::move(controllerAppearance);
     m_features = std::move(features);
     m_driverMap = std::move(driverMap);
     m_ignoredPrimitives = CPeripheralAddonTranslator::TranslatePrimitives(ignoredPrimitives);
@@ -85,14 +120,29 @@ void CAddonButtonMap::Reset(void)
 
 bool CAddonButtonMap::IsEmpty(void) const
 {
-  CSingleLock lock(m_mutex);
+  std::unique_lock lock(m_mutex);
 
   return m_driverMap.empty();
 }
 
+std::string CAddonButtonMap::GetAppearance() const
+{
+  std::unique_lock lock(m_mutex);
+
+  return m_controllerAppearance;
+}
+
+bool CAddonButtonMap::SetAppearance(const std::string& controllerId) const
+{
+  if (auto addon = m_addon.lock())
+    return addon->SetAppearance(m_device, controllerId);
+
+  return false;
+}
+
 bool CAddonButtonMap::GetFeature(const CDriverPrimitive& primitive, FeatureName& feature)
 {
-  CSingleLock lock(m_mutex);
+  std::unique_lock lock(m_mutex);
 
   DriverMap::const_iterator it = m_driverMap.find(primitive);
   if (it != m_driverMap.end())
@@ -108,7 +158,7 @@ FEATURE_TYPE CAddonButtonMap::GetFeatureType(const FeatureName& feature)
 {
   FEATURE_TYPE type = FEATURE_TYPE::UNKNOWN;
 
-  CSingleLock lock(m_mutex);
+  std::unique_lock lock(m_mutex);
 
   FeatureMap::const_iterator it = m_features.find(feature);
   if (it != m_features.end())
@@ -121,7 +171,7 @@ bool CAddonButtonMap::GetScalar(const FeatureName& feature, CDriverPrimitive& pr
 {
   bool retVal(false);
 
-  CSingleLock lock(m_mutex);
+  std::unique_lock lock(m_mutex);
 
   FeatureMap::const_iterator it = m_features.find(feature);
   if (it != m_features.end())
@@ -133,6 +183,29 @@ bool CAddonButtonMap::GetScalar(const FeatureName& feature, CDriverPrimitive& pr
     {
       primitive = CPeripheralAddonTranslator::TranslatePrimitive(
           addonFeature.Primitive(JOYSTICK_SCALAR_PRIMITIVE));
+      retVal = true;
+    }
+  }
+  else
+  {
+    // Nothing has mapped this feature. If the controller profile calls it a
+    // motor, map it here by position rather than leaving it unmapped.
+    //
+    // Motors cannot be mapped the way everything else is. The configuration
+    // wizard asks the user to activate each feature in turn, and a motor is
+    // not something that can be activated, so the wizard never offers one and
+    // no button map has ever contained a motor entry. The result is that a
+    // game asking for rumble finds nothing to drive, on every controller.
+    //
+    // Position is the only thing available to map by, and it is what the
+    // drivers use: the first motor a controller declares is the strong one,
+    // the second the weak one, matching the order evdev reports them. A
+    // controller with no motors, or a device with fewer than it declares,
+    // yields an index the driver rejects, which is the same as today.
+    unsigned int motorIndex = 0;
+    if (GetMotorIndex(feature, motorIndex))
+    {
+      primitive = CDriverPrimitive(PRIMITIVE_TYPE::MOTOR, motorIndex);
       retVal = true;
     }
   }
@@ -159,7 +232,7 @@ bool CAddonButtonMap::GetAnalogStick(const FeatureName& feature,
 {
   bool retVal(false);
 
-  CSingleLock lock(m_mutex);
+  std::unique_lock lock(m_mutex);
 
   FeatureMap::const_iterator it = m_features.find(feature);
   if (it != m_features.end())
@@ -190,7 +263,7 @@ void CAddonButtonMap::AddAnalogStick(const FeatureName& feature,
   kodi::addon::JoystickFeature analogStick(feature, JOYSTICK_FEATURE_TYPE_ANALOG_STICK);
 
   {
-    CSingleLock lock(m_mutex);
+    std::unique_lock lock(m_mutex);
     auto it = m_features.find(feature);
     if (it != m_features.end())
       analogStick = it->second;
@@ -216,7 +289,7 @@ bool CAddonButtonMap::GetRelativePointer(const FeatureName& feature,
 {
   bool retVal(false);
 
-  CSingleLock lock(m_mutex);
+  std::unique_lock lock(m_mutex);
 
   FeatureMap::const_iterator it = m_features.find(feature);
   if (it != m_features.end())
@@ -247,7 +320,7 @@ void CAddonButtonMap::AddRelativePointer(const FeatureName& feature,
   kodi::addon::JoystickFeature relPointer(feature, JOYSTICK_FEATURE_TYPE_RELPOINTER);
 
   {
-    CSingleLock lock(m_mutex);
+    std::unique_lock lock(m_mutex);
     auto it = m_features.find(feature);
     if (it != m_features.end())
       relPointer = it->second;
@@ -274,7 +347,7 @@ bool CAddonButtonMap::GetAccelerometer(const FeatureName& feature,
 {
   bool retVal(false);
 
-  CSingleLock lock(m_mutex);
+  std::unique_lock lock(m_mutex);
 
   FeatureMap::const_iterator it = m_features.find(feature);
   if (it != m_features.end())
@@ -322,7 +395,7 @@ bool CAddonButtonMap::GetWheel(const KODI::JOYSTICK::FeatureName& feature,
 {
   bool retVal(false);
 
-  CSingleLock lock(m_mutex);
+  std::unique_lock lock(m_mutex);
 
   FeatureMap::const_iterator it = m_features.find(feature);
   if (it != m_features.end())
@@ -353,7 +426,7 @@ void CAddonButtonMap::AddWheel(const KODI::JOYSTICK::FeatureName& feature,
   kodi::addon::JoystickFeature joystickFeature(feature, JOYSTICK_FEATURE_TYPE_WHEEL);
 
   {
-    CSingleLock lock(m_mutex);
+    std::unique_lock lock(m_mutex);
     auto it = m_features.find(feature);
     if (it != m_features.end())
       joystickFeature = it->second;
@@ -379,7 +452,7 @@ bool CAddonButtonMap::GetThrottle(const KODI::JOYSTICK::FeatureName& feature,
 {
   bool retVal(false);
 
-  CSingleLock lock(m_mutex);
+  std::unique_lock lock(m_mutex);
 
   FeatureMap::const_iterator it = m_features.find(feature);
   if (it != m_features.end())
@@ -410,7 +483,7 @@ void CAddonButtonMap::AddThrottle(const KODI::JOYSTICK::FeatureName& feature,
   kodi::addon::JoystickFeature joystickFeature(feature, JOYSTICK_FEATURE_TYPE_THROTTLE);
 
   {
-    CSingleLock lock(m_mutex);
+    std::unique_lock lock(m_mutex);
     auto it = m_features.find(feature);
     if (it != m_features.end())
       joystickFeature = it->second;
@@ -434,7 +507,7 @@ bool CAddonButtonMap::GetKey(const FeatureName& feature, CDriverPrimitive& primi
 {
   bool retVal(false);
 
-  CSingleLock lock(m_mutex);
+  std::unique_lock lock(m_mutex);
 
   FeatureMap::const_iterator it = m_features.find(feature);
   if (it != m_features.end())
@@ -472,13 +545,12 @@ void CAddonButtonMap::SetIgnoredPrimitives(
 
 bool CAddonButtonMap::IsIgnored(const JOYSTICK::CDriverPrimitive& primitive)
 {
-  return std::find(m_ignoredPrimitives.begin(), m_ignoredPrimitives.end(), primitive) !=
-         m_ignoredPrimitives.end();
+  return std::ranges::find(m_ignoredPrimitives, primitive) != m_ignoredPrimitives.end();
 }
 
 bool CAddonButtonMap::GetAxisProperties(unsigned int axisIndex, int& center, unsigned int& range)
 {
-  CSingleLock lock(m_mutex);
+  std::unique_lock lock(m_mutex);
 
   for (const auto& it : m_driverMap)
   {
@@ -508,6 +580,31 @@ void CAddonButtonMap::RevertButtonMap()
 {
   if (auto addon = m_addon.lock())
     addon->RevertButtonMap(m_device);
+}
+
+bool CAddonButtonMap::GetMotorIndex(const FeatureName& feature, unsigned int& motorIndex) const
+{
+  const KODI::GAME::ControllerPtr controller =
+      m_manager.GetControllerProfiles().GetController(m_strControllerId);
+  if (!controller)
+    return false;
+
+  unsigned int index = 0;
+  for (const auto& physicalFeature : controller->Features())
+  {
+    if (physicalFeature.Type() != KODI::JOYSTICK::FEATURE_TYPE::MOTOR)
+      continue;
+
+    if (physicalFeature.Name() == feature)
+    {
+      motorIndex = index;
+      return true;
+    }
+
+    ++index;
+  }
+
+  return false;
 }
 
 CAddonButtonMap::DriverMap CAddonButtonMap::CreateLookupTable(const FeatureMap& features)

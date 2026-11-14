@@ -2,108 +2,103 @@
 # -------
 # Finds the Spdlog library
 #
-# This will define the following variables:
+# This will define the following target:
 #
-# SPDLOG_FOUND - system has Spdlog
-# SPDLOG_INCLUDE_DIRS - the Spdlog include directory
-# SPDLOG_LIBRARIES - the Spdlog libraries
-# SPDLOG_DEFINITIONS - the Spdlog compile definitions
-#
-# and the following imported targets:
-#
-#   Spdlog::Spdlog   - The Spdlog library
+#   ${APP_NAME_LC}::Spdlog   - The Spdlog library
 
-if(ENABLE_INTERNAL_SPDLOG)
-  include(ExternalProject)
-  file(STRINGS ${CMAKE_SOURCE_DIR}/tools/depends/target/libspdlog/Makefile VER REGEX "^[ ]*VERSION[ ]*=.+$")
-  string(REGEX REPLACE "^[ ]*VERSION[ ]*=[ ]*" "" SPDLOG_VERSION "${VER}")
+if(NOT TARGET ${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME})
+  include(cmake/scripts/common/ModuleHelpers.cmake)
 
-  # allow user to override the download URL with a local tarball
-  # needed for offline build envs
-  if(SPDLOG_URL)
-      get_filename_component(SPDLOG_URL "${SPDLOG_URL}" ABSOLUTE)
+  macro(buildmacroSpdlog)
+  
+    find_package(Fmt REQUIRED ${SEARCH_QUIET})
+  
+    if(APPLE)
+      set(EXTRA_ARGS "-DCMAKE_OSX_ARCHITECTURES=${CMAKE_OSX_ARCHITECTURES}")
+    endif()
+  
+    if(WIN32 OR WINDOWS_STORE)
+      set(EXTRA_ARGS -DSPDLOG_WCHAR_SUPPORT=ON
+                     -DSPDLOG_WCHAR_FILENAMES=ON)
+  
+      set(${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_COMPILE_DEFINITIONS SPDLOG_WCHAR_FILENAMES
+                                                                   SPDLOG_WCHAR_TO_UTF8_SUPPORT)
+    endif()
+  
+    set(SPDLOG_VERSION ${${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_VER})
+    # spdlog debug uses postfix d for all platforms
+    set(${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_DEBUG_POSTFIX d)
+  
+    set(CMAKE_ARGS -DCMAKE_CXX_EXTENSIONS=${CMAKE_CXX_EXTENSIONS}
+                   -DCMAKE_CXX_STANDARD=${CMAKE_CXX_STANDARD}
+                   -DSPDLOG_BUILD_EXAMPLE=OFF
+                   -DSPDLOG_BUILD_TESTS=OFF
+                   -DSPDLOG_BUILD_BENCH=OFF
+                   -DSPDLOG_FMT_EXTERNAL=ON
+                   ${EXTRA_ARGS})
+  
+    # Set definitions that will be set in the built cmake config file
+    # We dont import the config file if we build internal (chicken/egg scenario)
+    list(APPEND ${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_COMPILE_DEFINITIONS SPDLOG_COMPILED_LIB
+                                                                         SPDLOG_FMT_EXTERNAL)
+  
+    BUILD_DEP_TARGET()
+  
+    add_dependencies(${${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_BUILD_NAME} ${APP_NAME_LC}::Fmt)
+  endmacro()
+
+  # If there is a potential this library can be built internally
+  # Check its dependencies to allow forcing this lib to be built if one of its
+  # dependencies requires being rebuilt
+  if(ENABLE_INTERNAL_SPDLOG)
+    # Dependency list of this find module for an INTERNAL build
+    set(${CMAKE_FIND_PACKAGE_NAME}_DEPLIST Fmt)
+
+    check_dependency_build(${CMAKE_FIND_PACKAGE_NAME} "${${CMAKE_FIND_PACKAGE_NAME}_DEPLIST}")
+  endif()
+
+  set(${CMAKE_FIND_PACKAGE_NAME}_MODULE_LC spdlog)
+  SETUP_BUILD_VARS()
+
+  SETUP_FIND_SPECS()
+
+  SEARCH_EXISTING_PACKAGES()
+
+  if(("${${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME}_VERSION}" VERSION_LESS ${${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_VER} AND ENABLE_INTERNAL_SPDLOG) OR
+     (((CORE_SYSTEM_NAME STREQUAL linux AND NOT "webos" IN_LIST CORE_PLATFORM_NAME_LC) OR CORE_SYSTEM_NAME STREQUAL freebsd) AND ENABLE_INTERNAL_SPDLOG) OR
+     (DEFINED ${CMAKE_FIND_PACKAGE_NAME}_FORCE_BUILD))
+    message(STATUS "Building ${${CMAKE_FIND_PACKAGE_NAME}_MODULE_LC}: \(version \"${${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_VER}\"\)")
+    cmake_language(EVAL CODE "
+      buildmacro${CMAKE_FIND_PACKAGE_NAME}()
+    ")
   else()
-      set(SPDLOG_URL http://mirrors.kodi.tv/build-deps/sources/spdlog-${SPDLOG_VERSION}.tar.gz)
+    if(TARGET PkgConfig::${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME})
+      # Some older debian pkgconfig packages for Spdlog dont include the include dirs data
+      # If we cant get that data from the pkgconfig TARGET, fall back to the old *_INCLUDEDIR
+      # variable
+      if(NOT ${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_INCLUDE_DIR)
+        set(${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_INCLUDE_DIR ${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME}_INCLUDEDIR)
+      endif()
+    endif()
   endif()
-  if(VERBOSE)
-      message(STATUS "SPDLOG_URL: ${SPDLOG_URL}")
-  endif()
 
-  if(APPLE)
-    set(EXTRA_ARGS "-DCMAKE_OSX_ARCHITECTURES=${CMAKE_OSX_ARCHITECTURES}")
-  endif()
+  if(${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME}_FOUND)
+    # cmake target and not building internal
+    if(TARGET spdlog::spdlog AND NOT TARGET ${${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_BUILD_NAME})
+      add_library(${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME} ALIAS spdlog::spdlog)
+    elseif(TARGET PkgConfig::${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME} AND NOT TARGET ${${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_BUILD_NAME})
+      add_library(${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME} ALIAS PkgConfig::${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME})
+    else()
+      SETUP_BUILD_TARGET()
+      ADD_TARGET_COMPILE_DEFINITION()
 
-  set(SPDLOG_LIBRARY ${CMAKE_BINARY_DIR}/${CORE_BUILD_DIR}/lib/libspdlog.a)
-  set(SPDLOG_INCLUDE_DIR ${CMAKE_BINARY_DIR}/${CORE_BUILD_DIR}/include)
+      add_dependencies(${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME} ${${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_BUILD_NAME})
+    endif()
 
-  externalproject_add(spdlog
-                      URL ${SPDLOG_URL}
-                      DOWNLOAD_DIR ${CMAKE_BINARY_DIR}/${CORE_BUILD_DIR}/download
-                      PREFIX ${CORE_BUILD_DIR}/spdlog
-                      CMAKE_ARGS -DCMAKE_INSTALL_PREFIX=${CMAKE_BINARY_DIR}/${CORE_BUILD_DIR}
-                                 -DCMAKE_CXX_EXTENSIONS=${CMAKE_CXX_EXTENSIONS}
-                                 -DCMAKE_CXX_STANDARD=${CMAKE_CXX_STANDARD}
-                                 -DCMAKE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE}
-                                 -DCMAKE_INSTALL_LIBDIR=lib
-                                 -DSPDLOG_BUILD_EXAMPLE=OFF
-                                 -DSPDLOG_BUILD_TESTS=OFF
-                                 -DSPDLOG_BUILD_BENCH=OFF
-                                 -DSPDLOG_FMT_EXTERNAL=ON
-                                 -DCMAKE_PREFIX_PATH=${CMAKE_BINARY_DIR}/${CORE_BUILD_DIR}
-                                 "${EXTRA_ARGS}"
-                      BUILD_BYPRODUCTS ${SPDLOG_LIBRARY})
-  set_target_properties(spdlog PROPERTIES FOLDER "External Projects")
-
-  if(ENABLE_INTERNAL_FMT)
-    add_dependencies(spdlog fmt)
+    ADD_MULTICONFIG_BUILDMACRO()
   else()
-    # spdlog 1.9.2 fails to build with fmt < 8.0.0
-    find_package(fmt 8.0.0 CONFIG REQUIRED QUIET)
-  endif()
-else()
-  find_package(spdlog 1.5.0 CONFIG REQUIRED QUIET)
-
-  if(PKG_CONFIG_FOUND)
-    pkg_check_modules(PC_SPDLOG spdlog QUIET)
-    set(SPDLOG_VERSION ${PC_SPDLOG_VERSION})
-  endif()
-
-  find_path(SPDLOG_INCLUDE_DIR NAMES spdlog/spdlog.h
-                               PATHS ${PC_SPDLOG_INCLUDEDIR})
-
-  find_library(SPDLOG_LIBRARY_RELEASE NAMES spdlog
-                                      PATHS ${PC_SPDLOG_LIBDIR})
-  find_library(SPDLOG_LIBRARY_DEBUG NAMES spdlogd
-                                    PATHS ${PC_SPDLOG_LIBDIR})
-
-  include(SelectLibraryConfigurations)
-  select_library_configurations(SPDLOG)
-endif()
-
-include(FindPackageHandleStandardArgs)
-find_package_handle_standard_args(Spdlog
-                                  REQUIRED_VARS SPDLOG_LIBRARY SPDLOG_INCLUDE_DIR
-                                  VERSION_VAR SPDLOG_VERSION)
-
-if(SPDLOG_FOUND)
-  set(SPDLOG_LIBRARIES ${SPDLOG_LIBRARY})
-  set(SPDLOG_INCLUDE_DIRS ${SPDLOG_INCLUDE_DIR})
-  set(SPDLOG_DEFINITIONS -DSPDLOG_FMT_EXTERNAL
-                         -DSPDLOG_DEBUG_ON
-                         -DSPDLOG_NO_ATOMIC_LEVELS
-                         -DSPDLOG_ENABLE_PATTERN_PADDING)
-  if(WIN32)
-    list(APPEND SPDLOG_DEFINITIONS -DSPDLOG_WCHAR_FILENAMES
-                                   -DSPDLOG_WCHAR_TO_UTF8_SUPPORT)
-  endif()
-
-  if(NOT TARGET spdlog)
-    add_library(spdlog UNKNOWN IMPORTED)
-    set_target_properties(spdlog PROPERTIES
-                                 IMPORTED_LOCATION "${SPDLOG_LIBRARY}"
-                                 INTERFACE_INCLUDE_DIRECTORIES "${SPDLOG_INCLUDE_DIR}"
-                                 INTERFACE_COMPILE_DEFINITIONS "${SPDLOG_DEFINITIONS}")
+    if(Spdlog_FIND_REQUIRED)
+      message(FATAL_ERROR "Spdlog libraries were not found. You may want to try -DENABLE_INTERNAL_SPDLOG=ON")
+    endif()
   endif()
 endif()
-
-mark_as_advanced(SPDLOG_INCLUDE_DIR SPDLOG_LIBRARY)

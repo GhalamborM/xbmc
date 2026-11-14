@@ -9,7 +9,42 @@
 #include "GUIListGroup.h"
 
 #include "GUIListLabel.h"
+#include "ServiceBroker.h"
+#include "utils/Set.h"
 #include "utils/log.h"
+#include "windowing/WinSystem.h"
+
+namespace
+{
+// Supported control types. Keep sorted.
+constexpr CSet supportedTypes{
+    // clang-format off
+    CGUIControl::GUICONTROL_BORDEREDIMAGE,
+    CGUIControl::GUICONTROL_GAME,
+    CGUIControl::GUICONTROL_GAMECONTROLLER,
+    CGUIControl::GUICONTROL_GAMECONTROLLERLIST,
+    CGUIControl::GUICONTROL_GROUPMASK,
+    CGUIControl::GUICONTROL_IMAGE,
+    CGUIControl::GUICONTROL_LISTGROUP,
+    CGUIControl::GUICONTROL_LISTLABEL,
+    CGUIControl::GUICONTROL_MULTI_IMAGE,
+    CGUIControl::GUICONTROL_PROGRESS,
+    CGUIControl::GUICONTROL_TEXTBOX,
+    // clang-format on
+};
+
+template<typename Function>
+void ForEachListControl(CGUIControlGroup& group, const Function& function)
+{
+  for (auto* control : group.GetChildren())
+  {
+    const auto type = control->GetControlType();
+    if (type == CGUIControl::GUICONTROL_LISTGROUP || type == CGUIControl::GUICONTROL_GROUPMASK)
+      ForEachListControl(*static_cast<CGUIControlGroup*>(control), function);
+    function(control);
+  }
+}
+} // namespace
 
 CGUIListGroup::CGUIListGroup(int parentID, int controlID, float posX, float posY, float width, float height)
 : CGUIControlGroup(parentID, controlID, posX, posY, width, height)
@@ -34,13 +69,7 @@ void CGUIListGroup::AddControl(CGUIControl *control, int position /*= -1*/)
 {
   if (control)
   {
-    if (!(control->GetControlType() == CGUIControl::GUICONTROL_LISTLABEL ||
-          control->GetControlType() == CGUIControl::GUICONTROL_LISTGROUP ||
-          control->GetControlType() == CGUIControl::GUICONTROL_IMAGE ||
-          control->GetControlType() == CGUIControl::GUICONTROL_BORDEREDIMAGE ||
-          control->GetControlType() == CGUIControl::GUICONTROL_MULTI_IMAGE ||
-          control->GetControlType() == CGUIControl::GUICONTROL_TEXTBOX ||
-          control->GetControlType() == CGUIControl::GUICONTROL_PROGRESS))
+    if (!supportedTypes.contains(control->GetControlType()))
       CLog::Log(LOGWARNING, "Trying to add unsupported control type {}", control->GetControlType());
   }
   CGUIControlGroup::AddControl(control, position);
@@ -157,13 +186,7 @@ void CGUIListGroup::SetInvalid()
 
 void CGUIListGroup::SetFocusedItem(unsigned int focus)
 {
-  for (iControls it = m_children.begin(); it != m_children.end(); it++)
-  {
-    if ((*it)->GetControlType() == CGUIControl::GUICONTROL_LISTGROUP)
-      ((CGUIListGroup *)(*it))->SetFocusedItem(focus);
-    else
-      (*it)->SetFocus(focus > 0);
-  }
+  ForEachListControl(*this, [focus](CGUIControl* control) { control->SetFocus(focus > 0); });
   SetFocus(focus > 0);
 }
 
@@ -199,16 +222,12 @@ bool CGUIListGroup::MoveRight()
 
 void CGUIListGroup::SetState(bool selected, bool focused)
 {
-  for (iControls it = m_children.begin(); it != m_children.end(); it++)
-  {
-    if ((*it)->GetControlType() == CGUIControl::GUICONTROL_LISTLABEL)
-    {
-      CGUIListLabel *label = (CGUIListLabel *)(*it);
-      label->SetSelected(selected);
-    }
-    else if ((*it)->GetControlType() == CGUIControl::GUICONTROL_LISTGROUP)
-      ((CGUIListGroup *)(*it))->SetState(selected, focused);
-  }
+  ForEachListControl(*this,
+                     [selected](CGUIControl* control)
+                     {
+                       if (control->GetControlType() == CGUIControl::GUICONTROL_LISTLABEL)
+                         static_cast<CGUIListLabel*>(control)->SetSelected(selected);
+                     });
 }
 
 void CGUIListGroup::SelectItemFromPoint(const CPoint &point)

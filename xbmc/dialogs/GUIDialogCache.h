@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include "filesystem/File.h"
+#include "filesystem/IFileTypes.h"
 #include "threads/SystemClock.h"
 #include "threads/Thread.h"
 
@@ -19,7 +19,9 @@ class CGUIDialogProgress;
 class CGUIDialogCache : public CThread, public XFILE::IFileCallback
 {
 public:
-  CGUIDialogCache(DWORD dwDelay = 0, const std::string& strHeader="", const std::string& strMsg="");
+  CGUIDialogCache(std::chrono::milliseconds delay = std::chrono::milliseconds(100),
+                  const std::string& strHeader = "",
+                  const std::string& strMsg = "");
   ~CGUIDialogCache() override;
   void SetHeader(const std::string& strHeader);
   void SetHeader(int nHeader);
@@ -37,7 +39,7 @@ protected:
 
   void OpenDialog();
 
-  XbmcThreads::EndTime m_endtime;
+  XbmcThreads::EndTime<> m_endtime;
   CGUIDialogProgress* m_pDlg;
   std::string m_strHeader;
   std::string m_strLinePrev;

@@ -1,6 +1,6 @@
 /*
  *  Copyright (c) 2007 d4rk
- *  Copyright (C) 2007-2018 Team Kodi
+ *  Copyright (C) 2007-2024 Team Kodi
  *  This file is part of Kodi - https://kodi.tv
  *
  *  SPDX-License-Identifier: GPL-2.0-or-later
@@ -10,6 +10,8 @@
 #include "YUV2RGBShaderGLES.h"
 
 #include "../RenderFlags.h"
+#include "ConvolutionKernels.h"
+#include "ToneMappers.h"
 #include "settings/AdvancedSettings.h"
 #include "utils/GLUtils.h"
 #include "utils/log.h"
@@ -27,26 +29,48 @@ BaseYUV2RGBGLSLShader::BaseYUV2RGBGLSLShader(EShaderFormat format,
                                              AVColorPrimaries dstPrimaries,
                                              AVColorPrimaries srcPrimaries,
                                              bool toneMap,
-                                             int toneMapMethod)
+                                             ETONEMAPMETHOD toneMapMethod,
+                                             AVColorTransferCharacteristic hueSatTransfer,
+                                             bool gamma,
+                                             bool dither)
 {
   m_width = 1;
   m_height = 1;
   m_field = 0;
   m_format = format;
+  m_dither = dither;
 
   m_black = 0.0f;
   m_contrast = 1.0f;
+  m_hue = 0.0f;
+  m_saturation = 1.0f;
 
   m_convertFullRange = false;
 
   if (m_format == SHADER_YV12)
     m_defines += "#define XBMC_YV12\n";
+  else if (m_format == SHADER_YV12_9 || m_format == SHADER_YV12_10 || m_format == SHADER_YV12_12 ||
+           m_format == SHADER_YV12_14 || m_format == SHADER_YV12_16)
+    m_defines += "#define XBMC_YV12_HI\n";
   else if (m_format == SHADER_NV12)
     m_defines += "#define XBMC_NV12\n";
   else if (m_format == SHADER_NV12_RRG)
     m_defines += "#define XBMC_NV12_RRG\n";
+  else if (m_format == SHADER_YUY2)
+    m_defines += "#define XBMC_YUY2\n";
+  else if (m_format == SHADER_UYVY)
+    m_defines += "#define XBMC_UYVY\n";
+  else if (m_format == SHADER_Y210)
+    m_defines += "#define XBMC_Y210\n";
+  else if (m_format == SHADER_AYUV)
+    m_defines += "#define XBMC_AYUV\n";
+  else if (m_format == SHADER_Y410)
+    m_defines += "#define XBMC_Y410\n";
+  else if (m_format == SHADER_Y412)
+    m_defines += "#define XBMC_Y412\n";
   else
-    CLog::Log(LOGERROR, "GLES: BaseYUV2RGBGLSLShader - unsupported format {}", m_format);
+    CLog::Log(LOGERROR, "GLES: BaseYUV2RGBGLSLShader - unsupported format {}",
+              fmt::formatter<EShaderFormat>::ToString(m_format));
 
   if (dstPrimaries != srcPrimaries)
   {
@@ -66,9 +90,29 @@ BaseYUV2RGBGLSLShader::BaseYUV2RGBGLSLShader(EShaderFormat format,
       m_defines += "#define KODI_TONE_MAPPING_HABLE\n";
   }
 
+  if (hueSatTransfer == AVCOL_TRC_SMPTE2084)
+  {
+    m_hueSatTransfer = hueSatTransfer;
+    m_defines += "#define KODI_HUESAT_PQ\n";
+  }
+  else if (hueSatTransfer == AVCOL_TRC_ARIB_STD_B67)
+  {
+    m_hueSatTransfer = hueSatTransfer;
+    m_defines += "#define KODI_HUESAT_HLG\n";
+  }
+
+  if (gamma)
+    m_defines += "#define KODI_GAMMA\n";
+
+  if (m_dither)
+    m_defines += "#define XBMC_DITHER\n";
+
   VertexShader()->LoadSource("gles_yuv2rgb.vert", m_defines);
 
-  CLog::Log(LOGDEBUG, "GLES: BaseYUV2RGBGLSLShader: defines:\n{}", m_defines);
+  CLog::Log(LOGDEBUG, "GLES: using shader format: {}",
+            fmt::formatter<EShaderFormat>::ToString(m_format));
+  CLog::Log(LOGDEBUG, "GLES: using tonemap method: {}",
+            fmt::formatter<ETONEMAPMETHOD>::ToString(m_toneMappingMethod));
 
   m_convMatrix.SetSourceColorPrimaries(srcPrimaries).SetDestinationColorPrimaries(dstPrimaries);
 }
@@ -87,6 +131,10 @@ void BaseYUV2RGBGLSLShader::OnCompiledAndLinked()
   m_hProj = glGetUniformLocation(ProgramHandle(), "m_proj");
   m_hModel = glGetUniformLocation(ProgramHandle(), "m_model");
   m_hAlpha = glGetUniformLocation(ProgramHandle(), "m_alpha");
+  m_hQuad = glGetUniformLocation(ProgramHandle(), "m_quad");
+  m_hTexRect[0] = glGetUniformLocation(ProgramHandle(), "m_texRectY");
+  m_hTexRect[1] = glGetUniformLocation(ProgramHandle(), "m_texRectU");
+  m_hTexRect[2] = glGetUniformLocation(ProgramHandle(), "m_texRectV");
   m_hYTex = glGetUniformLocation(ProgramHandle(), "m_sampY");
   m_hUTex = glGetUniformLocation(ProgramHandle(), "m_sampU");
   m_hVTex = glGetUniformLocation(ProgramHandle(), "m_sampV");
@@ -98,6 +146,21 @@ void BaseYUV2RGBGLSLShader::OnCompiledAndLinked()
   m_hCoefsDst = glGetUniformLocation(ProgramHandle(), "m_coefsDst");
   m_hToneP1 = glGetUniformLocation(ProgramHandle(), "m_toneP1");
   m_hLuminance = glGetUniformLocation(ProgramHandle(), "m_luminance");
+  m_hHsMat = glGetUniformLocation(ProgramHandle(), "m_hsMat");
+  m_hHsCoefs = glGetUniformLocation(ProgramHandle(), "m_hsCoefs");
+  m_hHsPeak = glGetUniformLocation(ProgramHandle(), "m_hsPeak");
+  m_hHsRange = glGetUniformLocation(ProgramHandle(), "m_hsRange");
+  m_hGammaInv = glGetUniformLocation(ProgramHandle(), "m_gammaInv");
+  m_hGammaRange = glGetUniformLocation(ProgramHandle(), "m_gammaRange");
+
+  if (m_dither)
+  {
+    m_hDitherEnabled = glGetUniformLocation(ProgramHandle(), "m_ditherEnabled");
+    m_hDither = glGetUniformLocation(ProgramHandle(), "m_dither");
+    m_hDitherQuant = glGetUniformLocation(ProgramHandle(), "m_ditherquant");
+    m_hDitherSize = glGetUniformLocation(ProgramHandle(), "m_dithersize");
+  }
+
   VerifyGLState();
 }
 
@@ -109,8 +172,13 @@ bool BaseYUV2RGBGLSLShader::OnEnabled()
   glUniform1i(m_hVTex, 2);
   glUniform2f(m_hStep, 1.0 / m_width, 1.0 / m_height);
 
+  const bool hueSatLinear = m_hueSatTransfer != AVCOL_TRC_UNSPECIFIED;
+
+  // HDR hue and saturation are applied in linear light after the YUV conversion
   m_convMatrix.SetDestinationContrast(m_contrast)
       .SetDestinationBlack(m_black)
+      .SetDestinationHue(hueSatLinear ? 0.0f : m_hue)
+      .SetDestinationSaturation(hueSatLinear ? 1.0f : m_saturation)
       .SetDestinationLimitedRange(!m_convertFullRange);
 
   Matrix4 yuvMat = m_convMatrix.GetYuvMat();
@@ -118,6 +186,12 @@ bool BaseYUV2RGBGLSLShader::OnEnabled()
   glUniformMatrix4fv(m_hProj,  1, GL_FALSE, m_proj);
   glUniformMatrix4fv(m_hModel, 1, GL_FALSE, m_model);
   glUniform1f(m_hAlpha, m_alpha);
+  glUniformMatrix4fv(m_hQuad, 1, GL_FALSE, m_quad.data());
+  for (std::size_t plane = 0; plane < m_texRects.size(); ++plane)
+  {
+    const CRect& rect = m_texRects[plane];
+    glUniform4f(m_hTexRect[plane], rect.x1, rect.y1, rect.Width(), rect.Height());
+  }
 
   if (m_colorConversion)
   {
@@ -125,6 +199,32 @@ bool BaseYUV2RGBGLSLShader::OnEnabled()
     glUniformMatrix3fv(m_hPrimMat, 1, GL_FALSE, primMat.ToRaw());
     glUniform1f(m_hGammaSrc, m_convMatrix.GetGammaSrc());
     glUniform1f(m_hGammaDstInv, 1 / m_convMatrix.GetGammaDst());
+  }
+
+  if (hueSatLinear)
+  {
+    // the signal is still BT.2020 here, primaries conversion comes after
+    Matrix3 hueSatMat =
+        CConvertMatrix::GetLinearHueSatMat(AVCOL_SPC_BT2020_NCL, m_hue, m_saturation);
+    Matrix3x1 coefs = CConvertMatrix::GetRGBYuvCoefs(AVCOL_SPC_BT2020_NCL);
+    float peak = 1.0f;
+    if (m_hueSatTransfer == AVCOL_TRC_SMPTE2084)
+      peak = CToneMappers::GetPeakLuminanceValue(m_hasDisplayMetadata, m_displayMetadata,
+                                                 m_hasLightMetadata, m_lightMetadata) /
+             10000.0f;
+
+    glUniformMatrix3fv(m_hHsMat, 1, GL_FALSE, hueSatMat.ToRaw());
+    glUniform3f(m_hHsCoefs, coefs[0], coefs[1], coefs[2]);
+    glUniform1f(m_hHsPeak, peak);
+    glUniform2f(m_hHsRange, m_convertFullRange ? 1.0f : 876.0f / 1023.0f,
+                m_convertFullRange ? 0.0f : 64.0f / 1023.0f);
+  }
+
+  if (m_hGammaInv >= 0)
+  {
+    glUniform1f(m_hGammaInv, 1.0f / m_gammaExponent);
+    glUniform2f(m_hGammaRange, m_convertFullRange ? 1.0f : 876.0f / 1023.0f,
+                m_convertFullRange ? 0.0f : 64.0f / 1023.0f);
   }
 
   if (m_toneMapping)
@@ -157,16 +257,30 @@ bool BaseYUV2RGBGLSLShader::OnEnabled()
     }
     else if (m_toneMappingMethod == VS_TONEMAPMETHOD_ACES)
     {
-      glUniform1f(m_hLuminance, GetLuminanceValue());
+      const float lumin = CToneMappers::GetLuminanceValue(m_hasDisplayMetadata, m_displayMetadata,
+                                                          m_hasLightMetadata, m_lightMetadata);
+      glUniform1f(m_hLuminance, lumin);
       glUniform1f(m_hToneP1, m_toneMappingParam);
     }
     else if (m_toneMappingMethod == VS_TONEMAPMETHOD_HABLE)
     {
-      float lumin = GetLuminanceValue();
-      float param = (10000.0f / lumin) * (2.0f / m_toneMappingParam);
+      const float lumin = CToneMappers::GetLuminanceValue(m_hasDisplayMetadata, m_displayMetadata,
+                                                          m_hasLightMetadata, m_lightMetadata);
+      const float param = (10000.0f / lumin) * (2.0f / m_toneMappingParam);
       glUniform1f(m_hLuminance, lumin);
       glUniform1f(m_hToneP1, param);
     }
+  }
+
+  if (m_dither && m_ditherTex)
+  {
+    glUniform1f(m_hDitherEnabled, m_ditherEnabled ? 1.0f : 0.0f);
+    glUniform1i(m_hDither, 4);
+    glActiveTexture(GL_TEXTURE4);
+    glBindTexture(GL_TEXTURE_2D, m_ditherTex);
+    glActiveTexture(GL_TEXTURE0);
+    glUniform1f(m_hDitherQuant, (1 << m_ditherDepth) - 1.0f);
+    glUniform2f(m_hDitherSize, static_cast<float>(m_ditherSize), static_cast<float>(m_ditherSize));
   }
 
   VerifyGLState();
@@ -174,8 +288,25 @@ bool BaseYUV2RGBGLSLShader::OnEnabled()
   return true;
 }
 
+void BaseYUV2RGBGLSLShader::SetDitherUniforms(bool enabled,
+                                              GLuint ditherTex,
+                                              unsigned int ditherDepth,
+                                              int ditherSize)
+{
+  m_ditherEnabled = enabled;
+  m_ditherTex = ditherTex;
+  m_ditherDepth = ditherDepth;
+  m_ditherSize = ditherSize;
+}
+
 void BaseYUV2RGBGLSLShader::OnDisabled()
 {
+  if (m_dither && m_ditherTex)
+  {
+    glActiveTexture(GL_TEXTURE4);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glActiveTexture(GL_TEXTURE0);
+  }
 }
 
 void BaseYUV2RGBGLSLShader::Free()
@@ -199,45 +330,15 @@ void BaseYUV2RGBGLSLShader::SetColParams(AVColorSpace colSpace, int bits, bool l
       .SetSourceTextureBitDepth(textureBits);
 }
 
-void BaseYUV2RGBGLSLShader::SetDisplayMetadata(bool hasDisplayMetadata, AVMasteringDisplayMetadata displayMetadata,
-                                               bool hasLightMetadata, AVContentLightMetadata lightMetadata)
+void BaseYUV2RGBGLSLShader::SetDisplayMetadata(bool hasDisplayMetadata,
+                                               const AVMasteringDisplayMetadata& displayMetadata,
+                                               bool hasLightMetadata,
+                                               AVContentLightMetadata lightMetadata)
 {
   m_hasDisplayMetadata = hasDisplayMetadata;
   m_displayMetadata = displayMetadata;
   m_hasLightMetadata = hasLightMetadata;
   m_lightMetadata = lightMetadata;
-}
-
-float BaseYUV2RGBGLSLShader::GetLuminanceValue() const
-{
-  float lum1 = 400.0f; // default for bad quality HDR-PQ sources (with no metadata)
-  float lum2 = lum1;
-  float lum3 = lum1;
-
-  if (m_hasLightMetadata)
-  {
-    uint16_t lum = m_displayMetadata.max_luminance.num / m_displayMetadata.max_luminance.den;
-    if (m_lightMetadata.MaxCLL >= lum)
-    {
-      lum1 = static_cast<float>(lum);
-      lum2 = static_cast<float>(m_lightMetadata.MaxCLL);
-    }
-    else
-    {
-      lum1 = static_cast<float>(m_lightMetadata.MaxCLL);
-      lum2 = static_cast<float>(lum);
-    }
-    lum3 = static_cast<float>(m_lightMetadata.MaxFALL);
-    lum1 = (lum1 * 0.5f) + (lum2 * 0.2f) + (lum3 * 0.3f);
-  }
-  else if (m_hasDisplayMetadata && m_displayMetadata.has_luminance &&
-           m_displayMetadata.max_luminance.num > 0)
-  {
-    uint16_t lum = m_displayMetadata.max_luminance.num / m_displayMetadata.max_luminance.den;
-    lum1 = static_cast<float>(lum);
-  }
-
-  return lum1;
 }
 
 //////////////////////////////////////////////////////////////////////
@@ -249,11 +350,19 @@ YUV2RGBProgressiveShader::YUV2RGBProgressiveShader(EShaderFormat format,
                                                    AVColorPrimaries dstPrimaries,
                                                    AVColorPrimaries srcPrimaries,
                                                    bool toneMap,
-                                                   int toneMapMethod)
-  : BaseYUV2RGBGLSLShader(format, dstPrimaries, srcPrimaries, toneMap, toneMapMethod)
+                                                   ETONEMAPMETHOD toneMapMethod,
+                                                   AVColorTransferCharacteristic hueSatTransfer,
+                                                   bool gamma,
+                                                   bool dither)
+  : BaseYUV2RGBGLSLShader(
+        format, dstPrimaries, srcPrimaries, toneMap, toneMapMethod, hueSatTransfer, gamma, dither)
 {
   PixelShader()->LoadSource("gles_yuv2rgb_basic.frag", m_defines);
   PixelShader()->InsertSource("gles_tonemap.frag", "void main()");
+  PixelShader()->InsertSource("gles_huesat.frag", "void main()");
+  PixelShader()->InsertSource("gles_gamma.frag", "void main()");
+  PixelShader()->InsertSource("gles_dither_uniforms.frag", "void main()");
+  PixelShader()->InsertSource("gles_dither_body.frag", "gl_FragColor");
 }
 
 
@@ -265,15 +374,19 @@ YUV2RGBBobShader::YUV2RGBBobShader(EShaderFormat format,
                                    AVColorPrimaries dstPrimaries,
                                    AVColorPrimaries srcPrimaries,
                                    bool toneMap,
-                                   int toneMapMethod)
-  : BaseYUV2RGBGLSLShader(format, dstPrimaries, srcPrimaries, toneMap, toneMapMethod)
+                                   ETONEMAPMETHOD toneMapMethod,
+                                   AVColorTransferCharacteristic hueSatTransfer,
+                                   bool gamma,
+                                   bool dither)
+  : BaseYUV2RGBGLSLShader(
+        format, dstPrimaries, srcPrimaries, toneMap, toneMapMethod, hueSatTransfer, gamma, dither)
 {
-  m_hStepX = -1;
-  m_hStepY = -1;
-  m_hField = -1;
-
   PixelShader()->LoadSource("gles_yuv2rgb_bob.frag", m_defines);
   PixelShader()->InsertSource("gles_tonemap.frag", "void main()");
+  PixelShader()->InsertSource("gles_huesat.frag", "void main()");
+  PixelShader()->InsertSource("gles_gamma.frag", "void main()");
+  PixelShader()->InsertSource("gles_dither_uniforms.frag", "void main()");
+  PixelShader()->InsertSource("gles_dither_body.frag", "gl_FragColor");
 }
 
 void YUV2RGBBobShader::OnCompiledAndLinked()
@@ -295,4 +408,78 @@ bool YUV2RGBBobShader::OnEnabled()
   glUniform1f(m_hStepY, 1.0f / (float)m_height);
   VerifyGLState();
   return true;
+}
+
+//------------------------------------------------------------------------------
+// YUV2RGBFilterShader
+//------------------------------------------------------------------------------
+
+YUV2RGBFilterShader::YUV2RGBFilterShader(EShaderFormat format,
+                                         AVColorPrimaries dstPrimaries,
+                                         AVColorPrimaries srcPrimaries,
+                                         bool toneMap,
+                                         ETONEMAPMETHOD toneMapMethod,
+                                         AVColorTransferCharacteristic hueSatTransfer,
+                                         bool gamma,
+                                         ESCALINGMETHOD method,
+                                         bool dither)
+  : BaseYUV2RGBGLSLShader(
+        format, dstPrimaries, srcPrimaries, toneMap, toneMapMethod, hueSatTransfer, gamma, dither)
+{
+  m_scaling = method;
+  PixelShader()->LoadSource("gles310_yuv2rgb_filter.frag", m_defines);
+  VertexShader()->LoadSource("gles310_yuv2rgb.vert");
+  PixelShader()->InsertSource("gles_tonemap.frag", "void main()");
+  PixelShader()->InsertSource("gles_huesat.frag", "void main()");
+  PixelShader()->InsertSource("gles_gamma.frag", "void main()");
+  PixelShader()->InsertSource("gles_dither_uniforms.frag", "void main()");
+  PixelShader()->InsertSource("gles_dither_body.frag", "fragColor = rgb");
+}
+
+YUV2RGBFilterShader::~YUV2RGBFilterShader()
+{
+  if (m_kernelTex)
+    glDeleteTextures(1, &m_kernelTex);
+  m_kernelTex = 0;
+}
+
+void YUV2RGBFilterShader::OnCompiledAndLinked()
+{
+  BaseYUV2RGBGLSLShader::OnCompiledAndLinked();
+  m_hKernTex = glGetUniformLocation(ProgramHandle(), "m_kernelTex");
+
+  if (m_scaling != VS_SCALINGMETHOD_LANCZOS3_FAST && m_scaling != VS_SCALINGMETHOD_SPLINE36_FAST)
+    m_scaling = VS_SCALINGMETHOD_LANCZOS3_FAST;
+
+  CConvolutionKernel kernel(m_scaling, 256);
+
+  if (m_kernelTex)
+  {
+    glDeleteTextures(1, &m_kernelTex);
+    m_kernelTex = 0;
+  }
+  glGenTextures(1, &m_kernelTex);
+
+  glActiveTexture(GL_TEXTURE3);
+  glBindTexture(GL_TEXTURE_2D, m_kernelTex);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+
+  GLvoid* data = (GLvoid*)kernel.GetFloatPixels();
+#if defined(GL_ES_VERSION_3_0)
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, kernel.GetSize(), 1, 0, GL_RGBA, GL_FLOAT, data);
+#endif
+  glActiveTexture(GL_TEXTURE0);
+  VerifyGLState();
+}
+
+bool YUV2RGBFilterShader::OnEnabled()
+{
+  glActiveTexture(GL_TEXTURE3);
+  glBindTexture(GL_TEXTURE_2D, m_kernelTex);
+  glUniform1i(m_hKernTex, 3);
+  glActiveTexture(GL_TEXTURE0);
+
+  return BaseYUV2RGBGLSLShader::OnEnabled();
 }

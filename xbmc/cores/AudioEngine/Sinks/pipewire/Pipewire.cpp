@@ -8,20 +8,19 @@
 
 #include "Pipewire.h"
 
-#include "cores/AudioEngine/Sinks/pipewire/PipewireContext.h"
-#include "cores/AudioEngine/Sinks/pipewire/PipewireCore.h"
-#include "cores/AudioEngine/Sinks/pipewire/PipewireRegistry.h"
-#include "cores/AudioEngine/Sinks/pipewire/PipewireThreadLoop.h"
+#include "PipewireContext.h"
+#include "PipewireCore.h"
+#include "PipewireRegistry.h"
+#include "PipewireThreadLoop.h"
+#include "commons/ilog.h"
 #include "utils/log.h"
 
 #include <pipewire/pipewire.h>
 
-namespace AE
-{
-namespace SINK
-{
-namespace PIPEWIRE
-{
+using namespace std::chrono_literals;
+
+using namespace KODI;
+using namespace PIPEWIRE;
 
 CPipewire::CPipewire()
 {
@@ -31,15 +30,18 @@ CPipewire::CPipewire()
 CPipewire::~CPipewire()
 {
   if (m_loop)
+    m_loop->Lock();
+
+  m_registry.reset();
+  m_core.reset();
+  m_context.reset();
+
+  if (m_loop)
   {
     m_loop->Unlock();
     m_loop->Stop();
   }
 
-  m_stream.reset();
-  m_registry.reset();
-  m_core.reset();
-  m_context.reset();
   m_loop.reset();
 
   pw_deinit();
@@ -49,9 +51,9 @@ bool CPipewire::Start()
 {
   m_loop = std::make_unique<CPipewireThreadLoop>();
 
-  m_context = std::make_unique<CPipewireContext>(m_loop->Get());
+  m_context = std::make_unique<CPipewireContext>(*m_loop);
 
-  m_loop->Lock();
+  PIPEWIRE::CLoopLockGuard lock(*m_loop);
 
   if (!m_loop->Start())
   {
@@ -59,21 +61,51 @@ bool CPipewire::Start()
     return false;
   }
 
-  m_core = std::make_unique<CPipewireCore>(m_context->Get());
-  m_core->AddListener(this);
+  try
+  {
+    m_core = std::make_unique<CPipewireCore>(*m_context);
+  }
+  catch (std::exception& e)
+  {
+    CLog::Log(LOGERROR, "Pipewire: failed to connect to server");
+    return false;
+  }
 
-  m_registry = std::make_unique<CPipewireRegistry>(m_core->Get());
-  m_registry->AddListener(this);
+  CLog::Log(LOGINFO, "Pipewire: connected to server");
+
+  m_registry = std::make_unique<CPipewireRegistry>(*m_core);
 
   m_core->Sync();
 
-  m_loop->Wait();
-
-  m_loop->Unlock();
+  int ret = m_loop->Wait(5s);
+  if (ret == -ETIMEDOUT)
+  {
+    CLog::Log(LOGDEBUG, "Pipewire: timed out out waiting for synchronization");
+    return false;
+  }
 
   return true;
 }
 
-} // namespace PIPEWIRE
-} // namespace SINK
-} // namespace AE
+std::unique_ptr<CPipewire> CPipewire::Create()
+{
+  struct PipewireMaker : public CPipewire
+  {
+    using CPipewire::CPipewire;
+  };
+
+  try
+  {
+    auto pipewire = std::make_unique<PipewireMaker>();
+
+    if (!pipewire->Start())
+      return {};
+
+    return pipewire;
+  }
+  catch (const std::exception& e)
+  {
+    CLog::Log(LOGWARNING, "Pipewire: Exception in 'Create': {}", e.what());
+    return {};
+  }
+}

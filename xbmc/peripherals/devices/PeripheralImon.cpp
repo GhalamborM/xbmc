@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2012-2018 Team Kodi
+ *  Copyright (C) 2012-2024 Team Kodi
  *  This file is part of Kodi - https://kodi.tv
  *
  *  SPDX-License-Identifier: GPL-2.0-or-later
@@ -15,7 +15,6 @@
 using namespace PERIPHERALS;
 
 std::atomic<long> CPeripheralImon::m_lCountOfImonsConflictWithDInput(0L);
-
 
 CPeripheralImon::CPeripheralImon(CPeripherals& manager,
                                  const PeripheralScanResult& scanResult,
@@ -33,6 +32,8 @@ void CPeripheralImon::OnDeviceRemoved()
     if (--m_lCountOfImonsConflictWithDInput == 0)
       ActionOnImonConflict(false);
   }
+
+  CPeripheral::OnDeviceRemoved();
 }
 
 bool CPeripheralImon::InitialiseFeature(const PeripheralFeature feature)

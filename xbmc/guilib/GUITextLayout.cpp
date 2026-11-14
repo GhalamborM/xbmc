@@ -10,10 +10,19 @@
 
 #include "GUIColorManager.h"
 #include "GUIComponent.h"
-#include "GUIControl.h"
 #include "GUIFont.h"
+#include "ServiceBroker.h"
 #include "utils/CharsetConverter.h"
 #include "utils/StringUtils.h"
+#include "utils/TransformMatrix.h"
+#include "utils/log.h"
+#include "windowing/GraphicContext.h"
+#include "windowing/WinSystem.h"
+
+#include <algorithm>
+#include <functional>
+#include <iterator>
+#include <limits>
 
 CGUIString::CGUIString(iString start, iString end, bool carriageReturn)
 {
@@ -46,11 +55,22 @@ void CGUITextLayout::SetWrap(bool bWrap)
   m_wrap = bWrap;
 }
 
+void CGUITextLayout::SetFont(CGUIFont* font)
+{
+  const bool usingMonoFont = m_font != nullptr && m_font == m_monoFont;
+  m_varFont = font;
+  m_font = usingMonoFont ? m_monoFont : font;
+
+  // invalidate the cached text so the next Update()/UpdateW() re-lays out using the new font
+  m_lastUtf8Text.clear();
+  m_lastText.clear();
+}
+
 void CGUITextLayout::Render(float x,
                             float y,
                             float angle,
-                            UTILS::COLOR::Color color,
-                            UTILS::COLOR::Color shadowColor,
+                            KODI::UTILS::COLOR::Color color,
+                            KODI::UTILS::COLOR::Color shadowColor,
                             uint32_t alignment,
                             float maxWidth,
                             bool solid)
@@ -59,7 +79,7 @@ void CGUITextLayout::Render(float x,
     return;
 
   // set the main text color
-  if (m_colors.size())
+  if (!m_colors.empty())
     m_colors[0] = color;
 
   // render the text at the required location, angle, and size
@@ -101,12 +121,11 @@ bool CGUITextLayout::UpdateScrollinfo(CScrollInfo &scrollInfo)
   return m_font->UpdateScrollInfo(m_lines[0].m_text, scrollInfo);
 }
 
-
 void CGUITextLayout::RenderScrolling(float x,
                                      float y,
                                      float angle,
-                                     UTILS::COLOR::Color color,
-                                     UTILS::COLOR::Color shadowColor,
+                                     KODI::UTILS::COLOR::Color color,
+                                     KODI::UTILS::COLOR::Color shadowColor,
                                      uint32_t alignment,
                                      float maxWidth,
                                      const CScrollInfo& scrollInfo)
@@ -115,7 +134,7 @@ void CGUITextLayout::RenderScrolling(float x,
     return;
 
   // set the main text color
-  if (m_colors.size())
+  if (!m_colors.empty())
     m_colors[0] = color;
 
   // render the text at the required location, angle, and size
@@ -149,18 +168,13 @@ void CGUITextLayout::RenderScrolling(float x,
 
 void CGUITextLayout::RenderOutline(float x,
                                    float y,
-                                   UTILS::COLOR::Color color,
-                                   UTILS::COLOR::Color outlineColor,
+                                   KODI::UTILS::COLOR::Color color,
+                                   KODI::UTILS::COLOR::Color outlineColor,
                                    uint32_t alignment,
                                    float maxWidth)
 {
   if (!m_font)
     return;
-
-  // set the outline color
-  std::vector<UTILS::COLOR::Color> outlineColors;
-  if (m_colors.size())
-    outlineColors.push_back(outlineColor);
 
   // center our text vertically
   if (alignment & XBFONT_CENTER_Y)
@@ -193,14 +207,14 @@ void CGUITextLayout::RenderOutline(float x,
 
       // don't pass maxWidth through to the renderer for the same reason above: it will cause clipping
       // on the left.
-      m_borderFont->DrawText(bx, by, outlineColors, 0, string.m_text, align, 0);
+      m_borderFont->DrawText(bx, by, outlineColor, 0, string.m_text, align, 0);
       by += m_borderFont->GetLineHeight();
     }
     m_borderFont->End();
   }
 
   // set the main text color
-  if (m_colors.size())
+  if (!m_colors.empty())
     m_colors[0] = color;
 
   m_font->Begin();
@@ -245,7 +259,7 @@ void CGUITextLayout::UpdateCommon(const std::wstring &text, float maxWidth, bool
 {
   // parse the text for style information
   vecText parsedText;
-  std::vector<UTILS::COLOR::Color> colors;
+  std::vector<KODI::UTILS::COLOR::Color> colors;
   ParseText(text, m_font ? m_font->GetStyle() : 0, m_textColor, colors, parsedText);
 
   // and update
@@ -253,7 +267,7 @@ void CGUITextLayout::UpdateCommon(const std::wstring &text, float maxWidth, bool
 }
 
 void CGUITextLayout::UpdateStyled(const vecText& text,
-                                  const std::vector<UTILS::COLOR::Color>& colors,
+                                  const std::vector<KODI::UTILS::COLOR::Color>& colors,
                                   float maxWidth,
                                   bool forceLTRReadingOrder)
 {
@@ -262,7 +276,7 @@ void CGUITextLayout::UpdateStyled(const vecText& text,
   m_colors = colors;
 
   // if we need to wrap the text, then do so
-  if (m_wrap && maxWidth > 0)
+  if (m_wrap)
     WrapText(text, maxWidth);
   else
     LineBreakText(text, m_lines);
@@ -284,7 +298,7 @@ void CGUITextLayout::BidiTransform(std::vector<CGUIString>& lines, bool forceLTR
   {
     CGUIString& line = lines[i];
     unsigned int lineLength = line.m_text.size();
-    std::wstring logicalText;
+    std::u32string logicalText;
     vecText style;
 
     logicalText.reserve(lineLength);
@@ -293,13 +307,13 @@ void CGUITextLayout::BidiTransform(std::vector<CGUIString>& lines, bool forceLTR
     // Separate the text and style for the input styled text
     for (const auto& it : line.m_text)
     {
-      logicalText.push_back((wchar_t)(it & 0xffff));
-      style.push_back(it & 0xffff0000);
+      logicalText.push_back(static_cast<char32_t>(it & 0xffffffff));
+      style.push_back(it & 0xffffffff00000000);
     }
 
     // Allocate memory for visual to logical map and call bidi
     int* visualToLogicalMap = new (std::nothrow) int[lineLength + 1]();
-    std::wstring visualText = BidiFlip(logicalText, forceLTRReadingOrder, visualToLogicalMap);
+    std::u32string visualText = BidiFlip(logicalText, forceLTRReadingOrder, visualToLogicalMap);
 
     vecText styledVisualText;
     styledVisualText.reserve(lineLength);
@@ -327,21 +341,13 @@ void CGUITextLayout::BidiTransform(std::vector<CGUIString>& lines, bool forceLTR
   }
 }
 
-std::wstring CGUITextLayout::BidiFlip(const std::wstring& text,
-                                      bool forceLTRReadingOrder,
-                                      int* visualToLogicalMap /*= nullptr*/)
+std::u32string CGUITextLayout::BidiFlip(const std::u32string& text,
+                                        bool forceLTRReadingOrder,
+                                        int* visualToLogicalMap /*= nullptr*/)
 {
-  std::wstring visualText;
-  std::u32string utf32logical;
-  std::u32string utf32visual;
-
-  // Convert to utf32, call bidi then convert the result back to utf16
-  g_charsetConverter.wToUtf32(text, utf32logical);
-  g_charsetConverter.utf32logicalToVisualBiDi(utf32logical, utf32visual, forceLTRReadingOrder,
-                                              false,
+  std::u32string visualText;
+  g_charsetConverter.utf32logicalToVisualBiDi(text, visualText, forceLTRReadingOrder, false,
                                               visualToLogicalMap);
-  g_charsetConverter.utf32ToW(utf32visual, visualText);
-
   return visualText;
 }
 
@@ -349,19 +355,20 @@ void CGUITextLayout::Filter(std::string &text)
 {
   std::wstring utf16;
   g_charsetConverter.utf8ToW(text, utf16, false);
-  std::vector<UTILS::COLOR::Color> colors;
+  std::vector<KODI::UTILS::COLOR::Color> colors;
   vecText parsedText;
   ParseText(utf16, 0, 0xffffffff, colors, parsedText);
-  utf16.clear();
-  for (unsigned int i = 0; i < parsedText.size(); i++)
-    utf16 += (wchar_t)(0xffff & parsedText[i]);
-  g_charsetConverter.wToUTF8(utf16, text);
+  std::u32string utf32;
+  utf32.reserve(parsedText.size());
+  for (const character_t letter : parsedText)
+    utf32 += static_cast<char32_t>(letter & 0xffffffff);
+  g_charsetConverter.utf32ToUtf8(utf32, text);
 }
 
 void CGUITextLayout::ParseText(const std::wstring& text,
                                uint32_t defaultStyle,
-                               UTILS::COLOR::Color defaultColor,
-                               std::vector<UTILS::COLOR::Color>& colors,
+                               KODI::UTILS::COLOR::Color defaultColor,
+                               std::vector<KODI::UTILS::COLOR::Color>& colors,
                                vecText& parsedText)
 {
   // run through the string, searching for:
@@ -372,22 +379,32 @@ void CGUITextLayout::ParseText(const std::wstring& text,
   // [TABS] tab amount [/TABS] -> add tabulator space in view
 
   uint32_t currentStyle = defaultStyle; // start with the default font's style
-  UTILS::COLOR::Color currentColor = 0;
+  KODI::UTILS::COLOR::Color currentColor = 0;
 
   colors.push_back(defaultColor);
-  std::stack<UTILS::COLOR::Color> colorStack;
+  std::stack<KODI::UTILS::COLOR::Color> colorStack;
   colorStack.push(0);
 
-  // these aren't independent, but that's probably not too much of an issue
-  // eg [UPPERCASE]Glah[LOWERCASE]FReD[/LOWERCASE]Georeg[/UPPERCASE] will work (lower case >> upper case)
-  // but [LOWERCASE]Glah[UPPERCASE]FReD[/UPPERCASE]Georeg[/LOWERCASE] won't
+  // Boolean style tags ([B], [I], [LIGHT], [UPPERCASE], [LOWERCASE], [CAPITALIZE])
+  // use per-tag reference counts so that nested identical tags work correctly.
+  // This fixes the case where a skin wraps a label in e.g. [B]...[/B] while the
+  // addon has already formatted the value with [B]...[/B], producing [B][B]text[/B][/B].
+  // With simple |= / &=~ the first [/B] would clear bold for everything that follows.
+  // With reference counts the bit stays set until the last matching open tag is closed.
+  // Unmatched closing tags are no-ops (count floors at 0).
+  int boldDepth = 0;
+  int italicDepth = 0;
+  int lightDepth = 0;
+  int uppercaseDepth = 0;
+  int lowercaseDepth = 0;
+  int capitalizeDepth = 0;
 
   int startPos = 0;
   size_t pos = text.find(L'[');
-  while (pos != std::string::npos && pos + 1 < text.size())
+  while (pos != std::wstring::npos && pos + 1 < text.size())
   {
     uint32_t newStyle = 0;
-    UTILS::COLOR::Color newColor = currentColor;
+    KODI::UTILS::COLOR::Color newColor = currentColor;
     bool colorTagChange = false;
     bool newLine = false;
     int tabs = 0;
@@ -401,58 +418,94 @@ void CGUITextLayout::ParseText(const std::wstring& text,
     }
     // check for each type
     if (text.compare(pos, 2, L"B]") == 0)
-    { // bold - finish the current text block and assign the bold state
+    { // bold
       pos += 2;
-      if ((on && text.find(L"[/B]",pos) != std::string::npos) ||          // check for a matching end point
-         (!on && (currentStyle & FONT_STYLE_BOLD)))       // or matching start point
-        newStyle = FONT_STYLE_BOLD;
+      if (on)
+      {
+        if (text.find(L"[/B]", pos) != std::wstring::npos)
+          ++boldDepth;
+      }
+      else if (boldDepth > 0)
+        --boldDepth;
+      newStyle = FONT_STYLE_BOLD;
     }
     else if (text.compare(pos, 2, L"I]") == 0)
     { // italics
       pos += 2;
-      if ((on && text.find(L"[/I]", pos) != std::string::npos) ||          // check for a matching end point
-         (!on && (currentStyle & FONT_STYLE_ITALICS)))    // or matching start point
-        newStyle = FONT_STYLE_ITALICS;
+      if (on)
+      {
+        if (text.find(L"[/I]", pos) != std::wstring::npos)
+          ++italicDepth;
+      }
+      else if (italicDepth > 0)
+        --italicDepth;
+      newStyle = FONT_STYLE_ITALICS;
     }
     else if (text.compare(pos, 10, L"UPPERCASE]") == 0)
     {
       pos += 10;
-      if ((on && text.find(L"[/UPPERCASE]", pos) != std::string::npos) ||  // check for a matching end point
-         (!on && (currentStyle & FONT_STYLE_UPPERCASE)))  // or matching start point
-        newStyle = FONT_STYLE_UPPERCASE;
+      if (on)
+      {
+        if (text.find(L"[/UPPERCASE]", pos) != std::wstring::npos)
+          ++uppercaseDepth;
+      }
+      else if (uppercaseDepth > 0)
+        --uppercaseDepth;
+      newStyle = FONT_STYLE_UPPERCASE;
     }
     else if (text.compare(pos, 10, L"LOWERCASE]") == 0)
     {
       pos += 10;
-      if ((on && text.find(L"[/LOWERCASE]", pos) != std::string::npos) ||  // check for a matching end point
-         (!on && (currentStyle & FONT_STYLE_LOWERCASE)))  // or matching start point
-        newStyle = FONT_STYLE_LOWERCASE;
+      if (on)
+      {
+        if (text.find(L"[/LOWERCASE]", pos) != std::wstring::npos)
+          ++lowercaseDepth;
+      }
+      else if (lowercaseDepth > 0)
+        --lowercaseDepth;
+      newStyle = FONT_STYLE_LOWERCASE;
     }
     else if (text.compare(pos, 11, L"CAPITALIZE]") == 0)
     {
       pos += 11;
-      if ((on && text.find(L"[/CAPITALIZE]", pos) != std::string::npos) ||  // check for a matching end point
-         (!on && (currentStyle & FONT_STYLE_CAPITALIZE)))  // or matching start point
-        newStyle = FONT_STYLE_CAPITALIZE;
+      if (on)
+      {
+        if (text.find(L"[/CAPITALIZE]", pos) != std::wstring::npos)
+          ++capitalizeDepth;
+      }
+      else if (capitalizeDepth > 0)
+        --capitalizeDepth;
+      newStyle = FONT_STYLE_CAPITALIZE;
     }
     else if (text.compare(pos, 6, L"LIGHT]") == 0)
     {
       pos += 6;
-      if ((on && text.find(L"[/LIGHT]", pos) != std::string::npos) ||
-         (!on && (currentStyle & FONT_STYLE_LIGHT)))
-        newStyle = FONT_STYLE_LIGHT;
+      if (on)
+      {
+        if (text.find(L"[/LIGHT]", pos) != std::wstring::npos)
+          ++lightDepth;
+      }
+      else if (lightDepth > 0)
+        --lightDepth;
+      newStyle = FONT_STYLE_LIGHT;
     }
-    else if (text.compare(pos, 5, L"TABS]") == 0 && on)
+    else if (text.compare(pos, 5, L"TABS]") == 0)
     {
       pos += 5;
-      const size_t end = text.find(L"[/TABS]", pos);
-      if (end != std::string::npos)
+      if (on)
       {
-        std::string t;
-        g_charsetConverter.wToUTF8(text.substr(pos), t);
-        tabs = atoi(t.c_str());
-        pos = end + 7;
+        const size_t end = text.find(L"[/TABS]", pos);
+        if (end != std::wstring::npos)
+        {
+          std::string t;
+          g_charsetConverter.wToUTF8(text.substr(pos, end - pos), t);
+          tabs = atoi(t.c_str());
+          pos = end + 7;
+        }
       }
+      // Equivalent of newStyle for other formatting tags to have the tag text discarded.
+      if (!tabs)
+        tabs = -1;
     }
     else if (text.compare(pos, 3, L"CR]") == 0 && on)
     {
@@ -462,12 +515,13 @@ void CGUITextLayout::ParseText(const std::wstring& text,
     else if (text.compare(pos,5, L"COLOR") == 0)
     { // color
       size_t finish = text.find(L']', pos + 5);
-      if (on && finish != std::string::npos && text.find(L"[/COLOR]",finish) != std::string::npos)
+      if (on && finish != std::wstring::npos &&
+          text.find(L"[/COLOR]", finish) != std::wstring::npos)
       {
         std::string t;
         g_charsetConverter.wToUTF8(text.substr(pos + 5, finish - pos - 5), t);
-        UTILS::COLOR::Color color = CServiceBroker::GetGUI()->GetColorManager().GetColor(t);
-        const auto& it = std::find(colors.begin(), colors.end(), color);
+        KODI::UTILS::COLOR::Color color = CServiceBroker::GetGUI()->GetColorManager().GetColor(t);
+        const auto& it = std::ranges::find(colors, color);
         if (it == colors.end())
         { // create new color
           if (colors.size() <= 0xFF)
@@ -490,7 +544,7 @@ void CGUITextLayout::ParseText(const std::wstring& text,
         newColor = colorStack.top();
         colorTagChange = true;
       }
-      if (finish != std::string::npos)
+      if (finish != std::wstring::npos)
         pos = finish + 1;
     }
 
@@ -503,19 +557,31 @@ void CGUITextLayout::ParseText(const std::wstring& text,
         StringUtils::ToLower(subText);
       if (currentStyle & FONT_STYLE_CAPITALIZE)
         StringUtils::ToCapitalize(subText);
-      AppendToUTF32(subText, ((currentStyle & FONT_STYLE_MASK) << 24) | (currentColor << 16), parsedText);
+      AppendToUTF32(subText,
+                    (static_cast<character_t>(currentStyle & FONT_STYLE_MASK) << 40) |
+                        (static_cast<character_t>(currentColor) << 32),
+                    parsedText);
       if (newLine)
         parsedText.push_back(L'\n');
       for (int i = 0; i < tabs; ++i)
         parsedText.push_back(L'\t');
 
-      // and switch to the new style
+      // switch to the new style, deriving it from the current depths
       startPos = pos;
       currentColor = newColor;
-      if (on)
-        currentStyle |= newStyle;
-      else
-        currentStyle &= ~newStyle;
+      currentStyle = defaultStyle;
+      if (boldDepth > 0)
+        currentStyle |= FONT_STYLE_BOLD;
+      if (italicDepth > 0)
+        currentStyle |= FONT_STYLE_ITALICS;
+      if (lightDepth > 0)
+        currentStyle |= FONT_STYLE_LIGHT;
+      if (uppercaseDepth > 0)
+        currentStyle |= FONT_STYLE_UPPERCASE;
+      if (lowercaseDepth > 0)
+        currentStyle |= FONT_STYLE_LOWERCASE;
+      if (capitalizeDepth > 0)
+        currentStyle |= FONT_STYLE_CAPITALIZE;
     }
     pos = text.find(L'[', pos);
   }
@@ -527,7 +593,10 @@ void CGUITextLayout::ParseText(const std::wstring& text,
     StringUtils::ToLower(subText);
   if (currentStyle & FONT_STYLE_CAPITALIZE)
     StringUtils::ToCapitalize(subText);
-  AppendToUTF32(subText, ((currentStyle & FONT_STYLE_MASK) << 24) | (currentColor << 16), parsedText);
+  AppendToUTF32(subText,
+                (static_cast<character_t>(currentStyle & FONT_STYLE_MASK) << 40) |
+                    (static_cast<character_t>(currentColor) << 32),
+                parsedText);
 }
 
 void CGUITextLayout::SetMaxHeight(float fHeight)
@@ -540,75 +609,144 @@ void CGUITextLayout::WrapText(const vecText &text, float maxWidth)
   if (!m_font)
     return;
 
-  int nMaxLines = (m_maxHeight > 0 && m_font->GetLineHeight() > 0)?(int)ceilf(m_maxHeight / m_font->GetLineHeight()):-1;
-
   m_lines.clear();
+
+  if (maxWidth < 0)
+  {
+    CLog::LogF(LOGWARNING, "Cannot wrap the text due to invalid max width value.");
+    return;
+  }
+
+  if (maxWidth == 0) // Unlimited max width
+  {
+    LineBreakText(text, m_lines);
+    return;
+  }
 
   std::vector<CGUIString> lines;
   LineBreakText(text, lines);
 
-  for (unsigned int i = 0; i < lines.size(); i++)
+  size_t nMaxLines;
+  if (m_maxHeight > 0 && m_font->GetLineHeight() > 0)
+    nMaxLines = static_cast<size_t>(std::ceil(m_maxHeight / m_font->GetLineHeight()));
+  else
+    nMaxLines = std::numeric_limits<size_t>::max();
+
+  // Split lines that exceed the maximum width,
+  // lines can be split by last space char or if there are no spaces by character
+  // to mimics the line behavior of word processors
+  for (const CGUIString& line : lines)
   {
-    const CGUIString &line = lines[i];
-    vecText::const_iterator lastSpace = line.m_text.begin();
-    vecText::const_iterator pos = line.m_text.begin();
-    unsigned int lastSpaceInLine = 0;
-    vecText curLine;
-    while (pos != line.m_text.end())
-    {
-      // Get the current letter in the string
-      character_t letter = *pos;
-      // check for a space
-      if (CanWrapAtLetter(letter))
-      {
-        float width = m_font->GetTextWidth(curLine);
-        if (width > maxWidth)
-        {
-          if (lastSpace != line.m_text.begin() && lastSpaceInLine > 0)
-          {
-            CGUIString string(curLine.begin(), curLine.begin() + lastSpaceInLine, false);
-            m_lines.push_back(string);
-            // check for exceeding our number of lines
-            if (nMaxLines > 0 && m_lines.size() >= (size_t)nMaxLines)
-              return;
-            // skip over spaces
-            pos = lastSpace;
-            while (pos != line.m_text.end() && IsSpace(*pos))
-              ++pos;
-            curLine.clear();
-            lastSpaceInLine = 0;
-            lastSpace = line.m_text.begin();
-            continue;
-          }
-        }
-        lastSpace = pos;
-        lastSpaceInLine = curLine.size();
-      }
-      curLine.push_back(letter);
-      ++pos;
-    }
-    // now add whatever we have left to the string
-    float width = m_font->GetTextWidth(curLine);
-    if (width > maxWidth)
-    {
-      // too long - put up to the last space on if we can + remove it from what's left.
-      if (lastSpace != line.m_text.begin() && lastSpaceInLine > 0)
-      {
-        CGUIString string(curLine.begin(), curLine.begin() + lastSpaceInLine, false);
-        m_lines.push_back(string);
-        // check for exceeding our number of lines
-        if (nMaxLines > 0 && m_lines.size() >= (size_t)nMaxLines)
-          return;
-        curLine.erase(curLine.begin(), curLine.begin() + lastSpaceInLine);
-        while (curLine.size() && IsSpace(curLine.at(0)))
-          curLine.erase(curLine.begin());
-      }
-    }
-    CGUIString string(curLine.begin(), curLine.end(), true);
-    m_lines.push_back(string);
-    // check for exceeding our number of lines
-    if (nMaxLines > 0 && m_lines.size() >= (size_t)nMaxLines)
+    if (m_lines.size() >= nMaxLines)
       return;
+
+    if (line.m_text.empty()) // Blank line
+    {
+      m_lines.emplace_back(line);
+      continue;
+    }
+
+    auto widthOf = [&](const std::vector<character_t>::const_iterator start,
+                       const std::vector<character_t>::const_iterator end)
+    {
+      if (start == end)
+        return 0.0f;
+      return m_font->GetTextWidth({start, end});
+    };
+
+    auto skipLeadingSpaces = [&](vecText::const_iterator& it)
+    {
+      it = std::find_if_not(it, line.m_text.end(),
+                            std::bind_front(&CGUITextLayout::CanWrapAtLetter, this));
+    };
+
+    auto current = line.m_text.begin();
+    skipLeadingSpaces(current);
+
+    float currentWidth = 0.0f;
+    std::vector<character_t>::const_iterator currentStart = current;
+    // track end without trailing spaces
+    std::vector<character_t>::const_iterator lastNonSpaceInLine = currentStart;
+
+    while (current != line.m_text.end())
+    {
+      // Find next candidate wrap position
+      auto wordEnd = std::find_if(current, line.m_text.end(),
+                                  std::bind_front(&CGUITextLayout::CanWrapAtLetter, this));
+      const bool hasSpace = (wordEnd != line.m_text.end());
+      const float wordWidth = widthOf(current, wordEnd);
+
+      // Try to include word + trailing space
+      if (const float spaceWidth = hasSpace ? widthOf(wordEnd, wordEnd + 1) : 0.0f;
+          currentWidth + wordWidth + spaceWidth <= maxWidth)
+      {
+        currentWidth += wordWidth + spaceWidth;
+        lastNonSpaceInLine = wordEnd; // exclude trailing space
+        current = wordEnd;
+        if (hasSpace)
+          ++current;
+        continue;
+      }
+
+      // Try to include word without trailing space
+      if (currentWidth + wordWidth <= maxWidth)
+      {
+        m_lines.emplace_back(currentStart, wordEnd, false);
+        if (m_lines.size() >= nMaxLines)
+          return;
+
+        current = wordEnd;
+        skipLeadingSpaces(current);
+        currentStart = current;
+        currentWidth = 0.0f;
+        lastNonSpaceInLine = currentStart;
+        continue;
+      }
+
+      // word itself doesn't fit after existing content: wrap before it (trim trailing spaces)
+      if (currentWidth > 0.0f)
+      {
+        const std::vector<character_t>::const_iterator emitEnd =
+            lastNonSpaceInLine > currentStart ? lastNonSpaceInLine : wordEnd;
+        m_lines.emplace_back(currentStart, emitEnd, false);
+        if (m_lines.size() >= nMaxLines)
+          return;
+
+        // Start a new line; keep pos at start of the overflowing word
+        skipLeadingSpaces(current);
+        currentStart = current;
+        currentWidth = 0.0f;
+        lastNonSpaceInLine = currentStart;
+        continue;
+      }
+
+      if (current == wordEnd)
+        break;
+
+      // current line is empty and word is too long: split it after the last character that fits,
+      // but take at least one to ensure progress
+      const size_t bestCount =
+          std::max<size_t>(m_font->GetFittingLength({current, wordEnd}, maxWidth), 1);
+
+      const auto cut = current + static_cast<ptrdiff_t>(bestCount);
+      m_lines.emplace_back(current, cut, false);
+      if (m_lines.size() >= nMaxLines)
+        return;
+
+      current = cut;
+      skipLeadingSpaces(current);
+      currentStart = current;
+      currentWidth = 0.0f;
+      lastNonSpaceInLine = currentStart;
+    }
+
+    // Add remaining text part of this paragraph line
+    if (currentStart < line.m_text.end())
+      m_lines.emplace_back(currentStart, line.m_text.end(), false);
+
+    // Restore carriage return marker for the end of paragraph
+    if (!m_lines.empty())
+      m_lines.back().m_carriageReturn = line.m_carriageReturn;
   }
 }
 
@@ -623,7 +761,7 @@ void CGUITextLayout::LineBreakText(const vecText &text, std::vector<CGUIString> 
     character_t letter = *pos;
 
     // Handle the newline character
-    if ((letter & 0xffff) == L'\n' )
+    if ((letter & 0xffffffff) == L'\n')
     { // push back everything up till now
       CGUIString string(lineStart, pos, true);
       lines.push_back(string);
@@ -671,7 +809,7 @@ unsigned int CGUITextLayout::GetTextLength() const
 void CGUITextLayout::GetFirstText(vecText &text) const
 {
   text.clear();
-  if (m_lines.size())
+  if (!m_lines.empty())
     text = m_lines[0].m_text;
 }
 
@@ -680,8 +818,13 @@ float CGUITextLayout::GetTextWidth(const std::wstring &text) const
   // NOTE: Assumes a single line of text
   if (!m_font) return 0;
   vecText utf32;
-  AppendToUTF32(text, (m_font->GetStyle() & FONT_STYLE_MASK) << 24, utf32);
+  AppendToUTF32(text, static_cast<character_t>(m_font->GetStyle() & FONT_STYLE_MASK) << 40, utf32);
   return m_font->GetTextWidth(utf32);
+}
+
+float CGUITextLayout::GetTextWidth(const vecText& text) const
+{
+  return m_font->GetTextWidth(text);
 }
 
 std::string CGUITextLayout::GetText() const
@@ -698,8 +841,8 @@ std::string CGUITextLayout::GetText() const
 void CGUITextLayout::DrawText(CGUIFont* font,
                               float x,
                               float y,
-                              UTILS::COLOR::Color color,
-                              UTILS::COLOR::Color shadowColor,
+                              KODI::UTILS::COLOR::Color color,
+                              KODI::UTILS::COLOR::Color shadowColor,
                               const std::string& text,
                               uint32_t align)
 {
@@ -713,8 +856,19 @@ void CGUITextLayout::AppendToUTF32(const std::wstring &utf16, character_t colSty
 {
   // NOTE: Assumes a single line of text
   utf32.reserve(utf32.size() + utf16.size());
-  for (unsigned int i = 0; i < utf16.size(); i++)
-    utf32.push_back(utf16[i] | colStyle);
+  for (size_t i = 0; i < utf16.size(); i++)
+  {
+    character_t letter = static_cast<character_t>(utf16[i]);
+    // wchar_t is UTF-16 on Windows
+    if (letter >= 0xD800 && letter < 0xDC00 && i + 1 < utf16.size() &&
+        static_cast<character_t>(utf16[i + 1]) >= 0xDC00 &&
+        static_cast<character_t>(utf16[i + 1]) < 0xE000)
+    {
+      letter =
+          0x10000 + ((letter - 0xD800) << 10) + (static_cast<character_t>(utf16[++i]) - 0xDC00);
+    }
+    utf32.push_back(letter | colStyle);
+  }
 }
 
 void CGUITextLayout::AppendToUTF32(const std::string &utf8, character_t colStyle, vecText &utf32)
@@ -732,5 +886,3 @@ void CGUITextLayout::Reset()
   m_lastUtf8Text.clear();
   m_textWidth = m_textHeight = 0;
 }
-
-

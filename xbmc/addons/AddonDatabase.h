@@ -8,17 +8,33 @@
 
 #pragma once
 
-#include "AddonBuilder.h"
-#include "FileItem.h"
-#include "addons/Addon.h"
-#include "addons/addoninfo/AddonInfoBuilder.h"
+#include "XBDateTime.h"
+#include "addons/AddonVersion.h"
 #include "dbwrappers/Database.h"
 
+#include <map>
+#include <memory>
+#include <set>
 #include <string>
 #include <vector>
 
+class CVariant;
+
 namespace ADDON
 {
+
+enum class AddonDisabledReason;
+enum class AddonUpdateRule;
+
+class CAddonExtensions;
+class CAddonInfoBuilderFromDB;
+
+class CAddonInfo;
+using AddonInfoPtr = std::shared_ptr<CAddonInfo>;
+
+class IAddon;
+using AddonPtr = std::shared_ptr<IAddon>;
+using VECADDONS = std::vector<AddonPtr>;
 
 /*!
  * @brief Addon content serializer/deserializer.
@@ -35,7 +51,7 @@ class CAddonDatabaseSerializer
 
 public:
   static std::string SerializeMetadata(const CAddonInfo& addon);
-  static void DeserializeMetadata(const std::string& document, CAddonInfoBuilder::CFromDB& builder);
+  static void DeserializeMetadata(const std::string& document, CAddonInfoBuilderFromDB& builder);
 
 private:
   static CVariant SerializeExtensions(const CAddonExtensions& addonType);
@@ -49,27 +65,20 @@ public:
   ~CAddonDatabase() override;
   bool Open() override;
 
-  /*! @deprecated: use CAddonMgr::FindInstallableById */
-  bool GetAddon(const std::string& addonID, ADDON::AddonPtr& addon);
-
   /*! \brief Get an addon with a specific version and repository. */
-  bool GetAddon(const std::string& addonID, const ADDON::AddonVersion& version, const std::string& repoId, ADDON::AddonPtr& addon);
+  bool GetAddon(const std::string& addonID,
+                const ADDON::CAddonVersion& version,
+                const std::string& repoId,
+                ADDON::AddonPtr& addon);
 
   /*! Get the addon IDs that have been set to disabled */
-  bool GetDisabled(std::map<std::string, ADDON::AddonDisabledReason>& addons);
-
-  /*! @deprecated: use FindByAddonId */
-  bool GetAvailableVersions(const std::string& addonId,
-      std::vector<std::pair<ADDON::AddonVersion, std::string>>& versionsInfo);
-
-  /*! @deprecated use CAddonMgr::FindInstallableById */
-  std::pair<ADDON::AddonVersion, std::string> GetAddonVersion(const std::string &id);
+  bool GetDisabled(std::map<std::string, ADDON::AddonDisabledReason, std::less<>>& addons);
 
   /*! Returns all addons in the repositories with id `addonId`. */
   bool FindByAddonId(const std::string& addonId, ADDON::VECADDONS& addons) const;
 
   bool UpdateRepositoryContent(const std::string& repositoryId,
-                               const ADDON::AddonVersion& version,
+                               const ADDON::CAddonVersion& version,
                                const std::string& checksum,
                                const std::vector<AddonInfoPtr>& addons);
 
@@ -90,14 +99,14 @@ public:
     /*! \brief last time the repo was checked, or invalid CDateTime if never checked */
     CDateTime lastCheckedAt;
     /*! \brief last version of the repo add-on that was checked, or empty if never checked */
-    ADDON::AddonVersion lastCheckedVersion{""};
+    ADDON::CAddonVersion lastCheckedVersion{""};
     /*! \brief next time the repo should be checked, or invalid CDateTime if unknown */
     CDateTime nextCheckAt;
 
     RepoUpdateData() = default;
 
     RepoUpdateData(const CDateTime& lastCheckedAt,
-                   const ADDON::AddonVersion& lastCheckedVersion,
+                   const ADDON::CAddonVersion& lastCheckedVersion,
                    const CDateTime& nextCheckAt)
       : lastCheckedAt{lastCheckedAt},
         lastCheckedVersion{lastCheckedVersion},
@@ -172,7 +181,8 @@ public:
    * \param rulesMap target map
    * \return true on success, false otherwise
    */
-  bool GetAddonUpdateRules(std::map<std::string, std::vector<AddonUpdateRule>>& rulesMap) const;
+  bool GetAddonUpdateRules(
+      std::map<std::string, std::vector<AddonUpdateRule>, std::less<>>& rulesMap) const;
 
   /*! \brief Store an addon's package filename and that file's hash for future verification
       \param  addonID         id of the addon we're adding a package for
@@ -193,7 +203,7 @@ public:
   */
   bool GetPackageHash(const std::string& addonID,
                       const std::string& packageFileName,
-                      std::string&       hash);
+                      std::string& hash) const;
   /*! \brief Remove a package's info from the database
       \param  packageFileName filename of the package
       \return Whether or not we succeeded in removing the package
@@ -204,9 +214,9 @@ public:
   /*! Clear internal fields that shouldn't be kept around indefinitely */
   void OnPostUnInstall(const std::string& addonId);
 
-  void SyncInstalled(const std::set<std::string>& ids,
-                     const std::set<std::string>& system,
-                     const std::set<std::string>& optional);
+  void SyncInstalled(const std::set<std::string, std::less<>>& ids,
+                     const std::set<std::string, std::less<>>& system,
+                     const std::set<std::string, std::less<>>& optional);
 
   bool SetLastUpdated(const std::string& addonId, const CDateTime& dateTime);
   bool SetOrigin(const std::string& addonId, const std::string& origin);
@@ -220,6 +230,13 @@ public:
    *  \return true on success, false otherwise
    */
   bool AddInstalledAddon(const std::shared_ptr<CAddonInfo>& addon, const std::string& origin);
+
+  /*!
+   * @brief Check the passed in list of images if used in this database. Used to clean the image cache.
+   * @param imagesToCheck
+   * @return a list of the passed in images used by this database.
+   */
+  std::vector<std::string> GetUsedImages(const std::vector<std::string>& imagesToCheck) const;
 
 protected:
   void CreateTables() override;

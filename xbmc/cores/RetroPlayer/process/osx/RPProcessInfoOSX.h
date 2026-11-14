@@ -19,8 +19,10 @@ class CRPProcessInfoOSX : public CRPProcessInfo
 public:
   CRPProcessInfoOSX();
 
-  static CRPProcessInfo* Create();
+  static std::unique_ptr<CRPProcessInfo> Create();
   static void Register();
+
+  HwProcedureAddress GetHwProcedureAddress(const char* symbol) override;
 };
 } // namespace RETRO
 } // namespace KODI

@@ -8,11 +8,11 @@
 
 #import "platform/darwin/ios-common/AnnounceReceiver.h"
 
-#include "Application.h"
 #include "FileItem.h"
 #include "PlayListPlayer.h"
 #include "ServiceBroker.h"
 #include "TextureCache.h"
+#include "application/Application.h"
 #include "filesystem/SpecialProtocol.h"
 #include "music/MusicDatabase.h"
 #include "music/tags/MusicInfoTag.h"
@@ -109,7 +109,7 @@ void AnnounceBridge(ANNOUNCEMENT::AnnouncementFlag flag,
     // we need to get title, track, album and artist from the db
     if (item_id >= 0)
     {
-      if (item_type == MediaTypeSong)
+      if (KODI::MEDIA::MediaTypeOf(item_type) == KODI::MEDIA::TYPE::SONG)
       {
         CMusicDatabase db;
         if (db.Open())
@@ -141,7 +141,7 @@ void AnnounceBridge(ANNOUNCEMENT::AnnouncementFlag flag,
     if (duration > 0)
       item[@"duration"] = @(duration);
     item[@"elapsed"] = @(g_application.GetTime());
-    int current = CServiceBroker::GetPlaylistPlayer().GetCurrentSong();
+    int current = CServiceBroker::GetPlaylistPlayer().GetCurrentItemIdx();
     if (current >= 0)
     {
       item[@"current"] = @(current);
@@ -190,10 +190,11 @@ void AnnounceBridge(ANNOUNCEMENT::AnnouncementFlag flag,
 
     // Thumb cache process
     bool needsRecaching;
-    std::string cachedIcon(CTextureCache::GetInstance().CheckCachedImage(thumb, needsRecaching));
+    std::string cachedIcon(
+        CServiceBroker::GetTextureCache()->CheckCachedImage(thumb, needsRecaching));
     if (cachedIcon.empty())
     {
-      cachedIcon = CTextureCache::GetInstance().CacheImage(thumb);
+      cachedIcon = CServiceBroker::GetTextureCache()->CacheImage(thumb);
     }
     std::string iconRealPath = CSpecialProtocol::TranslatePath(cachedIcon);
     item[@"thumb"] = @(iconRealPath.c_str());

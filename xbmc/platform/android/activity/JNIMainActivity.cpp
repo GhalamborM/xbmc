@@ -8,6 +8,8 @@
 
 #include "JNIMainActivity.h"
 
+#include "CompileInfo.h"
+
 #include <androidjni/Activity.h>
 #include <androidjni/Intent.h>
 #include <androidjni/jutils-details.hpp>
@@ -25,6 +27,53 @@ CJNIMainActivity::CJNIMainActivity(const ANativeActivity *nativeActivity)
 CJNIMainActivity::~CJNIMainActivity()
 {
   m_appInstance = NULL;
+}
+
+void CJNIMainActivity::RegisterNatives(JNIEnv* env)
+{
+  std::string pkgRoot = CCompileInfo::GetClass();
+
+  const std::string mainClass = pkgRoot + "/Main";
+  const std::string settingsObserver = pkgRoot + "/XBMCSettingsContentObserver";
+  const std::string inputDeviceListener = pkgRoot + "/XBMCInputDeviceListener";
+
+  jclass cMain = env->FindClass(mainClass.c_str());
+  if (cMain)
+  {
+    JNINativeMethod methods[] = {
+        {"_onNewIntent", "(Landroid/content/Intent;)V",
+         reinterpret_cast<void*>(&CJNIMainActivity::_onNewIntent)},
+        {"_onActivityResult", "(IILandroid/content/Intent;)V",
+         reinterpret_cast<void*>(&CJNIMainActivity::_onActivityResult)},
+        {"_doFrame", "(J)V", reinterpret_cast<void*>(&CJNIMainActivity::_doFrame)},
+        {"_callNative", "(JJ)V", reinterpret_cast<void*>(&CJNIMainActivity::_callNative)},
+        {"_onVisibleBehindCanceled", "()V",
+         reinterpret_cast<void*>(&CJNIMainActivity::_onVisibleBehindCanceled)},
+    };
+    env->RegisterNatives(cMain, methods, sizeof(methods) / sizeof(methods[0]));
+  }
+
+  jclass cSettingsObserver = env->FindClass(settingsObserver.c_str());
+  if (cSettingsObserver)
+  {
+    JNINativeMethod methods[] = {
+        {"_onVolumeChanged", "(I)V", reinterpret_cast<void*>(&CJNIMainActivity::_onVolumeChanged)},
+    };
+    env->RegisterNatives(cSettingsObserver, methods, sizeof(methods) / sizeof(methods[0]));
+  }
+
+  jclass cInputDeviceListener = env->FindClass(inputDeviceListener.c_str());
+  if (cInputDeviceListener)
+  {
+    JNINativeMethod methods[] = {
+        {"_onInputDeviceAdded", "(I)V",
+         reinterpret_cast<void*>(&CJNIMainActivity::_onInputDeviceAdded)},
+        {"_onInputDeviceChanged", "(I)V",
+         reinterpret_cast<void*>(&CJNIMainActivity::_onInputDeviceChanged)},
+        {"_onInputDeviceRemoved", "(I)V",
+         reinterpret_cast<void*>(&CJNIMainActivity::_onInputDeviceRemoved)}};
+    env->RegisterNatives(cInputDeviceListener, methods, sizeof(methods) / sizeof(methods[0]));
+  }
 }
 
 void CJNIMainActivity::_onNewIntent(JNIEnv *env, jobject context, jobject intent)
@@ -58,7 +107,7 @@ void CJNIMainActivity::_onVisibleBehindCanceled(JNIEnv* env, jobject context)
     m_appInstance->onVisibleBehindCanceled();
 }
 
-void CJNIMainActivity::runNativeOnUiThread(void (*callback)(CVariant *), CVariant* variant)
+void CJNIMainActivity::runNativeOnUiThread(void (*callback)(void*), void* variant)
 {
   call_method<void>(m_context,
                     "runNativeOnUiThread", "(JJ)V", (jlong)callback, (jlong)variant);
@@ -111,16 +160,4 @@ CJNIRect CJNIMainActivity::getDisplayRect()
 {
   return call_method<jhobject>(m_context,
                                "getDisplayRect", "()Landroid/graphics/Rect;");
-}
-
-void CJNIMainActivity::registerMediaButtonEventReceiver()
-{
-  call_method<void>(m_context,
-                    "registerMediaButtonEventReceiver", "()V");
-}
-
-void CJNIMainActivity::unregisterMediaButtonEventReceiver()
-{
-  call_method<void>(m_context,
-                    "unregisterMediaButtonEventReceiver", "()V");
 }

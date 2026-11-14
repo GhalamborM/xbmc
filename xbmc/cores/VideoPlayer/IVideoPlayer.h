@@ -19,6 +19,7 @@
 #define VideoPlayer_SUBTITLE 3
 #define VideoPlayer_TELETEXT 4
 #define VideoPlayer_RDS      5
+#define VideoPlayer_ID3 6
 
 class CDVDMsg;
 class CDVDStreamInfo;
@@ -61,6 +62,8 @@ struct SStartMsg
   int player;
   double cachetime;
   double cachetotal;
+  // The worker is still starting and can send an updated timestamp.
+  bool timestampPending{false};
 };
 
 struct SStateMsg
@@ -95,6 +98,10 @@ public:
   virtual int GetVideoBitrate() = 0;
   virtual void SetSpeed(int iSpeed) = 0;
   virtual bool IsEOS() { return false; }
+
+  //! \brief Live content geometry state for the debug overlay; empty when a player does not
+  //! sample.
+  virtual std::string GetContentGeometryInfo() { return {}; }
 };
 
 class CDVDAudioCodec;
@@ -122,4 +129,6 @@ public:
   virtual bool IsPassthrough() const = 0;
   virtual float GetDynamicRangeAmplification() const = 0;
   virtual bool IsEOS() { return false; }
+  //! The next audio this player outputs starts a playback
+  virtual void OnPlaybackStart() {}
 };

@@ -8,16 +8,34 @@
 #   xbt is added to ${XBT_FILES}
 function(pack_xbt input output)
   file(GLOB_RECURSE MEDIA_FILES ${input}/*)
+  list(APPEND XBT_SOURCE_FILELIST ${MEDIA_FILES})
+  set(XBT_SOURCE_FILELIST ${XBT_SOURCE_FILELIST} PARENT_SCOPE)
+
   get_filename_component(dir ${output} DIRECTORY)
-  add_custom_command(OUTPUT  ${output}
-                     COMMAND ${CMAKE_COMMAND} -E make_directory ${dir}
-                     COMMAND TexturePacker::TexturePacker::Executable
-                     ARGS    -input ${input}
-                             -output ${output}
-                             -dupecheck
-                     DEPENDS ${MEDIA_FILES})
-  list(APPEND XBT_FILES ${output})
-  set(XBT_FILES ${XBT_FILES} PARENT_SCOPE)
+
+  # filename of output file for logging info
+  get_filename_component(file ${output} NAME)
+
+  # Get skin name for logging info. assumes path structure <skin>/media/<output.xbt>
+  get_filename_component(skin ${dir} DIRECTORY)
+  get_filename_component(skin ${skin} NAME)
+
+  if(${CORE_SYSTEM_NAME} MATCHES "windows")
+    string(REPLACE "${CMAKE_BINARY_DIR}" "\$\{BUNDLEDIR\}" dir ${dir})
+    string(REPLACE "${CMAKE_BINARY_DIR}" "\$\{BUNDLEDIR\}" output ${output})
+  endif()
+
+  if(VERBOSE)
+    set(verbose_flag "-verbose")
+  endif()
+
+  file(APPEND ${CMAKE_BINARY_DIR}/${CORE_BUILD_DIR}/GeneratedPackSkins.cmake
+"message(STATUS \"Packing ${file} for ${skin}\")
+execute_process(COMMAND \"${CMAKE_COMMAND}\" -E make_directory ${dir} COMMAND_ERROR_IS_FATAL ANY)
+execute_process(COMMAND \$\{TEXTUREPACKER_EXECUTABLE\} -input ${input} -output ${output} -dupecheck ${verbose_flag} COMMAND_ERROR_IS_FATAL ANY)\n")
+
+    list(APPEND XBT_FILES ${output})
+    set(XBT_FILES ${XBT_FILES} PARENT_SCOPE)
 endfunction()
 
 # Add a skin to installation list, mirroring it in build tree, packing textures
@@ -32,7 +50,7 @@ function(copy_skin_to_buildtree skin)
   foreach(file ${FILES})
     copy_file_to_buildtree(${file})
   endforeach()
-  file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/${dest}/media)
+
   string(REPLACE "${CMAKE_SOURCE_DIR}/" "" dest ${skin})
   pack_xbt(${skin}/media ${CMAKE_BINARY_DIR}/${dest}/media/Textures.xbt)
 
@@ -42,6 +60,7 @@ function(copy_skin_to_buildtree skin)
   endforeach()
 
   set(XBT_FILES ${XBT_FILES} PARENT_SCOPE)
+  set(XBT_SOURCE_FILELIST ${XBT_SOURCE_FILELIST} PARENT_SCOPE)
   set(install_data ${install_data} PARENT_SCOPE)
 endfunction()
 
@@ -73,39 +92,6 @@ function(GTEST_ADD_TESTS executable extra_args)
           add_test(${test_prefix}.${filter_name} ${executable} --gtest_filter=${filter_name}* ${extra_args})
         endforeach()
     endforeach()
-endfunction()
-
-function(sca_add_tests)
-  find_program(CLANGCHECK_COMMAND clang-check)
-  find_program(CPPCHECK_EXECUTABLE cppcheck)
-  if(CLANGCHECK_COMMAND AND CMAKE_EXPORT_COMPILE_COMMANDS)
-    configure_file(${PROJECT_SOURCE_DIR}/cmake/scripts/linux/clang-check-test.sh.in
-                   ${CORE_BUILD_DIR}/clang-check-test.sh)
-  endif()
-  if(CPPCHECK_EXECUTABLE)
-    configure_file(${PROJECT_SOURCE_DIR}/cmake/scripts/linux/cppcheck-test.sh.in
-                   ${CORE_BUILD_DIR}/cppcheck-test.sh)
-    set(CPPCHECK_INCLUDES)
-    foreach(inc ${INCLUDES})
-      list(APPEND CPPCHECK_INCLUDES -I ${inc})
-    endforeach()
-  endif()
-  foreach(src ${sca_sources})
-    file(RELATIVE_PATH name ${PROJECT_SOURCE_DIR} ${src})
-    get_filename_component(EXT ${src} EXT)
-    if(EXT STREQUAL .cpp)
-      if(CLANGCHECK_COMMAND AND CMAKE_EXPORT_COMPILE_COMMANDS)
-        add_test(NAME clang-check+${name}
-                 COMMAND ${CORE_BUILD_DIR}/clang-check-test.sh ${CLANGCHECK_COMMAND} ${src}
-                 CONFIGURATIONS analyze clang-check)
-      endif()
-      if(CPPCHECK_EXECUTABLE)
-        add_test(NAME cppcheck+${name}
-                 COMMAND ${CORE_BUILD_DIR}/cppcheck-test.sh ${CPPCHECK_EXECUTABLE} ${src} ${CPPCHECK_INCLUDES}
-                 CONFIGURATIONS analyze cppcheck)
-      endif()
-    endif()
-  endforeach()
 endfunction()
 
 function(whole_archive output)

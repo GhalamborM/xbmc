@@ -1,0 +1,15 @@
+--- a/setuptools/_distutils/compilers/C/unix.py
++++ b/setuptools/_distutils/compilers/C/unix.py
+@@ -216,6 +216,12 @@
+             'ARFLAGS',
+         )
+ 
++        # get_config_vars returns host vars. clear cflags, ldshared for crosscompile use
++        cflags = ""
++        cppflags = ""
++        ldflags = ""
++        ldshared = cc + " -shared"
++
+         cxxflags = cflags
+ 
+         if 'CC' in os.environ:

@@ -1,46 +1,36 @@
-include ../../Makefile.include
-DEPS= ../../Makefile.include Makefile
-
-# lib name, version
-LIBNAME=nghttp2
-VERSION=1.46.0
-ARCHIVE=$(LIBNAME)-$(VERSION).tar.xz
+include ../../Makefile.include NGHTTP2-VERSION ../../download-files.include
+DEPS = ../../Makefile.include NGHTTP2-VERSION Makefile ../../download-files.include
 
 # configuration settings
-# no extra libs are required when using --enable-lib-only
-CONFIGURE=./configure --prefix=$(PREFIX) --enable-lib-only --disable-shared \
-            --without-jansson \
-            --without-libevent-openssl \
-            --without-libcares \
-            --without-libev \
-            --without-cunit \
-            --without-openssl \
-            --without-zlib
+CMAKE_OPTIONS=-DENABLE_DEBUG=OFF \
+              -DENABLE_FAILMALLOC=OFF \
+              -DENABLE_LIB_ONLY=ON \
+              -DENABLE_DOC=OFF \
+              -DBUILD_STATIC_LIBS=ON \
+              -DBUILD_SHARED_LIBS=OFF \
+              -DBUILD_TESTING=OFF \
+              -DWITH_LIBXML2=OFF
 
-LIBDYLIB=$(PLATFORM)/lib/.libs/lib$(LIBNAME).a
+LIBDYLIB=$(PLATFORM)/build/lib/$(BYPRODUCT)
 
 all: .installed-$(PLATFORM)
 
-$(TARBALLS_LOCATION)/$(ARCHIVE):
-	cd $(TARBALLS_LOCATION); $(RETRIEVE_TOOL) $(RETRIEVE_TOOL_FLAGS) $(BASE_URL)/$(ARCHIVE)
-
-$(PLATFORM): $(TARBALLS_LOCATION)/$(ARCHIVE) $(DEPS)
-	rm -rf $(PLATFORM)/*; mkdir -p $(PLATFORM)
+.configured-$(PLATFORM): $(DEPS) | $(TARBALLS_LOCATION)/$(ARCHIVE).$(HASH_TYPE)
+	rm -rf $(PLATFORM)/*; mkdir -p $(PLATFORM)/build
 	cd $(PLATFORM); $(ARCHIVE_TOOL) $(ARCHIVE_TOOL_FLAGS) $(TARBALLS_LOCATION)/$(ARCHIVE)
-	cd $(PLATFORM); $(AUTORECONF) -vif
-	cd $(PLATFORM); $(CONFIGURE)
+	cd $(PLATFORM)/build; $(CMAKE) $(CMAKE_OPTIONS) ..
+	touch $@
 
-$(LIBDYLIB): $(PLATFORM)
-	$(MAKE) -C $(PLATFORM)
+$(LIBDYLIB): .configured-$(PLATFORM)
+	$(MAKE) -C $(PLATFORM)/build
 
 .installed-$(PLATFORM): $(LIBDYLIB)
-	$(MAKE) -C $(PLATFORM) install
+	$(MAKE) -C $(PLATFORM)/build install
 	touch $@
 
 clean:
-	$(MAKE) -C $(PLATFORM) clean
-	rm -f .installed-$(PLATFORM)
+	$(MAKE) -C $(PLATFORM)/build clean
+	rm -f .installed-$(PLATFORM) .configured-$(PLATFORM)
 
 distclean::
-	rm -rf $(PLATFORM) .installed-$(PLATFORM)
-
+	rm -rf $(PLATFORM) .installed-$(PLATFORM) .configured-$(PLATFORM)

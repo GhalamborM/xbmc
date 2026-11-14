@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2014-2018 Team Kodi
+ *  Copyright (C) 2014-2024 Team Kodi
  *  This file is part of Kodi - https://kodi.tv
  *
  *  SPDX-License-Identifier: GPL-2.0-or-later
@@ -39,6 +39,9 @@ class CPeripherals;
 typedef std::vector<kodi::addon::DriverPrimitive> PrimitiveVector;
 typedef std::map<KODI::JOYSTICK::FeatureName, kodi::addon::JoystickFeature> FeatureMap;
 
+/*!
+* \ingroup peripherals
+*/
 class CPeripheralAddon : public ADDON::IAddonInstanceHandler
 {
 public:
@@ -80,6 +83,8 @@ public:
   //@{
   bool GetJoystickProperties(unsigned int index, CPeripheralJoystick& joystick);
   bool HasButtonMaps(void) const { return m_bProvidesButtonMaps; }
+  bool GetAppearance(const CPeripheral* device, std::string& controllerId);
+  bool SetAppearance(const CPeripheral* device, const std::string& controllerId);
   bool GetFeatures(const CPeripheral* device,
                    const std::string& strControllerId,
                    FeatureMap& features);
@@ -97,17 +102,8 @@ public:
   void RegisterButtonMap(CPeripheral* device, KODI::JOYSTICK::IButtonMap* buttonMap);
   void UnregisterButtonMap(KODI::JOYSTICK::IButtonMap* buttonMap);
 
-  static inline bool ProvidesJoysticks(const ADDON::AddonInfoPtr& addonInfo)
-  {
-    return addonInfo->Type(ADDON::ADDON_PERIPHERALDLL)->GetValue("@provides_joysticks").asBoolean();
-  }
-
-  static inline bool ProvidesButtonMaps(const ADDON::AddonInfoPtr& addonInfo)
-  {
-    return addonInfo->Type(ADDON::ADDON_PERIPHERALDLL)
-        ->GetValue("@provides_buttonmaps")
-        .asBoolean();
-  }
+  static bool ProvidesJoysticks(const ADDON::AddonInfoPtr& addonInfo);
+  static bool ProvidesButtonMaps(const ADDON::AddonInfoPtr& addonInfo);
 
 private:
   void UnregisterButtonMap(CPeripheral* device);
@@ -168,8 +164,8 @@ private:
 
   /* @brief Add-on properties */
   bool m_bProvidesJoysticks;
-  bool m_bSupportsJoystickRumble;
-  bool m_bSupportsJoystickPowerOff;
+  bool m_bSupportsJoystickRumble = false;
+  bool m_bSupportsJoystickPowerOff = false;
   bool m_bProvidesButtonMaps;
 
   /* @brief Map of peripherals belonging to the add-on */
@@ -181,8 +177,6 @@ private:
 
   /* @brief Thread synchronization */
   mutable CCriticalSection m_critSection;
-
-  AddonInstance_Peripheral m_struct;
 
   CSharedSection m_dllSection;
 };

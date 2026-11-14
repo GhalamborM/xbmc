@@ -9,12 +9,11 @@
 #include "RendererVAAPIGL.h"
 
 #include "../RenderFactory.h"
-#include "cores/VideoPlayer/DVDCodecs/DVDCodecUtils.h"
 #include "cores/VideoPlayer/DVDCodecs/Video/VAAPI.h"
-#include "settings/AdvancedSettings.h"
-#include "settings/Settings.h"
 #include "utils/GLUtils.h"
 #include "utils/log.h"
+
+#include <memory>
 
 using namespace VAAPI;
 
@@ -44,15 +43,16 @@ void CRendererVAAPIGL::Register(IVaapiWinSystem* winSystem,
     return;
   }
 
-  CVaapi2Texture::TestInterop(vaDpy, eglDisplay, general, deepColor);
-  CLog::Log(LOGDEBUG, "Vaapi2 EGL interop test results: general {}, deepColor {}",
-            general ? "yes" : "no", deepColor ? "yes" : "no");
-  if (!general)
-  {
-    CVaapi1Texture::TestInterop(vaDpy, eglDisplay, general, deepColor);
-    CLog::Log(LOGDEBUG, "Vaapi1 EGL interop test results: general {}, deepColor {}",
-              general ? "yes" : "no", deepColor ? "yes" : "no");
-  }
+  // Probe importable surface formats via vaExportSurfaceHandle.
+  CCapabilities& caps = CDecoder::GetCaps();
+  CVaapi2Texture::TestInteropFormats(vaDpy, eglDisplay, caps);
+
+  CLog::Log(LOGDEBUG, "VAAPI EGL interop: {}", caps.ToString());
+
+  // Bool out-params are views over caps for the OptionalsReg / WinSystem
+  // boundary that still expresses capability as the general/deepColor pair.
+  general = caps.Supports(AV_PIX_FMT_NV12);
+  deepColor = caps.Supports(AV_PIX_FMT_P010);
 
   vaTerminate(vaDpy);
 
@@ -71,6 +71,8 @@ CRendererVAAPIGL::~CRendererVAAPIGL()
   {
     DeleteTexture(i);
   }
+  // renderer destruction runs on the render thread with the GL context current
+  m_texturePool.ReleaseAll();
 }
 
 bool CRendererVAAPIGL::Configure(const VideoPicture& picture, float fps, unsigned int orientation)
@@ -91,21 +93,10 @@ bool CRendererVAAPIGL::Configure(const VideoPicture& picture, float fps, unsigne
     interop.glEGLImageTargetTexture2DOES = (PFNGLEGLIMAGETARGETTEXTURE2DOESPROC)eglGetProcAddress("glEGLImageTargetTexture2DOES");
     interop.eglDisplay = CRendererVAAPIGL::m_pWinSystem->GetEGLDisplay();
 
-    bool useVaapi2 = VAAPI::CVaapi2Texture::TestInteropGeneral(
-        pic->vadsp, CRendererVAAPIGL::m_pWinSystem->GetEGLDisplay());
-
+    m_texturePool.ReleaseAll();
+    m_texturePool.Init(interop);
     for (auto &tex : m_vaapiTextures)
-    {
-      if (useVaapi2)
-      {
-        tex.reset(new VAAPI::CVaapi2Texture);
-      }
-      else
-      {
-        tex.reset(new VAAPI::CVaapi1Texture);
-      }
-      tex->Init(interop);
-    }
+      tex = nullptr;
   }
 
   for (auto &fence : m_fences)
@@ -121,9 +112,7 @@ bool CRendererVAAPIGL::Flush(bool saveBuffers)
   for (auto &vaapiTexture : m_vaapiTextures)
   {
     if (m_isVAAPIBuffer)
-    {
-      vaapiTexture->Unmap();
-    }
+      vaapiTexture = nullptr;
   }
   return CLinuxRendererGL::Flush(saveBuffers);
 }
@@ -138,12 +127,12 @@ bool CRendererVAAPIGL::ConfigChanged(const VideoPicture& picture)
   return false;
 }
 
-bool CRendererVAAPIGL::Supports(ERENDERFEATURE feature)
+bool CRendererVAAPIGL::Supports(ERENDERFEATURE feature) const
 {
   return CLinuxRendererGL::Supports(feature);
 }
 
-bool CRendererVAAPIGL::Supports(ESCALINGMETHOD method)
+bool CRendererVAAPIGL::Supports(ESCALINGMETHOD method) const
 {
   return CLinuxRendererGL::Supports(method);
 }
@@ -230,9 +219,11 @@ bool CRendererVAAPIGL::UploadTexture(int index)
     return UploadNV12Texture(index);
   }
 
-  m_vaapiTextures[index]->Map(pic);
+  m_vaapiTextures[index] = m_texturePool.Get(pic, m_vaapiTextures);
+  if (!m_vaapiTextures[index])
+    return false;
 
-  YuvImage &im = buf.image;
+  const YuvImage& im = buf.image;
   CYuvPlane (&planes)[3] = buf.fields[0];
 
   auto size = m_vaapiTextures[index]->GetTextureSize();
@@ -310,8 +301,7 @@ void CRendererVAAPIGL::ReleaseBuffer(int idx)
     m_fences[idx] = {};
   }
   if (m_isVAAPIBuffer)
-  {
-    m_vaapiTextures[idx]->Unmap();
-  }
+    m_vaapiTextures[idx] = nullptr;
+
   CLinuxRendererGL::ReleaseBuffer(idx);
 }

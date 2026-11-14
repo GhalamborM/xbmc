@@ -57,6 +57,11 @@ public:
   bool CreateAndBindToTexture(GLenum target, int width, int height, GLenum format, GLenum type=GL_UNSIGNED_BYTE,
                               GLenum filter=GL_LINEAR, GLenum clampmode=GL_CLAMP_TO_EDGE);
 
+  // Attach a depth renderbuffer. Required when rendering into the FBO with
+  // front-to-back (depth-tested) opaque passes enabled.
+  // Also attaches stencil storage for GUI masks in either render mode.
+  bool AttachDepthBuffer(int width, int height);
+
   // Return the internally created texture ID
   GLuint Texture() const { return m_texid; }
 
@@ -66,11 +71,13 @@ public:
   void EndRender() const;
 
 private:
-  GLuint m_fbo;
+  GLuint m_fbo = 0;
   bool   m_valid;
   bool   m_bound;
   bool   m_supported;
-  GLuint m_texid;
+  GLuint m_texid = 0;
+  GLuint m_depthBuffer = 0;
+  GLuint m_stencilBuffer = 0;
 };
 
 

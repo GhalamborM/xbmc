@@ -8,8 +8,14 @@
 
 #pragma once
 
-#include "FileItem.h"
 #include "IFileDirectory.h"
+#include "XBDateTime.h"
+#include "threads/CriticalSection.h"
+
+#include <map>
+#include <string>
+
+class CFileItemList;
 
 namespace XFILE
 {
@@ -22,7 +28,7 @@ namespace XFILE
     bool Exists(const CURL& url) override;
     bool AllowAll() const override { return true; }
     bool ContainsFiles(const CURL& url) override;
-    DIR_CACHE_TYPE GetCacheType(const CURL& url) const override { return DIR_CACHE_ONCE; }
+    CacheType GetCacheType(const CURL& url) const override { return CacheType::ONCE; }
 
   protected:
     // key is path, value is cache invalidation date

@@ -12,6 +12,9 @@
 #include <androidjni/InputManager.h>
 #include <androidjni/Rect.h>
 
+namespace jni
+{
+
 class CJNIMainActivity : public CJNIActivity, public CJNIInputManagerInputDeviceListener
 {
 public:
@@ -19,6 +22,8 @@ public:
   ~CJNIMainActivity() override;
 
   static CJNIMainActivity* GetAppInstance() { return m_appInstance; }
+
+  static void RegisterNatives(JNIEnv* env);
 
   static void _onNewIntent(JNIEnv *env, jobject context, jobject intent);
   static void _onActivityResult(JNIEnv *env, jobject context, jint requestCode, jint resultCode, jobject resultData);
@@ -30,9 +35,7 @@ public:
   static void _onVisibleBehindCanceled(JNIEnv *env, jobject context);
 
   static void _callNative(JNIEnv *env, jobject context, jlong funcAddr, jlong variantAddr);
-  static void runNativeOnUiThread(void (*callback)(CVariant *), CVariant *variant);
-  static void registerMediaButtonEventReceiver();
-  static void unregisterMediaButtonEventReceiver();
+  static void runNativeOnUiThread(void (*callback)(void*), void* variant);
 
   CJNIRect getDisplayRect();
 
@@ -50,3 +53,5 @@ protected:
   virtual void onDisplayChanged(int displayId)=0;
   virtual void onDisplayRemoved(int displayId)=0;
 };
+
+} // namespace jni

@@ -17,6 +17,7 @@
 #include "threads/Thread.h"
 
 #include <list>
+#include <memory>
 #include <queue>
 #include <string>
 #include <utility>
@@ -61,7 +62,9 @@ struct AudioSettings
   AEQuality resampleQuality;
   double atempoThreshold;
   bool streamNoise;
-  int silenceTimeout;
+  int silenceTimeoutMinutes;
+  float mixSubLevel;
+  bool lowLatencyMode;
 };
 
 class CActiveAEControlProtocol : public Protocol
@@ -77,10 +80,12 @@ public:
     RECONFIGURE,
     SUSPEND,
     DEVICECHANGE,
+    DEFAULTDEVICECHANGE,
     DEVICECOUNTCHANGE,
     MUTE,
     VOLUME,
     PAUSESTREAM,
+    HOLDSTREAM,
     RESUMESTREAM,
     FLUSHSTREAM,
     STREAMRGAIN,
@@ -96,6 +101,7 @@ public:
     DISPLAYRESET,
     APPFOCUSED,
     KEEPCONFIG,
+    YIELDDEVICE,
     TIMEOUT,
   };
   enum InSignal
@@ -183,7 +189,7 @@ class CEngineStats
 public:
   void Reset(unsigned int sampleRate, bool pcm);
   void UpdateSinkDelay(const AEDelayStatus& status, int samples);
-  void AddSamples(int samples, std::list<CActiveAEStream*> &streams);
+  void AddSamples(int samples, const std::list<CActiveAEStream*>& streams);
   void GetDelay(AEDelayStatus& status);
   void AddStream(unsigned int streamid);
   void RemoveStream(unsigned int streamid);
@@ -194,10 +200,13 @@ public:
   float GetCacheTotal();
   float GetMaxDelay() const;
   float GetWaterLevel();
+  int GetBufferedSamples();
+  double GetSinkDelaySeconds();
   void SetSuspended(bool state);
   void SetCurrentSinkFormat(const AEAudioFormat& SinkFormat);
   void SetSinkCacheTotal(float time) { m_sinkCacheTotal = time; }
   void SetSinkLatency(float time) { m_sinkLatency = time; }
+  void SetSinkNeedIec(bool needIEC) { m_sinkNeedIecPack = needIEC; }
   bool IsSuspended();
   AEAudioFormat GetCurrentSinkFormat();
 protected:
@@ -209,6 +218,7 @@ protected:
   bool m_suspended;
   AEAudioFormat m_sinkFormat;
   bool m_pcmOutput;
+  bool m_sinkNeedIecPack{false};
   CCriticalSection m_lock;
   struct StreamStats
   {
@@ -238,6 +248,8 @@ public:
   bool Suspend() override;
   bool Resume() override;
   bool IsSuspended() override;
+  bool YieldDevice() override;
+  bool ReclaimDevice() override;
   void OnSettingsChange();
 
   float GetVolume() override;
@@ -263,6 +275,7 @@ public:
   bool IsSettingVisible(const std::string &settingId) override;
   void KeepConfiguration(unsigned int millis) override;
   void DeviceChange() override;
+  void DefaultDeviceChange() override;
   void DeviceCountChange(const std::string& driver) override;
   bool GetCurrentSinkFormat(AEAudioFormat &SinkFormat) override;
 
@@ -288,6 +301,7 @@ protected:
   float GetMaxDelay() { return m_stats.GetMaxDelay(); }
   void FlushStream(CActiveAEStream *stream);
   void PauseStream(CActiveAEStream *stream, bool pause);
+  void HoldStream(CActiveAEStream* stream);
   void StopSound(CActiveAESound *sound);
   void SetStreamAmplification(CActiveAEStream *stream, float amplify);
   void SetStreamReplaygain(CActiveAEStream *stream, float rgain);
@@ -301,34 +315,41 @@ protected:
   void Process() override;
   void StateMachine(int signal, Protocol *port, Message *msg);
   bool InitSink();
+  bool SendYieldDevice(bool yield);
   void DrainSink();
   void UnconfigureSink();
   void Dispose();
   void LoadSettings();
+  void ValidateOutputDevices(bool saveChanges);
+  void HandleDeviceCountChange(const std::string& driver, bool defaultDeviceChanged);
   bool NeedReconfigureBuffers();
   bool NeedReconfigureSink();
-  void ApplySettingsToFormat(AEAudioFormat &format, AudioSettings &settings, int *mode = NULL);
+  void ApplySettingsToFormat(AEAudioFormat& format,
+                             const AudioSettings& settings,
+                             int* mode = NULL);
   void Configure(AEAudioFormat *desiredFmt = NULL);
   AEAudioFormat GetInputFormat(AEAudioFormat *desiredFmt = NULL);
   CActiveAEStream* CreateStream(MsgStreamNew *streamMsg);
   void DiscardStream(CActiveAEStream *stream);
   void SFlushStream(CActiveAEStream *stream);
-  void FlushEngine();
+  void FlushEngine(bool discardOutput = false);
   void ClearDiscardedBuffers();
   void SStopSound(CActiveAESound *sound);
   void DiscardSound(CActiveAESound *sound);
   void ChangeResamplers();
+  void ConfigureLowLatency();
 
   bool RunStages();
   bool HasWork();
   CSampleBuffer* SyncStream(CActiveAEStream *stream);
+  bool IsTrueHDPassthrough() const;
 
   void ResampleSounds();
   bool ResampleSound(CActiveAESound *sound);
   void MixSounds(CSoundPacket &dstSample);
   void Deamplify(CSoundPacket &dstSample);
 
-  bool CompareFormat(AEAudioFormat &lhs, AEAudioFormat &rhs);
+  bool CompareFormat(const AEAudioFormat& lhs, const AEAudioFormat& rhs);
 
   CEvent m_inMsgEvent;
   CEvent m_outMsgEvent;
@@ -336,11 +357,12 @@ protected:
   CActiveAEDataProtocol m_dataPort;
   int m_state;
   bool m_bStateMachineSelfTrigger;
-  int m_extTimeout;
+  std::chrono::milliseconds m_extTimeout;
   bool m_extError;
+  unsigned int m_extErrorRetries{0};
   bool m_extDrain;
-  XbmcThreads::EndTime m_extDrainTimer;
-  unsigned int m_extKeepConfig;
+  XbmcThreads::EndTime<> m_extDrainTimer;
+  std::chrono::milliseconds m_extKeepConfig;
   bool m_extDeferData;
   std::queue<time_t> m_extLastDeviceChange;
   bool m_extSuspended = false;
@@ -363,18 +385,22 @@ protected:
   CEngineStats m_stats;
   IAEEncoder *m_encoder;
   std::string m_currDevice;
+  std::string m_openedDevice;
+  std::string m_openedDriver;
+  bool m_currentDeviceFollowsDefault{false};
   std::unique_ptr<CActiveAESettings> m_settingsHandler;
 
   // buffers
-  CActiveAEBufferPoolResample *m_sinkBuffers;
-  CActiveAEBufferPoolResample *m_vizBuffers;
-  CActiveAEBufferPool *m_vizBuffersInput;
-  CActiveAEBufferPool *m_silenceBuffers;  // needed to drive gui sounds if we have no streams
-  CActiveAEBufferPool *m_encoderBuffers;
+  std::unique_ptr<CActiveAEBufferPoolResample> m_sinkBuffers;
+  std::unique_ptr<CActiveAEBufferPoolResample> m_vizBuffers;
+  std::unique_ptr<CActiveAEBufferPool> m_vizBuffersInput;
+  std::unique_ptr<CActiveAEBufferPool>
+      m_silenceBuffers; // needed to drive gui sounds if we have no streams
+  std::unique_ptr<CActiveAEBufferPool> m_encoderBuffers;
 
   // streams
   std::list<CActiveAEStream*> m_streams;
-  std::list<CActiveAEBufferPool*> m_discardBufferPools;
+  std::list<std::unique_ptr<CActiveAEBufferPool>> m_discardBufferPools;
   unsigned int m_streamIdGen;
 
   // gui sounds
@@ -400,5 +426,8 @@ protected:
   float m_aeVolume;
   bool m_aeMuted;
   bool m_aeGUISoundForce;
+
+  float m_targetBufferLevel{0.0f};
+  float m_initialTargetBufferLevel{0.0f};
 };
 };

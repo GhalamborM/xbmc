@@ -8,20 +8,27 @@
 #include "UISoundsResource.h"
 
 #include "ServiceBroker.h"
+#include "addons/addoninfo/AddonType.h"
 #include "guilib/GUIAudioManager.h"
 #include "settings/Settings.h"
 #include "settings/SettingsComponent.h"
-#include "utils/StringUtils.h"
-#include "utils/URIUtils.h"
 
+#include <array>
+#include <string_view>
 
 namespace ADDON
 {
 
-bool CUISoundsResource::IsAllowed(const std::string& file) const
+CUISoundsResource::CUISoundsResource(const AddonInfoPtr& addonInfo)
+  : CResource(addonInfo, AddonType::RESOURCE_UISOUNDS)
 {
-  return StringUtils::EqualsNoCase(file, "sounds.xml")
-      || URIUtils::HasExtension(file, ".wav");
+}
+
+CResource::Published CUISoundsResource::PublishedFiles() const
+{
+  static constexpr std::array<std::string_view, 1> names{"sounds.xml"};
+  static constexpr std::array<std::string_view, 1> extensions{".wav"};
+  return {.names = names, .extensions = extensions};
 }
 
 bool CUISoundsResource::IsInUse() const

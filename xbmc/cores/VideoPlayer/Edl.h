@@ -8,25 +8,26 @@
 
 #pragma once
 
-#include <string>
+#include "Edl/EdlParser.h"
+#include "cores/Direction.h"
+#include "cores/EdlEdit.h"
+
+#include <chrono>
+#include <memory>
+#include <optional>
 #include <vector>
 
-namespace EDL
-{
-struct Edit;
-}
-
 class CFileItem;
+class TestParseEditsForEpisode;
 
 class CEdl
 {
 public:
   CEdl();
 
-  // FIXME: remove const modifier for fFramesPerSecond as it makes no sense as it means nothing
-  // for the reader of the interface, but limits the implementation
-  // to not modify the parameter on stack
-  bool ReadEditDecisionLists(const CFileItem& fileItem, const float fFramesPerSecond);
+  bool ReadEditDecisionLists(const CFileItem& fileItem,
+                             float fps,
+                             std::chrono::milliseconds duration);
   void Clear();
 
   /*!
@@ -35,75 +36,173 @@ public:
    */
   bool HasEdits() const;
 
+  /*!
+   * @brief Check if the edit list has EDL cuts (edits with action CUT)
+   * @return true if EDL has cuts, false otherwise
+   */
+  bool HasCuts() const;
+
   bool HasSceneMarker() const;
-  int GetTotalCutTime() const;
-  int RemoveCutTime(int iSeek) const;
-  double RestoreCutTime(double dClock) const;
+
+  /*!
+   * @brief Get the total cut time removed from the original item
+   * because of EDL cuts
+   * @return the total cut time
+  */
+  std::chrono::milliseconds GetTotalCutTime() const;
+
+  /*!
+   * @brief Providing a given seek time, return the actual time without
+   * considering cut ranges removed from the file
+   * @note VideoPlayer always displays/returns the playback time considering
+   * cut blocks are not part of the playable file
+   * @param seek the desired seek time
+   * @return the seek time without considering EDL cut blocks
+  */
+  std::chrono::milliseconds GetTimeWithoutCuts(std::chrono::milliseconds seekTime) const;
+
+  /*!
+   * @brief Provided a given seek time, return the time after correction with
+   * the addition of the already surpassed EDL cut ranges
+   * @note VideoPlayer uses it to restore the correct time after seek since cut blocks
+   * are not part of the playable file
+   * @param seek the desired seek time
+   * @return the seek time after applying the cut blocks already surpassed by the
+   * provided seek time
+  */
+  std::chrono::milliseconds GetTimeAfterRestoringCuts(std::chrono::milliseconds seekTime) const;
+
+  /*!
+   * @brief Get the raw EDL edit list.
+   * @return The EDL edits or an empty vector if no edits exist. Edits are
+   * provided with respect to the original media item timeline.
+  */
+  const std::vector<EDL::Edit>& GetRawEditList() const { return m_vecEdits; }
 
   /*!
    * @brief Get the EDL edit list.
-   * @return The EDL edits or an empty vector if no edits exist.
+   * @return The EDL edits or an empty vector if no edits exist. Edits are
+   * provided with respect to the actual timeline, i.e. considering EDL cuts
+   * are not part of the media item.
   */
-  const std::vector<EDL::Edit>& GetEditList() const { return m_vecEdits; }
+  const std::vector<EDL::Edit> GetEditList() const;
+
+  /*!
+   * @brief Get the list of EDL cut markers.
+   * @return The list of EDL cut markers or an empty vector if no EDL cuts exist.
+   * The returned values are accurate with respect to cut durations. I.e. if the file
+   * has multiple cuts, the positions of subsequent cuts are automatically corrected by
+   * substracting the previous cut durations.
+  */
+  const std::vector<std::chrono::milliseconds> GetCutMarkers() const;
+
+  /*!
+   * @brief Get the list of EDL scene markers.
+   * @return The list of EDL scene markers or an empty vector if no EDL scene exist.
+   * The returned values are accurate with respect to cut durations. I.e. if the file
+   * has multiple cuts, the positions of scene markers are automatically corrected by
+   * substracting the surpassed cut durations until the scene marker point.
+  */
+  const std::vector<std::chrono::milliseconds> GetSceneMarkers() const;
 
   /*!
    * @brief Check if for the provided seek time is contained within an EDL
-   * edit and fill pEdit with the respective edit struct.
+   * edit
    * @note seek time refers to the time in the original file timeline (i.e. without
    * considering cut blocks)
-   * @param iSeek The seek time (on the original timeline)
-   * @param[in,out] pEdit The edit pointer (or nullptr if iSeek not within an edit)
-   * @return true if iSeek is within an edit, false otherwise
+   * @param seekTime The seek time (on the original timeline)
+   * @return a pointer to the edit struct if seekTime is within an edit, nullopt otherwise
   */
-  bool InEdit(int iSeek, EDL::Edit* pEdit = nullptr);
+  std::optional<std::unique_ptr<EDL::Edit>> InEdit(std::chrono::milliseconds seekTime);
 
   /*!
    * @brief Get the last processed edit time (set during playback when a given
    * edit is surpassed)
-   * @return The last processed edit time (ms) or -1 if not any
+   * @return The last processed edit time or nullopt if not any
   */
-  int GetLastEditTime() const;
+  std::optional<std::chrono::milliseconds> GetLastEditTime() const;
 
   /*!
    * @brief Set the last processed edit time (set during playback when a given
    * edit is surpassed)
-   * @param editTime The last processed EDL edit time (ms)
+   * @param editTime The last processed EDL edit time
   */
-  void SetLastEditTime(int editTime);
+  void SetLastEditTime(std::chrono::milliseconds editTime);
 
-  // FIXME: remove const modifier for iClock as it makes no sense as it means nothing
-  // for the reader of the interface, but limits the implementation
-  // to not modify the parameter on stack
-  bool GetNextSceneMarker(bool bPlus, const int iClock, int *iSceneMarker);
+  /*!
+   * @brief Reset the last recorded edit time (nullopt)
+  */
+  void ResetLastEditTime();
 
-  // FIXME: remove const modifier as it makes no sense as it means nothing
-  // for the reader of the interface, but limits the implementation
-  // to not modify the parameter on stack
-  static std::string MillisecondsToTimeString(const int iMilliseconds);
+  /*!
+   * @brief Set the last processed edit action type
+   * @param action The action type (e.g. COMM_BREAK)
+  */
+  void SetLastEditActionType(EDL::Action action);
+
+  /*!
+   * @brief Get the last processed edit action type (set during playback when a given
+   * edit is surpassed)
+   * @return The last processed edit action type or -1 if not any
+  */
+  EDL::Action GetLastEditActionType() const;
+
+  /*!
+   * @brief Get the next scene marker with respect to the provided clock time
+   * @param direction (the direction of the search - backward or forward)
+   * @param clock the current position of the clock
+   * @return the position of the scenemarker (nullopt if none)
+  */
+  std::optional<std::chrono::milliseconds> GetNextSceneMarker(Direction direction,
+                                                              std::chrono::milliseconds clockTime);
+
+  /*!
+   * @brief Resolve the next playable time on the original media timeline.
+   * If the provided time lands inside an edit, or exactly on the start of an
+   * adjacent edit, advance to the end of that edit and keep walking until a
+   * playable point is reached.
+   * @param seekTime The candidate seek time on the original timeline
+   * @return The next playable time on the original timeline
+   */
+  std::chrono::milliseconds GetNextPlayableTime(std::chrono::milliseconds seekTime) const;
+
+  /*!
+   * @brief Resolve the previous playable time on the original media timeline.
+   * If the provided time lands inside an edit, retreat to the start of that edit
+   * and keep walking backward until a playable point is reached.
+   * @param seekTime The candidate seek time on the original timeline
+   * @return The previous playable time on the original timeline
+   */
+  std::chrono::milliseconds GetPrevPlayableTime(std::chrono::milliseconds seekTime) const;
 
 private:
-  int m_iTotalCutTime; // ms
-  std::vector<EDL::Edit> m_vecEdits;
-  std::vector<int> m_vecSceneMarkers;
-  int m_lastEditTime;
+  friend class TestParseEditsForEpisode;
 
-  // FIXME: remove const modifier for fFramesPerSecond as it makes no sense as it means nothing
-  // for the reader of the interface, but limits the implementation
-  // to not modify the parameter on stack
-  bool ReadEdl(const std::string& strMovie, const float fFramesPerSecond);
-  // FIXME: remove const modifier for fFramesPerSecond as it makes no sense as it means nothing
-  // for the reader of the interface, but limits the implementation
-  // to not modify the parameter on stack
-  bool ReadComskip(const std::string& strMovie, const float fFramesPerSecond);
-  // FIXME: remove const modifier for strMovie as it makes no sense as it means nothing
-  // for the reader of the interface, but limits the implementation
-  // to not modify the parameter on stack
-  bool ReadVideoReDo(const std::string& strMovie);
-  // FIXME: remove const modifier for strMovie as it makes no sense as it means nothing
-  // for the reader of the interface, but limits the implementation
-  // to not modify the parameter on stack
-  bool ReadBeyondTV(const std::string& strMovie);
-  bool ReadPvr(const CFileItem& fileItem);
+  // total cut time (edl cuts) in ms
+  std::chrono::milliseconds m_totalCutTime;
+  std::vector<EDL::Edit> m_vecEdits;
+  std::vector<std::chrono::milliseconds> m_vecSceneMarkers;
+
+  /*!
+   * @brief Last processed EDL edit time (ms)
+  */
+  std::optional<std::chrono::milliseconds> m_lastEditTime;
+
+  /*!
+   * @brief Last processed EDL edit action type
+  */
+  EDL::Action m_lastEditActionType{EDL::EDL_ACTION_NONE};
+
+  /*!
+   * @brief Process the result from an EDL parser
+   * @param result The parser result containing edits and scene markers
+   * @param multiEpisodeResult Optional multi-episode parser result.
+   * @param duration (Optional) The duration of the media item in ms (used for multi-episode parsing)
+   * @return true if the result was processed successfully
+   */
+  bool ProcessParserResult(const EDL::CEdlParserResult& result,
+                           const EDL::CEdlParserResult& multiEpisodeResult = {},
+                           std::chrono::milliseconds duration = std::chrono::milliseconds(0));
 
   /*!
    * @brief Adds an edit to the list of EDL edits
@@ -112,10 +211,21 @@ private:
   */
   bool AddEdit(const EDL::Edit& newEdit);
 
-  // FIXME: remove const modifier for strMovie as it makes no sense as it means nothing
-  // for the reader of the interface, but limits the implementation
-  // to not modify the parameter on stack
-  bool AddSceneMarker(const int sceneMarker);
+  bool AddSceneMarker(std::chrono::milliseconds sceneMarker);
 
   void MergeShortCommBreaks();
+
+  /*!
+   * @brief Adds scene markers at the start and end of some edits
+   * (currently only for commercial breaks)
+  */
+  void AddSceneMarkersAtStartAndEndOfEdits();
+
+  /*!
+   * @brief Parse edits if this is a multi-episode file
+   * @param multiEpisodeResult The result from the multi-episode EDL parser, containing episode start/end edits
+   * @param duration The duration of the media item in ms (used for multi-episode parsing)
+  */
+  void ParseEditsForEpisode(const EDL::CEdlParserResult& multiEpisodeResult,
+                            std::chrono::milliseconds duration);
 };

@@ -25,7 +25,7 @@ public:
   CRenderBufferGuiTexture(SCALINGMETHOD scalingMethod);
   ~CRenderBufferGuiTexture() override = default;
 
-  // implementation of IRenderBuffer via CBaseRenderBuffer
+  // Implementation of IRenderBuffer via CBaseRenderBuffer
   bool Allocate(AVPixelFormat format, unsigned int width, unsigned int height) override;
   size_t GetFrameSize() const override;
   uint8_t* GetMemory() override;
@@ -36,12 +36,12 @@ public:
   CTexture* GetTexture() { return m_texture.get(); }
 
 protected:
-  AVPixelFormat TranslateFormat(unsigned int textureFormat);
+  AVPixelFormat TranslateFormat(XB_FMT textureFormat);
   TEXTURE_SCALING TranslateScalingMethod(SCALINGMETHOD scalingMethod);
 
   // Texture parameters
   SCALINGMETHOD m_scalingMethod;
-  unsigned int m_textureFormat = XB_FMT_UNKNOWN;
+  XB_FMT m_textureFormat = XB_FMT_UNKNOWN;
   std::unique_ptr<CTexture> m_texture;
 };
 

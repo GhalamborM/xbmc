@@ -1,23 +1,22 @@
 -include ../../Makefile.include
-DEPS=Makefile
-
-# lib name, version
-LIBNAME=flatbuffers
-VERSION=2.0.0
-SOURCE=$(LIBNAME)-$(VERSION)
-ARCHIVE=$(SOURCE).tar.gz
+include FLATBUFFERS-VERSION
+DEPS = Makefile FLATBUFFERS-VERSION ../../download-files.include
 
 ifeq ($(PLATFORM),)
 	# Building stand-alone
 	ROOT_DIR := $(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
 	PLATFORM = native
 	TARBALLS_LOCATION = $(ROOT_DIR)
-	BASE_URL := http://mirrors.kodi.tv/build-deps/sources
-	RETRIEVE_TOOL := curl -Ls --create-dirs -f -O
-	ARCHIVE_TOOL := tar --strip-components=1 -xf
+	BASE_URL ?= https://mirrors.kodi.tv/build-deps/sources
+	RETRIEVE_TOOL := curl
+	RETRIEVE_TOOL_FLAGS := -LsS --create-dirs --retry 10 --retry-connrefused -o
+	ARCHIVE_TOOL := tar
+	ARCHIVE_TOOL_FLAGS := --strip-components=1 -xf
 	CMAKE := cmake
-	CMAKE_OPTIONS := -DCMAKE_INSTALL_PREFIX=$(PREFIX) $(CMAKE_OPTIONS)
+	CMAKE_OPTIONS := -DCMAKE_INSTALL_PREFIX=$(PREFIX) -DCMAKE_INSTALL_LIBDIR=lib $(CMAKE_OPTIONS)
 	BUILD_FLATC=ON
+	HASH_TOOL := sha512sum
+	HASH_TOOL_FLAGS = -c --status
 else
 	# Building as part of depends
 	DEPS += ../../Makefile.include
@@ -36,29 +35,29 @@ CMAKE_OPTIONS := -DCMAKE_BUILD_TYPE=Release \
                  $(CMAKE_OPTIONS)
 BUILDDIR = $(PLATFORM)/build-cmake # 'build' conflicts with file BUILD on case-insensitive FS
 
+include ../../download-files.include
+
 all: .installed-$(PLATFORM)
 
-$(TARBALLS_LOCATION)/$(ARCHIVE):
-	cd $(TARBALLS_LOCATION); $(RETRIEVE_TOOL) $(RETRIEVE_TOOL_FLAGS) $(BASE_URL)/$(ARCHIVE)
-
-$(PLATFORM): $(TARBALLS_LOCATION)/$(ARCHIVE) $(DEPS)
+.configured-$(PLATFORM): $(DEPS) | $(TARBALLS_LOCATION)/$(ARCHIVE).$(HASH_TYPE)
 ifeq ($(PREFIX),)
 	@echo
 	@echo "ERROR: please set PREFIX to the kodi install path e.g. make PREFIX=/usr/local"
 	@exit 1
 endif
-	rm -rf $(PLATFORM)/*; mkdir -p $(PLATFORM)
+	rm -rf ./$(PLATFORM); mkdir -p $(PLATFORM)
 	cd $(PLATFORM); $(ARCHIVE_TOOL) $(ARCHIVE_TOOL_FLAGS) $(TARBALLS_LOCATION)/$(ARCHIVE)
 	mkdir -p $(BUILDDIR)
 	cd $(BUILDDIR); $(CMAKE) $(CMAKE_OPTIONS) ..
+	touch $@
 
-.installed-$(PLATFORM): $(PLATFORM)
+.installed-$(PLATFORM): .configured-$(PLATFORM)
 	$(MAKE) -C $(BUILDDIR) install
 	touch $@
 
 clean:
 	$(MAKE) -C $(BUILDDIR) clean
-	rm -f .installed-$(PLATFORM)
+	rm -f .installed-$(PLATFORM) .configured-$(PLATFORM)
 
 distclean:
-	rm -rf $(PLATFORM) .installed-$(PLATFORM)
+	rm -rf $(PLATFORM) .installed-$(PLATFORM) .configured-$(PLATFORM)

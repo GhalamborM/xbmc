@@ -27,7 +27,10 @@ public:
                    const std::shared_ptr<CPVREpgChannelData>& channelData,
                    const std::shared_ptr<CPVREpgDatabase>& database,
                    const std::map<CDateTime, std::shared_ptr<CPVREpgInfoTag>>& changedTags)
-    : m_iEpgID(iEpgID), m_channelData(channelData), m_database(database), m_changedTags(changedTags)
+    : m_iEpgID(iEpgID),
+      m_channelData(channelData),
+      m_database(database),
+      m_changedTags(changedTags)
   {
   }
 
@@ -35,12 +38,13 @@ public:
 
   void Reset();
 
+  bool Refresh();
+
   std::shared_ptr<CPVREpgInfoTag> GetLastEndedTag();
-  std::shared_ptr<CPVREpgInfoTag> GetNowActiveTag(bool bUpdateIfNeeded);
+  std::shared_ptr<CPVREpgInfoTag> GetNowActiveTag();
   std::shared_ptr<CPVREpgInfoTag> GetNextStartingTag();
 
 private:
-  void Refresh(bool bUpdateIfNeeded);
   void RefreshLastEndedTag(const CDateTime& activeTime);
   void RefreshNextStartingTag(const CDateTime& activeTime);
 

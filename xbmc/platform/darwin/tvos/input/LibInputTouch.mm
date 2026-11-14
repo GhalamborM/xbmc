@@ -8,8 +8,9 @@
 
 #import "LibInputTouch.h"
 
-#include "Application.h"
 #include "ServiceBroker.h"
+#include "application/ApplicationComponents.h"
+#include "application/ApplicationPlayer.h"
 #include "guilib/GUIComponent.h"
 #include "guilib/GUIWindowManager.h"
 #include "utils/log.h"
@@ -63,18 +64,24 @@
   {
     // single press key, but also detect hold and back to tvos.
     case UIPressTypeMenu:
+    {
+      const auto& components = CServiceBroker::GetAppComponents();
+      const auto appPlayer = components.GetComponent<CApplicationPlayer>();
       // menu is special.
       //  a) if at our home view, should return to atv home screen.
       //  b) if not, let it pass to us.
       if (CServiceBroker::GetGUI()->GetWindowManager().GetActiveWindow() == WINDOW_HOME &&
           !CServiceBroker::GetGUI()->GetWindowManager().HasVisibleModalDialog() &&
-          !g_application.GetAppPlayer().IsPlaying())
+          !appPlayer->IsPlaying())
         handled = NO;
       break;
+    }
 
     // single press keys
     case UIPressTypeSelect:
     case UIPressTypePlayPause:
+    case UIPressTypePageUp:
+    case UIPressTypePageDown:
       break;
 
     // auto-repeat keys
@@ -157,6 +164,23 @@
   menuRecognizer.allowedPressTypes = @[ @(UIPressTypeMenu) ];
   menuRecognizer.delegate = self;
   [g_xbmcController.glView addGestureRecognizer:menuRecognizer];
+
+  if (@available(tvOS 14.3, *)) {
+    auto pageUpTypes = @[ @(UIPressTypePageUp) ];
+    auto pageUpRecognizer =
+        [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(pageUpPressed:)];
+    pageUpRecognizer.allowedPressTypes = pageUpTypes;
+    pageUpRecognizer.delegate = self;
+    [g_xbmcController.glView addGestureRecognizer:pageUpRecognizer];
+
+    auto pageDownTypes = @[ @(UIPressTypePageDown) ];
+    auto pageDownRecognizer =
+        [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(pageDownPressed:)];
+    pageDownRecognizer.allowedPressTypes = pageDownTypes;
+    pageDownRecognizer.delegate = self;
+    [g_xbmcController.glView addGestureRecognizer:pageDownRecognizer];
+  }
+
 
   auto playPauseTypes = @[ @(UIPressTypePlayPause) ];
   auto playPauseRecognizer =
@@ -245,6 +269,34 @@
     case UIGestureRecognizerStateEnded:
       CLog::Log(LOGDEBUG, "Input: Siri remote select press (id: 5)");
       [g_xbmcController.inputHandler sendButtonPressed:5];
+      [g_xbmcController.inputHandler.inputRemote startSiriRemoteIdleTimer];
+      break;
+    default:
+      break;
+  }
+}
+
+- (void)pageUpPressed:(UITapGestureRecognizer*)sender
+{
+  switch (sender.state)
+  {
+    case UIGestureRecognizerStateEnded:
+      CLog::Log(LOGDEBUG, "Input: Siri remote page up press (id: 27)");
+      [g_xbmcController.inputHandler sendButtonPressed:27];
+      [g_xbmcController.inputHandler.inputRemote startSiriRemoteIdleTimer];
+      break;
+    default:
+      break;
+  }
+}
+
+- (void)pageDownPressed:(UITapGestureRecognizer*)sender
+{
+  switch (sender.state)
+  {
+    case UIGestureRecognizerStateEnded:
+      CLog::Log(LOGDEBUG, "Input: Siri remote page down press (id: 28)");
+      [g_xbmcController.inputHandler sendButtonPressed:28];
       [g_xbmcController.inputHandler.inputRemote startSiriRemoteIdleTimer];
       break;
     default:
@@ -437,6 +489,7 @@
   auto translation = [sender translationInView:sender.view];
   auto velocity = [sender velocityInView:sender.view];
   auto direction = [self getPanDirection:velocity];
+  const auto maxSensitivity = 1500;
 
   switch (sender.state)
   {
@@ -453,7 +506,7 @@
         case UIPanGestureRecognizerDirectionUp:
         {
           if (fabs(m_lastGesturePoint.y - translation.y) >
-              g_xbmcController.inputHandler.inputSettings.siriRemoteVerticalSensitivity)
+              maxSensitivity - g_xbmcController.inputHandler.inputSettings.siriRemoteVerticalSensitivity)
           {
             CLog::Log(LOGDEBUG, "Input: Siri remote pan up (id: 23)");
             keyId = 23;
@@ -463,7 +516,7 @@
         case UIPanGestureRecognizerDirectionDown:
         {
           if (fabs(m_lastGesturePoint.y - translation.y) >
-              g_xbmcController.inputHandler.inputSettings.siriRemoteVerticalSensitivity)
+              maxSensitivity - g_xbmcController.inputHandler.inputSettings.siriRemoteVerticalSensitivity)
           {
             CLog::Log(LOGDEBUG, "Input: Siri remote pan down (id: 24)");
             keyId = 24;
@@ -473,7 +526,7 @@
         case UIPanGestureRecognizerDirectionLeft:
         {
           if (fabs(m_lastGesturePoint.x - translation.x) >
-              g_xbmcController.inputHandler.inputSettings.siriRemoteHorizontalSensitivity)
+              maxSensitivity - g_xbmcController.inputHandler.inputSettings.siriRemoteHorizontalSensitivity)
           {
             CLog::Log(LOGDEBUG, "Input: Siri remote pan left (id: 25)");
             keyId = 25;
@@ -483,7 +536,7 @@
         case UIPanGestureRecognizerDirectionRight:
         {
           if (fabs(m_lastGesturePoint.x - translation.x) >
-              g_xbmcController.inputHandler.inputSettings.siriRemoteHorizontalSensitivity)
+              maxSensitivity - g_xbmcController.inputHandler.inputSettings.siriRemoteHorizontalSensitivity)
           {
             CLog::Log(LOGDEBUG, "Input: Siri remote pan right (id: 26)");
             keyId = 26;

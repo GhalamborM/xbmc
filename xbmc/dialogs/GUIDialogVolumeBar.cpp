@@ -8,10 +8,15 @@
 
 #include "GUIDialogVolumeBar.h"
 
-#include "Application.h"
 #include "IGUIVolumeBarCallback.h"
-#include "input/Key.h"
-#include "threads/SingleLock.h"
+#include "ServiceBroker.h"
+#include "application/ApplicationComponents.h"
+#include "application/ApplicationVolumeHandling.h"
+#include "guilib/GUIMessage.h"
+#include "input/actions/Action.h"
+#include "input/actions/ActionIDs.h"
+
+#include <mutex>
 
 #define VOLUME_BAR_DISPLAY_TIME 1000L
 
@@ -25,25 +30,35 @@ CGUIDialogVolumeBar::~CGUIDialogVolumeBar(void) = default;
 
 bool CGUIDialogVolumeBar::OnAction(const CAction &action)
 {
-  if (action.GetID() == ACTION_VOLUME_UP || action.GetID() == ACTION_VOLUME_DOWN || action.GetID() == ACTION_VOLUME_SET || action.GetID() == ACTION_MUTE)
+  switch (action.GetID())
   {
-    if (g_application.IsMuted() || g_application.GetVolumeRatio() <= VOLUME_MINIMUM)
-    { // cancel the timer, dialog needs to stay visible
-      CancelAutoClose();
+    case ACTION_VOLUME_UP:
+    case ACTION_VOLUME_DOWN:
+    case ACTION_VOLUME_SET:
+    case ACTION_MUTE:
+    {
+      const auto& components = CServiceBroker::GetAppComponents();
+      const auto appVolume = components.GetComponent<CApplicationVolumeHandling>();
+      if (appVolume->IsMuted() ||
+          appVolume->GetVolumeRatio() <= CApplicationVolumeHandling::VOLUME_MINIMUM)
+      { // cancel the timer, dialog needs to stay visible
+        CancelAutoClose();
+      }
+      else
+      { // reset the timer, as we've changed the volume level
+        SetAutoClose(VOLUME_BAR_DISPLAY_TIME);
+      }
+      MarkDirtyRegion();
+      return true;
     }
-    else
-    { // reset the timer, as we've changed the volume level
-      SetAutoClose(VOLUME_BAR_DISPLAY_TIME);
-    }
-    MarkDirtyRegion();
-    return true;
+    default:
+      return CGUIDialog::OnAction(action);
   }
-  return CGUIDialog::OnAction(action);
 }
 
 bool CGUIDialogVolumeBar::OnMessage(CGUIMessage& message)
 {
-  switch ( message.GetMessage() )
+  switch (message.GetMessage())
   {
   case GUI_MSG_WINDOW_INIT:
   case GUI_MSG_WINDOW_DEINIT:
@@ -54,21 +69,21 @@ bool CGUIDialogVolumeBar::OnMessage(CGUIMessage& message)
 
 void CGUIDialogVolumeBar::RegisterCallback(IGUIVolumeBarCallback *callback)
 {
-  CSingleLock lock(m_callbackMutex);
+  std::unique_lock lock(m_callbackMutex);
 
   m_callbacks.insert(callback);
 }
 
 void CGUIDialogVolumeBar::UnregisterCallback(IGUIVolumeBarCallback *callback)
 {
-  CSingleLock lock(m_callbackMutex);
+  std::unique_lock lock(m_callbackMutex);
 
   m_callbacks.erase(callback);
 }
 
 bool CGUIDialogVolumeBar::IsVolumeBarEnabled() const
 {
-  CSingleLock lock(m_callbackMutex);
+  std::unique_lock lock(m_callbackMutex);
 
   // Hide volume bar if any callbacks are shown
   for (const auto &callback : m_callbacks)

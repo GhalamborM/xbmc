@@ -17,44 +17,46 @@
 
 #include <cstring>
 #include <memory>
+#include <string>
 
-COverlayCodecWebVTT::COverlayCodecWebVTT() : CDVDOverlayCodec("WebVTT Subtitle Decoder")
-{
-  m_pOverlay = nullptr;
-}
+using namespace KODI;
 
-COverlayCodecWebVTT::~COverlayCodecWebVTT()
+COverlayCodecWebVTT::COverlayCodecWebVTT()
+  : CDVDOverlayCodec("WebVTT Subtitle Decoder"), m_pOverlay(nullptr)
 {
-  Dispose();
 }
 
 bool COverlayCodecWebVTT::Open(CDVDStreamInfo& hints, CDVDCodecOptions& options)
 {
-  Dispose();
+  m_pOverlay.reset();
 
   if (!Initialize())
     return false;
 
+  m_isDataPacket = (hints.flags & FLAG_WEBVTT_DATA_PACKETS) != 0;
+
   if (!m_webvttHandler.Initialize())
     return false;
 
-  // "fmp4" extradata is provided by InputStream Adaptive to identify
-  // WebVTT in MP4 encapsulated subtitles (ISO/IEC 14496-30:2014)
-  if (hints.extradata && std::strncmp(static_cast<const char*>(hints.extradata), "fmp4", 4) == 0)
+  // Extradata can be provided by Inputstream addons (e.g. inputstream.adaptive)
+  if (hints.extradata)
   {
-    m_isISOFormat = true;
+    std::string extradata{reinterpret_cast<char*>(hints.extradata.GetData()),
+                          hints.extradata.GetSize()};
+    if (extradata == "file")
+    {
+      // WebVTT data like single file are sent one time only,
+      // then we have to prevent the flush performed by video seek
+      m_allowFlush = false;
+    }
+    else if (extradata == "fmp4")
+    {
+      // WebVTT in MP4 encapsulated subtitles (ISO/IEC 14496-30:2014)
+      m_isISOFormat = true;
+    }
   }
 
   return true;
-}
-
-void COverlayCodecWebVTT::Dispose()
-{
-  if (m_pOverlay)
-  {
-    m_pOverlay->Release();
-    m_pOverlay = nullptr;
-  }
 }
 
 OverlayMessage COverlayCodecWebVTT::Decode(DemuxPacket* pPacket)
@@ -64,6 +66,14 @@ OverlayMessage COverlayCodecWebVTT::Decode(DemuxPacket* pPacket)
 
   const char* data = reinterpret_cast<const char*>(pPacket->pData);
   std::vector<subtitleData> subtitleList;
+
+  m_webvttHandler.Reset();
+
+  // WebVTT subtitles has no relation with packet PTS then if
+  // a period/chapter change happens (e.g. HLS streaming) VP can detect a discontinuity
+  // and adjust the packet PTS by substracting the pts offset correction value,
+  // so here we have to adjust WebVTT subtitles PTS by substracting it at same way
+  m_webvttHandler.SetPeriodStart(pPacket->m_ptsOffsetCorrection * -1);
 
   if (m_isISOFormat)
   {
@@ -84,8 +94,17 @@ OverlayMessage COverlayCodecWebVTT::Decode(DemuxPacket* pPacket)
   }
   else
   {
-    if (!m_webvttHandler.CheckSignature(data))
-      return OverlayMessage::OC_ERROR;
+    if (m_isDataPacket)
+    {
+      // Specific case ffmpeg D_WEBVTT which extracts the CUE payload from the data
+      // it does not include signatures, CUE timing or settings, the timing is related to the packet
+      m_webvttHandler.InitDecoderCue(pPacket->dts, pPacket->dts + pPacket->duration);
+    }
+    else
+    {
+      if (!m_webvttHandler.CheckSignature(data))
+        return OverlayMessage::OC_ERROR;
+    }
 
     CCharArrayParser charArrayParser;
     charArrayParser.Reset(data, pPacket->iSize);
@@ -102,7 +121,7 @@ OverlayMessage COverlayCodecWebVTT::Decode(DemuxPacket* pPacket)
 
   for (auto& subData : subtitleList)
   {
-    KODI::SUBTITLES::subtitleOpts opts;
+    SUBTITLES::STYLE::subtitleOpts opts;
     opts.useMargins = subData.useMargins;
     opts.marginLeft = subData.marginLeft;
     opts.marginRight = subData.marginRight;
@@ -124,19 +143,20 @@ void COverlayCodecWebVTT::Reset()
 
 void COverlayCodecWebVTT::Flush()
 {
-  if (m_isISOFormat)
+  if (m_allowFlush)
   {
+    m_pOverlay.reset();
     m_previousSubIds.clear();
     FlushSubtitles();
   }
 }
 
-CDVDOverlay* COverlayCodecWebVTT::GetOverlay()
+std::shared_ptr<CDVDOverlay> COverlayCodecWebVTT::GetOverlay()
 {
   if (m_pOverlay)
     return nullptr;
   m_pOverlay = CreateOverlay();
-  m_pOverlay->SetOverlayContainerFlushable(false);
-  m_pOverlay->SetForcedMargins(true);
-  return m_pOverlay->Acquire();
+  m_pOverlay->SetOverlayContainerFlushable(m_allowFlush);
+  m_pOverlay->SetForcedMargins(m_webvttHandler.IsForcedMargins());
+  return m_pOverlay;
 }

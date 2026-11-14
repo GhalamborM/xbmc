@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2005-2018 Team Kodi
+ *  Copyright (C) 2005-2026 Team Kodi
  *  This file is part of Kodi - https://kodi.tv
  *
  *  SPDX-License-Identifier: GPL-2.0-or-later
@@ -8,12 +8,19 @@
 
 #include "JSONRPC.h"
 
+#include "FileItem.h"
+#include "GUIUserMessages.h"
 #include "ServiceBroker.h"
 #include "ServiceDescription.h"
 #include "TextureDatabase.h"
 #include "addons/Addon.h"
 #include "addons/IAddon.h"
+#include "addons/addoninfo/AddonInfo.h"
+#include "addons/addoninfo/AddonType.h"
 #include "dbwrappers/DatabaseQuery.h"
+#include "guilib/GUIComponent.h"
+#include "guilib/GUIMessage.h"
+#include "guilib/GUIWindowManager.h"
 #include "input/WindowTranslator.h"
 #include "input/actions/ActionTranslator.h"
 #include "interfaces/AnnouncementManager.h"
@@ -26,6 +33,7 @@
 
 #include <string.h>
 
+using namespace KODI;
 using namespace JSONRPC;
 
 bool CJSONRPC::m_initialized = false;
@@ -37,12 +45,14 @@ void CJSONRPC::Initialize()
 
   // Add some types/enums at runtime
   std::vector<std::string> enumList;
-  for (int addonType = ADDON::ADDON_UNKNOWN; addonType < ADDON::ADDON_MAX; addonType++)
-    enumList.push_back(ADDON::CAddonInfo::TranslateType(static_cast<ADDON::TYPE>(addonType), false));
+  for (int addonType = static_cast<int>(ADDON::AddonType::UNKNOWN);
+       addonType < static_cast<int>(ADDON::AddonType::MAX_TYPES); addonType++)
+    enumList.push_back(
+        ADDON::CAddonInfo::TranslateType(static_cast<ADDON::AddonType>(addonType), false));
   CJSONServiceDescription::AddEnum("Addon.Types", enumList);
 
   enumList.clear();
-  CActionTranslator::GetActions(enumList);
+  ACTION::CActionTranslator::GetActions(enumList);
   CJSONServiceDescription::AddEnum("Input.Action", enumList);
 
   enumList.clear();
@@ -55,31 +65,31 @@ void CJSONRPC::Initialize()
   CJSONServiceDescription::AddEnum("List.Filter.Operators", smartplaylistList);
 
   smartplaylistList.clear();
-  CSmartPlaylist::GetAvailableFields("movies", smartplaylistList);
+  PLAYLIST::CSmartPlaylist::GetAvailableFields("movies", smartplaylistList);
   CJSONServiceDescription::AddEnum("List.Filter.Fields.Movies", smartplaylistList);
 
   smartplaylistList.clear();
-  CSmartPlaylist::GetAvailableFields("tvshows", smartplaylistList);
+  PLAYLIST::CSmartPlaylist::GetAvailableFields("tvshows", smartplaylistList);
   CJSONServiceDescription::AddEnum("List.Filter.Fields.TVShows", smartplaylistList);
 
   smartplaylistList.clear();
-  CSmartPlaylist::GetAvailableFields("episodes", smartplaylistList);
+  PLAYLIST::CSmartPlaylist::GetAvailableFields("episodes", smartplaylistList);
   CJSONServiceDescription::AddEnum("List.Filter.Fields.Episodes", smartplaylistList);
 
   smartplaylistList.clear();
-  CSmartPlaylist::GetAvailableFields("musicvideos", smartplaylistList);
+  PLAYLIST::CSmartPlaylist::GetAvailableFields("musicvideos", smartplaylistList);
   CJSONServiceDescription::AddEnum("List.Filter.Fields.MusicVideos", smartplaylistList);
 
   smartplaylistList.clear();
-  CSmartPlaylist::GetAvailableFields("artists", smartplaylistList);
+  PLAYLIST::CSmartPlaylist::GetAvailableFields("artists", smartplaylistList);
   CJSONServiceDescription::AddEnum("List.Filter.Fields.Artists", smartplaylistList);
 
   smartplaylistList.clear();
-  CSmartPlaylist::GetAvailableFields("albums", smartplaylistList);
+  PLAYLIST::CSmartPlaylist::GetAvailableFields("albums", smartplaylistList);
   CJSONServiceDescription::AddEnum("List.Filter.Fields.Albums", smartplaylistList);
 
   smartplaylistList.clear();
-  CSmartPlaylist::GetAvailableFields("songs", smartplaylistList);
+  PLAYLIST::CSmartPlaylist::GetAvailableFields("songs", smartplaylistList);
   CJSONServiceDescription::AddEnum("List.Filter.Fields.Songs", smartplaylistList);
 
   smartplaylistList.clear();
@@ -172,38 +182,21 @@ JSONRPC_STATUS CJSONRPC::GetConfiguration(const std::string &method, ITransportL
 JSONRPC_STATUS CJSONRPC::SetConfiguration(const std::string &method, ITransportLayer *transport, IClient *client, const CVariant& parameterObject, CVariant &result)
 {
   int flags = 0;
-  int oldFlags = client->GetAnnouncementFlags();
+  const int oldFlags = client->GetAnnouncementFlags();
 
   if (parameterObject.isMember("notifications"))
   {
-    CVariant notifications = parameterObject["notifications"];
-    if ((notifications["Player"].isNull() && (oldFlags & ANNOUNCEMENT::Player)) ||
-        (notifications["Player"].isBoolean() && notifications["Player"].asBoolean()))
-      flags |= ANNOUNCEMENT::Player;
-    if ((notifications["Playlist"].isNull() && (oldFlags & ANNOUNCEMENT::Playlist)) ||
-        (notifications["Playlist"].isBoolean() && notifications["Playlist"].asBoolean()))
-      flags |= ANNOUNCEMENT::Playlist;
-    if ((notifications["GUI"].isNull() && (oldFlags & ANNOUNCEMENT::GUI)) ||
-        (notifications["GUI"].isBoolean() && notifications["GUI"].asBoolean()))
-      flags |= ANNOUNCEMENT::GUI;
-    if ((notifications["System"].isNull() && (oldFlags & ANNOUNCEMENT::System)) ||
-        (notifications["System"].isBoolean() && notifications["System"].asBoolean()))
-      flags |= ANNOUNCEMENT::System;
-    if ((notifications["VideoLibrary"].isNull() && (oldFlags & ANNOUNCEMENT::VideoLibrary)) ||
-        (notifications["VideoLibrary"].isBoolean() && notifications["VideoLibrary"].asBoolean()))
-      flags |= ANNOUNCEMENT::VideoLibrary;
-    if ((notifications["AudioLibrary"].isNull() && (oldFlags & ANNOUNCEMENT::AudioLibrary)) ||
-        (notifications["AudioLibrary"].isBoolean() && notifications["AudioLibrary"].asBoolean()))
-      flags |= ANNOUNCEMENT::AudioLibrary;
-    if ((notifications["Application"].isNull() && (oldFlags & ANNOUNCEMENT::Other)) ||
-        (notifications["Application"].isBoolean() && notifications["Application"].asBoolean()))
-      flags |= ANNOUNCEMENT::Application;
-    if ((notifications["Input"].isNull() && (oldFlags & ANNOUNCEMENT::Input)) ||
-        (notifications["Input"].isBoolean() && notifications["Input"].asBoolean()))
-      flags |= ANNOUNCEMENT::Input;
-    if ((notifications["Other"].isNull() && (oldFlags & ANNOUNCEMENT::Other)) ||
-        (notifications["Other"].isBoolean() && notifications["Other"].asBoolean()))
-      flags |= ANNOUNCEMENT::Other;
+    const CVariant& notifications = parameterObject["notifications"];
+    // a namespace the caller does not name keeps its current state
+    for (int flag = 1; flag <= ANNOUNCEMENT::ANNOUNCE_ALL; flag *= 2)
+    {
+      const CVariant& requested = notifications[ANNOUNCEMENT::AnnouncementFlagToString(
+          static_cast<ANNOUNCEMENT::AnnouncementFlag>(flag))];
+      const bool wanted = requested.isNull() ? (oldFlags & flag) != 0
+                                             : requested.isBoolean() && requested.asBoolean();
+      if (wanted)
+        flags |= flag;
+    }
   }
 
   if (!client->SetAnnouncementFlags(flags))
@@ -240,7 +233,7 @@ std::string CJSONRPC::MethodCall(const std::string &inputString, ITransportLayer
   {
     if (inputroot.isArray())
     {
-      if (inputroot.size() <= 0)
+      if (inputroot.empty())
       {
         CLog::Log(LOGERROR, "JSONRPC: Empty batch call");
         BuildResponse(inputroot, InvalidRequest, CVariant(), outputroot);
@@ -248,7 +241,8 @@ std::string CJSONRPC::MethodCall(const std::string &inputString, ITransportLayer
       }
       else
       {
-        for (CVariant::const_iterator_array itr = inputroot.begin_array(); itr != inputroot.end_array(); itr++)
+        for (CVariant::const_iterator_array itr = inputroot.begin_array();
+             itr != inputroot.end_array(); ++itr)
         {
           CVariant response;
           if (HandleMethodCall(*itr, response, transport, client))
@@ -329,35 +323,42 @@ inline void CJSONRPC::BuildResponse(const CVariant& request, JSONRPC_STATUS code
     case ACK:
       response["result"] = "OK";
       break;
-    case InvalidRequest:
-      response["error"]["code"] = InvalidRequest;
-      response["error"]["message"] = "Invalid request.";
-      break;
-    case InvalidParams:
-      response["error"]["code"] = InvalidParams;
-      response["error"]["message"] = "Invalid params.";
-      if (!result.isNull())
+    default:
+    {
+      const JsonRpcStatusDescription* status = StatusToDescription(code);
+      if (status == nullptr)
+        status = StatusToDescription(InternalError);
+
+      response["error"]["code"] = status->status;
+      response["error"]["message"] = status->message;
+      if (status->hasData && !result.isNull())
         response["error"]["data"] = result;
       break;
-    case MethodNotFound:
-      response["error"]["code"] = MethodNotFound;
-      response["error"]["message"] = "Method not found.";
-      break;
-    case ParseError:
-      response["error"]["code"] = ParseError;
-      response["error"]["message"] = "Parse error.";
-      break;
-    case BadPermission:
-      response["error"]["code"] = BadPermission;
-      response["error"]["message"] = "Bad client permission.";
-      break;
-    case FailedToExecute:
-      response["error"]["code"] = FailedToExecute;
-      response["error"]["message"] = "Failed to execute method.";
-      break;
-    default:
-      response["error"]["code"] = InternalError;
-      response["error"]["message"] = "Internal error.";
-      break;
+    }
   }
+}
+
+void CJSONRPCUtils::NotifyItemUpdated()
+{
+  CGUIMessage message(GUI_MSG_NOTIFY_ALL, 0, 0, GUI_MSG_UPDATE,
+                      CServiceBroker::GetGUI()->GetWindowManager().GetActiveWindow());
+  CServiceBroker::GetGUI()->GetWindowManager().SendThreadMessage(message);
+}
+
+void CJSONRPCUtils::NotifyItemUpdated(const std::shared_ptr<CFileItem>& item)
+{
+  auto& wm = CServiceBroker::GetGUI()->GetWindowManager();
+  CGUIMessage message(GUI_MSG_NOTIFY_ALL, wm.GetActiveWindow(), 0, GUI_MSG_UPDATE_ITEM, 0, item);
+  wm.SendThreadMessage(message);
+}
+
+void CJSONRPCUtils::NotifyItemUpdated(const CVideoInfoTag& info, const KODI::ART::Artwork& artwork)
+{
+  CFileItemPtr msgItem(new CFileItem(info));
+  if (!artwork.empty())
+    msgItem->SetArt(artwork);
+  CGUIMessage message(GUI_MSG_NOTIFY_ALL,
+                      CServiceBroker::GetGUI()->GetWindowManager().GetActiveWindow(), 0,
+                      GUI_MSG_UPDATE_ITEM, 0, msgItem);
+  CServiceBroker::GetGUI()->GetWindowManager().SendThreadMessage(message);
 }

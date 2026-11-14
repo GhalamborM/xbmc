@@ -15,7 +15,8 @@
 
 #ifdef _WIN32 // windows
 #ifndef _SSIZE_T_DEFINED
-typedef intptr_t ssize_t;
+#include <BaseTsd.h>
+typedef SSIZE_T ssize_t;
 #define _SSIZE_T_DEFINED
 #endif // !_SSIZE_T_DEFINED
 
@@ -63,6 +64,9 @@ extern "C"
     /// @brief **0000 0000 0010** :\n
     /// Indicate that that caller support read in the minimum defined
     /// chunk size, this disables internal cache then.
+    /// This flag is deprecated, instead use ADDON_READ_NO_CACHE to disable FileCache and
+    /// ADDON_READ_NO_BUFFER to disable StreamBuffer. On the contrary to explicitly indicate that
+    /// the file has audio/video content (suitable for caching), use the ADDON_READ_AUDIO_VIDEO flag.
     ADDON_READ_CHUNKED = 0x02,
 
     /// @brief **0000 0000 0100** :\n
@@ -83,8 +87,9 @@ extern "C"
     ADDON_READ_MULTI_STREAM = 0x20,
 
     /// @brief **0000 0100 0000** :\n
-    /// indicate to the caller file is audio and/or video (and e.g. may
-    /// grow).
+    /// Indicate to the caller file is audio and/or video and is suitable for caching with FileCache or StreamBuffer.
+    /// The final method used will depend on the user's settings and file location, e.g. user can disable FileCache.
+    /// This flag ensures that at least the buffer size necessary to read with the appropriate chunk size will be used.
     ADDON_READ_AUDIO_VIDEO = 0x40,
 
     /// @brief **0000 1000 0000** :\n
@@ -93,7 +98,11 @@ extern "C"
 
     /// @brief **0001 0000 0000** :\n
     /// Indicate that caller want to reopen a file if its already open.
-    ADDON_READ_REOPEN = 0x100
+    ADDON_READ_REOPEN = 0x100,
+
+    /// @brief **0010 0000 0000** :\n
+    /// Indicate that caller want open a file without intermediate buffer regardless to file type.
+    ADDON_READ_NO_BUFFER = 0x200,
   } OpenFileFlags;
   ///@}
   //----------------------------------------------------------------------------
@@ -118,7 +127,7 @@ extern "C"
     /// | <b>`accept-charset`</b>             | Set the "accept-charset" header
     /// | <b>`acceptencoding or encoding`</b> | Set the "accept-encoding" header
     /// | <b>`active-remote`</b>              | Set the "active-remote" header
-    /// | <b>`auth`</b>                       | Set the authentication method. Possible values: any, anysafe, digest, ntlm
+    /// | <b>`auth`</b>                       | Set the authentication method. Possible values: any, anysafe, digest, ntlm, basic
     /// | <b>`connection-timeout`</b>         | Set the connection timeout in seconds
     /// | <b>`cookie`</b>                     | Set the "cookie" header
     /// | <b>`customrequest`</b>              | Set a custom HTTP request like DELETE
@@ -128,6 +137,7 @@ extern "C"
     /// | <b>`user-agent`</b>                 | Set the "user-agent" header
     /// | <b>`seekable`</b>                   | Set the stream seekable. 1: enable, 0: disable
     /// | <b>`sslcipherlist`</b>              | Set list of accepted SSL ciphers.
+    /// | <b>`verifypeer`</b>                 | Set to false if curl must skip checking the authenticity of the SSL CA certificate.
     ///
     ADDON_CURL_OPTION_PROTOCOL,
 
@@ -219,9 +229,9 @@ extern "C"
   struct VFS_CACHE_STATUS_DATA
   {
     uint64_t forward;
-    unsigned int maxrate;
-    unsigned int currate;
-    bool lowspeed;
+    uint32_t maxrate;
+    uint32_t currate;
+    uint32_t lowrate;
   };
 
   struct VFSProperty
@@ -298,7 +308,7 @@ extern "C"
     bool (*io_control_get_cache_status)(void* kodiBase,
                                         void* file,
                                         struct VFS_CACHE_STATUS_DATA* status);
-    bool (*io_control_set_cache_rate)(void* kodiBase, void* file, unsigned int rate);
+    bool (*io_control_set_cache_rate)(void* kodiBase, void* file, uint32_t rate);
     bool (*io_control_set_retry)(void* kodiBase, void* file, bool retry);
     char** (*get_property_values)(
         void* kodiBase, void* file, int type, const char* name, int* numValues);

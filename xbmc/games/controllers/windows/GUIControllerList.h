@@ -9,7 +9,6 @@
 #pragma once
 
 #include "IConfigurationWindow.h"
-#include "addons/AddonEvents.h"
 #include "games/GameTypes.h"
 #include "games/controllers/ControllerTypes.h"
 
@@ -26,10 +25,26 @@ namespace GAME
 {
 class CGUIControllerWindow;
 
+/*!
+ * \ingroup games
+ */
 class CGUIControllerList : public IControllerList
 {
 public:
-  CGUIControllerList(CGUIWindow* window, IFeatureList* featureList, GameClientPtr gameClient);
+  /*!
+   * \brief Create a GUI controller list
+   *
+   * \param window The GUI window handle
+   * \param featureList The controller interface for the feature list
+   * \param gameClient A gameclient used to filter controllers
+   * \param controllerId A controller ID used to filter controllers (only the
+   *                     specified controller will be shown, or the default
+   *                     controller if the specified controller isn't installed)
+   */
+  CGUIControllerList(CGUIWindow* window,
+                     IFeatureList* featureList,
+                     GameClientPtr gameClient,
+                     std::string controllerId);
   ~CGUIControllerList() override { Deinitialize(); }
 
   // implementation of IControllerList
@@ -45,18 +60,18 @@ private:
   bool RefreshControllers(void);
 
   void CleanupButtons(void);
-  void OnEvent(const ADDON::AddonEvent& event);
 
   // GUI stuff
   CGUIWindow* const m_guiWindow;
   IFeatureList* const m_featureList;
-  CGUIControlGroupList* m_controllerList;
-  CGUIButtonControl* m_controllerButton;
+  CGUIControlGroupList* m_controllerList = nullptr;
+  CGUIButtonControl* m_controllerButton = nullptr;
 
   // Game stuff
   ControllerVector m_controllers;
-  int m_focusedController;
+  int m_focusedController = -1; // Initially unfocused
   GameClientPtr m_gameClient;
+  std::string m_controllerId;
 };
 } // namespace GAME
 } // namespace KODI

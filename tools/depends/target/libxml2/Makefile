@@ -1,40 +1,37 @@
-include ../../Makefile.include
-DEPS= ../../Makefile.include Makefile
-
-# lib name, version
-LIBNAME=libxml2
-VERSION=2.9.12
-SOURCE=$(LIBNAME)-$(VERSION)
-ARCHIVE=$(SOURCE).tar.gz
+include ../../Makefile.include LIBXML2-VERSION ../../download-files.include
+DEPS = ../../Makefile.include Makefile LIBXML2-VERSION ../../download-files.include
 
 # configuration settings
-CONFIGURE=./configure --prefix=$(PREFIX) --without-python --without-iconv --disable-shared
+CMAKE_OPTIONS=-DBUILD_SHARED_LIBS=OFF \
+              -DLIBXML2_WITH_DEBUG=OFF \
+              -DLIBXML2_WITH_ICONV=OFF \
+              -DLIBXML2_WITH_MODULES=OFF \
+              -DLIBXML2_WITH_PYTHON=OFF \
+              -DLIBXML2_WITH_PROGRAMS=OFF \
+              -DLIBXML2_WITH_TESTS=OFF
 
-LIBDYLIB=$(PLATFORM)/.libs/$(LIBNAME).a
+LIBDYLIB=$(PLATFORM)/build/$(BYPRODUCT)
 
 all: .installed-$(PLATFORM)
 
-$(TARBALLS_LOCATION)/$(ARCHIVE):
-	cd $(TARBALLS_LOCATION); $(RETRIEVE_TOOL) $(RETRIEVE_TOOL_FLAGS) $(BASE_URL)/$(ARCHIVE)
-
-$(PLATFORM): $(TARBALLS_LOCATION)/$(ARCHIVE) $(DEPS)
+.configured-$(PLATFORM): $(DEPS) | $(TARBALLS_LOCATION)/$(ARCHIVE).$(HASH_TYPE)
 	rm -rf $(PLATFORM)/*; mkdir -p $(PLATFORM)
 	cd $(PLATFORM); $(ARCHIVE_TOOL) $(ARCHIVE_TOOL_FLAGS) $(TARBALLS_LOCATION)/$(ARCHIVE)
-	cd $(PLATFORM); ./autogen.sh
-	cd $(PLATFORM); $(CONFIGURE)
+	cd $(PLATFORM); mkdir -p build
+	cd $(PLATFORM)/build; $(CMAKE) $(CMAKE_OPTIONS) ..
+	touch $@
 
-$(LIBDYLIB): $(PLATFORM)
-	$(MAKE) -C $(PLATFORM)
+$(LIBDYLIB): .configured-$(PLATFORM)
+	$(MAKE) -C $(PLATFORM)/build
 
 .installed-$(PLATFORM): $(LIBDYLIB)
-	$(MAKE) -C $(PLATFORM) install
-	touch $(LIBDYLIB)
+	$(MAKE) -C $(PLATFORM)/build install
 	touch $@
 
 clean:
-	$(MAKE) -C $(PLATFORM) clean
-	rm -f .installed-$(PLATFORM)
+	$(MAKE) -C $(PLATFORM)/build clean
+	rm -f .installed-$(PLATFORM) .configured-$(PLATFORM)
 
 distclean::
-	rm -rf $(PLATFORM) .installed-$(PLATFORM)
+	rm -rf $(PLATFORM) .installed-$(PLATFORM) .configured-$(PLATFORM)
 

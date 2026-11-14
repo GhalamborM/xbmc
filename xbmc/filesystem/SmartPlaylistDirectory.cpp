@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2005-2018 Team Kodi
+ *  Copyright (C) 2005-2026 Team Kodi
  *  This file is part of Kodi - https://kodi.tv
  *
  *  SPDX-License-Identifier: GPL-2.0-or-later
@@ -9,26 +9,38 @@
 #include "SmartPlaylistDirectory.h"
 
 #include "FileItem.h"
+#include "FileItemList.h"
 #include "ServiceBroker.h"
 #include "filesystem/Directory.h"
 #include "filesystem/File.h"
 #include "filesystem/FileDirectoryFactory.h"
 #include "music/MusicDatabase.h"
+#include "music/MusicDbPaths.h"
+#include "music/MusicDbUrl.h"
+#include "playlists/PlayListTypes.h"
 #include "playlists/SmartPlayList.h"
 #include "settings/Settings.h"
 #include "settings/SettingsComponent.h"
+#include "utils/ContentNames.h"
+#include "utils/ItemProperties.h"
 #include "utils/SortUtils.h"
 #include "utils/StringUtils.h"
 #include "utils/URIUtils.h"
 #include "video/VideoDatabase.h"
+#include "video/VideoDbPaths.h"
+#include "video/VideoDbUrl.h"
 
-#include <math.h>
+#include <memory>
 
 #define PROPERTY_PATH_DB            "path.db"
 #define PROPERTY_SORT_ORDER         "sort.order"
 #define PROPERTY_SORT_ASCENDING     "sort.ascending"
 #define PROPERTY_GROUP_BY           "group.by"
 #define PROPERTY_GROUP_MIXED        "group.mixed"
+
+using namespace KODI;
+using KODI::MEDIA::MediaTypeFromName;
+using KODI::MEDIA::PluralNameOf;
 
 namespace XFILE
 {
@@ -39,17 +51,20 @@ namespace XFILE
   bool CSmartPlaylistDirectory::GetDirectory(const CURL& url, CFileItemList& items)
   {
     // Load in the SmartPlaylist and get the WHERE query
-    CSmartPlaylist playlist;
+    PLAYLIST::CSmartPlaylist playlist;
     if (!playlist.Load(url))
       return false;
     bool result = GetDirectory(playlist, items);
     if (result)
-      items.SetProperty("library.smartplaylist", true);
+      items.SetProperty(ITEM::PROPERTY::LIBRARY_SMARTPLAYLIST, true);
 
     return result;
   }
 
-  bool CSmartPlaylistDirectory::GetDirectory(const CSmartPlaylist &playlist, CFileItemList& items, const std::string &strBaseDir /* = "" */, bool filter /* = false */)
+  bool CSmartPlaylistDirectory::GetDirectory(const PLAYLIST::CSmartPlaylist& playlist,
+                                             CFileItemList& items,
+                                             const std::string& strBaseDir /* = "" */,
+                                             bool filter /* = false */)
   {
     bool success = false, success2 = false;
     std::vector<std::string> virtualFolders;
@@ -58,7 +73,7 @@ namespace XFILE
     if (playlist.GetLimit() > 0)
       sorting.limitEnd = playlist.GetLimit();
     sorting.sortBy = playlist.GetOrder();
-    sorting.sortOrder = playlist.GetOrderAscending() ? SortOrderAscending : SortOrderDescending;
+    sorting.sortOrder = playlist.GetOrderAscending() ? SortOrder::ASCENDING : SortOrder::DESCENDING;
     sorting.sortAttributes = playlist.GetOrderAttributes();
     if (CServiceBroker::GetSettingsComponent()->GetSettings()->GetBool(CSettings::SETTING_FILELISTS_IGNORETHEWHENSORTING))
       sorting.sortAttributes = (SortAttribute)(sorting.sortAttributes | SortAttributeIgnoreArticle);
@@ -72,38 +87,41 @@ namespace XFILE
     std::string option = !filter ? "xsp" : "filter";
     std::string group = playlist.GetGroup();
     bool isGrouped = !group.empty() && !StringUtils::EqualsNoCase(group, "none") && !playlist.IsGroupMixed();
+    // Hint for playlist files like STRM
+    PLAYLIST::Id playlistTypeHint = PLAYLIST::Id::TYPE_NONE;
 
     // get all virtual folders and add them to the item list
     playlist.GetVirtualFolders(virtualFolders);
     for (const std::string& virtualFolder : virtualFolders)
     {
-      CFileItemPtr pItem = CFileItemPtr(new CFileItem(virtualFolder, true));
+      CFileItemPtr pItem = std::make_shared<CFileItem>(virtualFolder, true);
       IFileDirectory *dir = CFileDirectoryFactory::Create(pItem->GetURL(), pItem.get());
 
       if (dir != NULL)
       {
-        pItem->SetSpecialSort(SortSpecialOnTop);
+        pItem->SetSpecialSort(SortSpecial::TOP);
         items.Add(pItem);
         delete dir;
       }
     }
 
-    if (playlist.GetType() == "movies" ||
-        playlist.GetType() == "tvshows" ||
-        playlist.GetType() == "episodes")
+    if (playlist.GetType() == MEDIA::CONTENT::MOVIES ||
+        playlist.GetType() == MEDIA::CONTENT::TVSHOWS ||
+        playlist.GetType() == MEDIA::CONTENT::EPISODES)
     {
+      playlistTypeHint = PLAYLIST::Id::TYPE_VIDEO;
       CVideoDatabase db;
       if (db.Open())
       {
-        MediaType mediaType = CMediaTypes::FromString(playlist.GetType());
+        MEDIA::TYPE mediaType = MediaTypeFromName(playlist.GetType());
 
         std::string baseDir = strBaseDir;
         if (strBaseDir.empty())
         {
-          if (mediaType == MediaTypeTvShow || mediaType == MediaTypeEpisode)
-            baseDir = "videodb://tvshows/";
-          else if (mediaType == MediaTypeMovie)
-            baseDir = "videodb://movies/";
+          if (mediaType == MEDIA::TYPE::TV_SHOW || mediaType == MEDIA::TYPE::EPISODE)
+            baseDir = VIDEO::DB_PATH::TVSHOWS;
+          else if (mediaType == MEDIA::TYPE::MOVIE)
+            baseDir = VIDEO::DB_PATH::MOVIES;
           else
             return false;
 
@@ -113,7 +131,7 @@ namespace XFILE
             baseDir += group;
           URIUtils::AddSlashAtEnd(baseDir);
 
-          if (mediaType == MediaTypeEpisode)
+          if (mediaType == MEDIA::TYPE::EPISODE)
             baseDir += "-1/-1/";
         }
 
@@ -140,36 +158,33 @@ namespace XFILE
 
         // if we retrieve a list of episodes and we didn't receive
         // a pre-defined base path, we need to fix it
-        if (strBaseDir.empty() && mediaType == MediaTypeEpisode && !isGrouped)
+        if (strBaseDir.empty() && mediaType == MEDIA::TYPE::EPISODE && !isGrouped)
           videoUrl.AppendPath("-1/-1/");
         items.SetProperty(PROPERTY_PATH_DB, videoUrl.ToString());
       }
     }
     else if (playlist.IsMusicType() || playlist.GetType().empty())
     {
+      playlistTypeHint = PLAYLIST::Id::TYPE_MUSIC;
       CMusicDatabase db;
       if (db.Open())
       {
-        CSmartPlaylist plist(playlist);
-        if (playlist.GetType() == "mixed" || playlist.GetType().empty())
-          plist.SetType("songs");
+        PLAYLIST::CSmartPlaylist plist(playlist);
+        if (playlist.GetType() == MEDIA::CONTENT::MIXED || playlist.GetType().empty())
+          plist.SetType(MEDIA::CONTENT::SONGS);
 
-        MediaType mediaType = CMediaTypes::FromString(plist.GetType());
+        MEDIA::TYPE mediaType = MediaTypeFromName(plist.GetType());
 
         std::string baseDir = strBaseDir;
         if (strBaseDir.empty())
         {
-          baseDir = "musicdb://";
+          baseDir = MUSIC::DB_PATH::ROOT;
           if (!isGrouped)
           {
-            if (mediaType == MediaTypeArtist)
-              baseDir += "artists";
-            else if (mediaType == MediaTypeAlbum)
-              baseDir += "albums";
-            else if (mediaType == MediaTypeSong)
-              baseDir += "songs";
-            else
+            if (mediaType != MEDIA::TYPE::ARTIST && mediaType != MEDIA::TYPE::ALBUM &&
+                mediaType != MEDIA::TYPE::SONG)
               return false;
+            baseDir += PluralNameOf(mediaType);
           }
           else
             baseDir += group;
@@ -195,26 +210,28 @@ namespace XFILE
           musicUrl.RemoveOption(option);
 
         CDatabase::Filter dbfilter;
-        success = db.GetItems(musicUrl.ToString(), items, dbfilter, sorting);
+        success = db.GetItems(musicUrl.ToString(), items, sorting, dbfilter);
         db.Close();
 
         items.SetProperty(PROPERTY_PATH_DB, musicUrl.ToString());
       }
     }
 
-    if (playlist.GetType() == "musicvideos" || playlist.GetType() == "mixed")
+    if (playlist.GetType() == MEDIA::CONTENT::MUSICVIDEOS ||
+        playlist.GetType() == MEDIA::CONTENT::MIXED)
     {
+      playlistTypeHint = PLAYLIST::Id::TYPE_VIDEO;
       CVideoDatabase db;
       if (db.Open())
       {
-        CSmartPlaylist mvidPlaylist(playlist);
-        if (playlist.GetType() == "mixed")
-          mvidPlaylist.SetType("musicvideos");
+        PLAYLIST::CSmartPlaylist mvidPlaylist(playlist);
+        if (playlist.GetType() == MEDIA::CONTENT::MIXED)
+          mvidPlaylist.SetType(MEDIA::CONTENT::MUSICVIDEOS);
 
         std::string baseDir = strBaseDir;
         if (baseDir.empty())
         {
-          baseDir = "videodb://musicvideos/";
+          baseDir = VIDEO::DB_PATH::MUSICVIDEOS;
 
           if (!isGrouped)
             baseDir += "titles";
@@ -258,13 +275,6 @@ namespace XFILE
           items.SetPath(videoUrl.ToString());
 
         items.Append(items2);
-        if (items2.Size())
-        {
-          if (items.Size() > items2.Size())
-            items.SetContent("mixed");
-          else
-            items.SetContent("musicvideos");
-        }
         items.SetProperty(PROPERTY_PATH_DB, videoUrl.ToString());
       }
     }
@@ -276,27 +286,46 @@ namespace XFILE
       items.SetContent(playlist.GetType());
 
     items.SetProperty(PROPERTY_SORT_ORDER, (int)playlist.GetOrder());
-    items.SetProperty(PROPERTY_SORT_ASCENDING, playlist.GetOrderDirection() == SortOrderAscending);
+    items.SetProperty(PROPERTY_SORT_ASCENDING,
+                      playlist.GetOrderDirection() == SortOrder::ASCENDING);
     if (!group.empty())
     {
       items.SetProperty(PROPERTY_GROUP_BY, group);
       items.SetProperty(PROPERTY_GROUP_MIXED, playlist.IsGroupMixed());
     }
 
-    // sort grouped list by label
+    // sort grouped list by label unless random was specified for musicvideo artists
     if (items.Size() > 1 && !group.empty())
-      items.Sort(SortByLabel, SortOrderAscending, CServiceBroker::GetSettingsComponent()->GetSettings()->GetBool(CSettings::SETTING_FILELISTS_IGNORETHEWHENSORTING) ? SortAttributeIgnoreArticle : SortAttributeNone);
+    {
+      if (playlist.GetOrder() == SortBy::RANDOM && group == "actors" &&
+          playlist.GetType() == MEDIA::CONTENT::MUSICVIDEOS)
+        items.Sort(SortBy::RANDOM, SortOrder::ASCENDING,
+                   CServiceBroker::GetSettingsComponent()->GetSettings()->GetBool(
+                       CSettings::SETTING_FILELISTS_IGNORETHEWHENSORTING)
+                       ? SortAttributeIgnoreArticle
+                       : SortAttributeNone);
+      else
+        items.Sort(SortBy::LABEL, SortOrder::ASCENDING,
+                   CServiceBroker::GetSettingsComponent()->GetSettings()->GetBool(
+                       CSettings::SETTING_FILELISTS_IGNORETHEWHENSORTING)
+                       ? SortAttributeIgnoreArticle
+                       : SortAttributeNone);
+    }
+
+    if (auto watchedMode = playlist.GetWatchedMode(); watchedMode.has_value())
+      items.SetProperty(ITEM::PROPERTY::WATCHED_MODE, static_cast<int>(watchedMode.value()));
 
     // go through and set the playlist order
     for (int i = 0; i < items.Size(); i++)
     {
       CFileItemPtr item = items[i];
-      item->m_iprogramCount = i;  // hack for playlist order
+      item->SetProgramCount(i); //! @todo remove this hack for playlist order
+      item->SetProperty("playlist_type_hint", static_cast<int>(playlistTypeHint));
     }
 
-    if (playlist.GetType() == "mixed")
+    if (playlist.GetType() == MEDIA::CONTENT::MIXED)
       return success || success2;
-    else if (playlist.GetType() == "musicvideos")
+    else if (playlist.GetType() == MEDIA::CONTENT::MUSICVIDEOS)
       return success2;
     else
       return success;
@@ -312,7 +341,7 @@ namespace XFILE
   {
     CFileItemList list;
     bool filesExist = false;
-    if (CSmartPlaylist::IsMusicType(playlistType))
+    if (PLAYLIST::CSmartPlaylist::IsMusicType(playlistType))
       filesExist = CDirectory::GetDirectory("special://musicplaylists/", list, ".xsp", DIR_FLAG_DEFAULTS);
     else // all others are video
       filesExist = CDirectory::GetDirectory("special://videoplaylists/", list, ".xsp", DIR_FLAG_DEFAULTS);
@@ -321,7 +350,7 @@ namespace XFILE
       for (int i = 0; i < list.Size(); i++)
       {
         CFileItemPtr item = list[i];
-        CSmartPlaylist playlist;
+        PLAYLIST::CSmartPlaylist playlist;
         if (playlist.OpenAndReadName(item->GetURL()))
         {
           if (StringUtils::EqualsNoCase(playlist.GetName(), name))
@@ -344,7 +373,4 @@ namespace XFILE
   {
     return XFILE::CFile::Delete(url);
   }
-}
-
-
-
+  } // namespace XFILE

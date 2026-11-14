@@ -1,58 +1,61 @@
-include ../../Makefile.include
-DEPS= ../../Makefile.include Makefile 01-nosetuptool.patch 02-android-dlopen.patch 03-obey-crosscompileflags.patch
+include ../../Makefile.include PYTHONMODULE-PYCRYPTODOME-VERSION ../../download-files.include
+DEPS= ../../Makefile.include Makefile PYTHONMODULE-PYCRYPTODOME-VERSION ../../download-files.include \
+                             01-revert-ctype.pythonapi-use.patch \
+                             02-android-dlopen.patch \
+							 03-ios-load-shared-lib.patch
 
-# lib name, version
-LIBNAME=pycryptodome
-VERSION=3.4.3
-SOURCE=$(LIBNAME)-$(VERSION)
-ARCHIVE=$(SOURCE).tar.gz
+LDSHARED=$(CC) -shared
 
-CROSSFLAGS=PYTHONXCPREFIX="$(PREFIX)" CC="$(CC) $(CFLAGS)" LDSHARED="$(CC) -shared" LDFLAGS="$(LDFLAGS)" PYTHONPATH="$(PYTHON_SITE_PKG)"
 ifeq ($(OS),android)
-CROSSFLAGS=PYTHONXCPREFIX="$(PREFIX)" CC="$(CC) $(CFLAGS)" LDSHARED="$(CC) -shared" LDFLAGS="$(LDFLAGS) -L$(PREFIX)/lib/dummy-lib$(APP_NAME)/ -l$(APP_NAME) -lm" PYTHONPATH="$(PYTHON_SITE_PKG)"
+  LDFLAGS+= -L$(PREFIX)/lib/dummy-lib$(APP_NAME)/ -l$(APP_NAME) -lm
 endif
 
 ifeq (darwin, $(findstring darwin, $(HOST)))
-ifeq ($(OS),darwin_embedded)
-# Work around an issue with xcode 11 stripping -arch arm64 flags.
-# Not required for xcode 12+, but doesnt hurt either.
-CFLAGS+= -target arm64-apple-darwin
-endif
-#ensure that only our target ldflags are passed to the python build
-LDSHARED:=$(CC) -bundle -undefined dynamic_lookup $(LDFLAGS)
-CROSSFLAGS=PYTHONXCPREFIX="$(PREFIX)" CC="$(CC) $(CFLAGS)" CCSHARED="$(CC) $(CFLAGS)" LDFLAGS="$(LDFLAGS)" PYTHONPATH="$(PYTHON_SITE_PKG)" LDSHARED="$(LDSHARED)"
+  ifeq ($(CPU),arm64)
+    # Work around an issue with xcode 11 stripping -arch arm64 flags.
+    # Not required for xcode 12+, but doesnt hurt either.
+    CFLAGS+= -target arm64-apple-darwin
+    LDFLAGS+= -target arm64-apple-darwin
+  endif
+  ifeq ($(OS), darwin_embedded)
+    # AppStore Connect doesn't allow files of type bundle
+    OUTPUT_FILE_TYPE_ARG=-dynamiclib
+  else
+    OUTPUT_FILE_TYPE_ARG=-bundle
+  endif
+  LDSHARED:=$(CC) $(OUTPUT_FILE_TYPE_ARG) -undefined dynamic_lookup $(LDFLAGS)
 endif
 
-LIBDYLIB=$(PLATFORM)/build/lib.$(OS)-$(CPU)-$(PYTHON_VERSION)/Cryptodome
-ifeq ($(NATIVE_OS), osx)
-	LIBDYLIB=$(PLATFORM)/build/lib.macosx-10.4-x86_64-$(PYTHON_VERSION)/Cryptodome
-endif
+
+export CC CFLAGS CPPFLAGS AR RANLIB
+export LDSHARED LDFLAGS
+export PYTHONPATH=$(PYTHON_SITE_PKG)
+export SETUPTOOLS_EXT_SUFFIX=.so
 
 all: .installed-$(PLATFORM)
 
-$(TARBALLS_LOCATION)/$(ARCHIVE):
-	cd $(TARBALLS_LOCATION); $(RETRIEVE_TOOL) $(RETRIEVE_TOOL_FLAGS) $(BASE_URL)/$(ARCHIVE)
 
-$(PLATFORM): $(TARBALLS_LOCATION)/$(ARCHIVE) $(DEPS)
+.configured-$(PLATFORM): $(DEPS) | $(TARBALLS_LOCATION)/$(ARCHIVE).$(HASH_TYPE)
 	rm -rf $(PLATFORM)/*; mkdir -p $(PLATFORM)
 	cd $(PLATFORM); $(ARCHIVE_TOOL) $(ARCHIVE_TOOL_FLAGS) $(TARBALLS_LOCATION)/$(ARCHIVE)
-	cd $(PLATFORM); patch -p1 -i ../01-nosetuptool.patch
+	cd $(PLATFORM); patch -p1 -i ../01-revert-ctype.pythonapi-use.patch
 ifeq ($(OS),android)
 	cd $(PLATFORM); patch -p1 -i ../02-android-dlopen.patch
 endif
-	cd $(PLATFORM); patch -p1 -i ../03-obey-crosscompileflags.patch
+# TODO: enable for tvOS once Python is built as a real tvOS platform
+ifeq ($(findstring iphone,$(TARGET_PLATFORM)),iphone)
+	cd $(PLATFORM); patch -p1 -i ../03-ios-load-shared-lib.patch
+endif
+	touch $@
 
-$(LIBDYLIB): $(PLATFORM)
-	mkdir -p $(PLATFORM)/output
-	cd $(PLATFORM); touch .separate_namespace && $(CROSSFLAGS) $(NATIVEPREFIX)/bin/python3 setup.py build_ext --plat-name $(OS)-$(TARGET_ARCH)
-
-.installed-$(PLATFORM): $(LIBDYLIB)
-	cd $(PLATFORM); $(CROSSFLAGS) $(NATIVEPREFIX)/bin/python3 setup.py install --prefix=$(PREFIX)
+.installed-$(PLATFORM): .configured-$(PLATFORM)
+	cd $(PLATFORM); touch .separate_namespace && $(NATIVEPREFIX)/bin/python3 setup.py build_ext --plat-name $(OS)-$(CPU)
+	cd $(PLATFORM); $(NATIVEPREFIX)/bin/python3 setup.py install --prefix=$(PREFIX)
 	touch $@
 
 clean:
 	$(MAKE) -C $(PLATFORM) clean
-	rm -f .installed-$(PLATFORM)
+	rm -f .installed-$(PLATFORM) .configured-$(PLATFORM)
 
 distclean::
-	rm -rf $(PLATFORM) .installed-$(PLATFORM)
+	rm -rf $(PLATFORM) .installed-$(PLATFORM) .configured-$(PLATFORM)

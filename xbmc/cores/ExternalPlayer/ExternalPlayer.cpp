@@ -6,27 +6,30 @@
  *  See LICENSES/README.md for more information.
  */
 
-#include "threads/SystemClock.h"
-#include "CompileInfo.h"
 #include "ExternalPlayer.h"
-#include "windowing/WinSystem.h"
+
+#include "CompileInfo.h"
+#include "FileItem.h"
+#include "ServiceBroker.h"
+#include "URL.h"
+#include "application/Application.h"
+#include "application/ApplicationComponents.h"
+#include "application/ApplicationPowerHandling.h"
+#include "cores/AudioEngine/Interfaces/AE.h"
+#include "cores/DataCacheCore.h"
 #include "dialogs/GUIDialogOK.h"
+#include "filesystem/MusicDatabaseFile.h"
 #include "guilib/GUIComponent.h"
 #include "guilib/GUIWindowManager.h"
-#include "Application.h"
-#include "filesystem/MusicDatabaseFile.h"
-#include "FileItem.h"
+#include "threads/SystemClock.h"
 #include "utils/RegExp.h"
 #include "utils/StringUtils.h"
 #include "utils/URIUtils.h"
-#include "URL.h"
+#include "utils/Variant.h"
 #include "utils/XMLUtils.h"
 #include "utils/log.h"
-#include "utils/Variant.h"
 #include "video/Bookmark.h"
-#include "ServiceBroker.h"
-#include "cores/AudioEngine/Interfaces/AE.h"
-#include "cores/DataCacheCore.h"
+#include "windowing/WinSystem.h"
 #if defined(TARGET_WINDOWS)
   #include "utils/CharsetConverter.h"
   #include <Windows.h>
@@ -51,12 +54,10 @@ extern HWND g_hWnd;
 #endif
 
 CExternalPlayer::CExternalPlayer(IPlayerCallback& callback)
-    : IPlayer(callback),
-      CThread("ExternalPlayer")
+  : IPlayer(callback), CThread("ExternalPlayer"), m_playbackStartTime{}
 {
   m_bAbortRequest = false;
   m_bIsPlaying = false;
-  m_playbackStartTime = {};
   m_speed = 1;
   m_time = 0;
 
@@ -115,7 +116,7 @@ bool CExternalPlayer::CloseFile(bool reopen)
     TerminateProcess(m_processInfo.hProcess, 1);
   }
 #endif
-
+  CServiceBroker::GetDataCacheCore().Reset();
   return true;
 }
 
@@ -294,7 +295,7 @@ void CExternalPlayer::Process()
   /* don't block external player's access to audio device  */
   CServiceBroker::GetActiveAE()->Suspend();
   // wait for AE has completed suspended
-  XbmcThreads::EndTime timer(2000);
+  XbmcThreads::EndTime<> timer(2000ms);
   while (!timer.IsTimePast() && !CServiceBroker::GetActiveAE()->IsSuspended())
   {
     CThread::Sleep(50ms);
@@ -388,8 +389,10 @@ void CExternalPlayer::Process()
   }
 
   // We don't want to come back to an active screensaver
-  g_application.ResetScreenSaver();
-  g_application.WakeUpScreenSaverAndDPMS();
+  auto& components = CServiceBroker::GetAppComponents();
+  const auto appPower = components.GetComponent<CApplicationPowerHandling>();
+  appPower->ResetScreenSaver();
+  appPower->WakeUpScreenSaverAndDPMS();
 
   if (!ret || (m_playOneStackItem && g_application.CurrentFileItem().IsStack()))
     m_callback.OnPlayBackStopped();
@@ -479,7 +482,7 @@ bool CExternalPlayer::ExecuteAppAndroid(const char* strSwitches,const char* strP
     CLog::Log(LOGINFO, "{}: Failure", __FUNCTION__);
   }
 
-  return (ret == 0);
+  return ret;
 }
 #endif
 
@@ -497,7 +500,7 @@ bool CExternalPlayer::HasAudio() const
   return false;
 }
 
-bool CExternalPlayer::CanSeek()
+bool CExternalPlayer::CanSeek() const
 {
   return false;
 }
@@ -538,28 +541,22 @@ void CExternalPlayer::SetSpeed(float speed)
   CDataCacheCore::GetInstance().SetSpeed(1.0, speed);
 }
 
-std::string CExternalPlayer::GetPlayerState()
-{
-  return "";
-}
-
 bool CExternalPlayer::SetPlayerState(const std::string& state)
 {
   return true;
 }
 
-bool CExternalPlayer::Initialize(TiXmlElement* pConfig)
+bool CExternalPlayer::Initialize(tinyxml2::XMLElement* pConfig)
 {
   XMLUtils::GetString(pConfig, "filename", m_filename);
-  if (m_filename.length() > 0)
+  if (!m_filename.empty())
   {
     CLog::Log(LOGINFO, "ExternalPlayer Filename: {}", m_filename);
   }
   else
   {
-    std::string xml;
-    xml<<*pConfig;
-    CLog::Log(LOGERROR, "ExternalPlayer Error: filename element missing from: {}", xml);
+    CLog::Log(LOGERROR, "ExternalPlayer Error: filename element missing from: {}",
+              XMLUtils::NodeStringSerialization(pConfig, XMLUtils::SerializationFormat::COMPACT));
     return false;
   }
 
@@ -607,7 +604,7 @@ bool CExternalPlayer::Initialize(TiXmlElement* pConfig)
   m_filenameReplacers.push_back("^smb:\\\\\\\\ , smb:(\\\\\\\\[^\\\\]*\\\\) , \\1 , ");
 #endif
 
-  TiXmlElement* pReplacers = pConfig->FirstChildElement("replacers");
+  tinyxml2::XMLElement* pReplacers = pConfig->FirstChildElement("replacers");
   while (pReplacers)
   {
     GetCustomRegexpReplacers(pReplacers, m_filenameReplacers);
@@ -617,7 +614,7 @@ bool CExternalPlayer::Initialize(TiXmlElement* pConfig)
   return true;
 }
 
-void CExternalPlayer::GetCustomRegexpReplacers(TiXmlElement *pRootElement,
+void CExternalPlayer::GetCustomRegexpReplacers(tinyxml2::XMLElement* pRootElement,
                                                std::vector<std::string>& settings)
 {
   int iAction = 0; // overwrite
@@ -638,7 +635,7 @@ void CExternalPlayer::GetCustomRegexpReplacers(TiXmlElement *pRootElement,
   if (iAction == 0)
     settings.clear();
 
-  TiXmlElement* pReplacer = pRootElement->FirstChildElement("replacer");
+  tinyxml2::XMLElement* pReplacer = pRootElement->FirstChildElement("replacer");
   int i = 0;
   while (pReplacer)
   {

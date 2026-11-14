@@ -1,6 +1,6 @@
 /*
  *  Copyright (c) 2006 elupus (Joakim Plate)
- *  Copyright (C) 2006-2018 Team Kodi
+ *  Copyright (C) 2006-2026 Team Kodi
  *  This file is part of Kodi - https://kodi.tv
  *
  *  SPDX-License-Identifier: GPL-2.0-or-later
@@ -10,25 +10,23 @@
 #pragma once
 
 #include "cores/IPlayer.h"
-#include "guilib/DispResource.h"
+#include "threads/CriticalSection.h"
 #include "threads/SystemClock.h"
+#include "threads/Thread.h"
 #include "utils/logtypes.h"
 
+#include <atomic>
+#include <memory>
 #include <string>
 
 class PLT_MediaController;
-class CGUIDialogBusy;
-
-namespace XbmcThreads { class EndTime; }
-
 
 namespace UPNP
 {
 
 class CUPnPPlayerController;
 
-class CUPnPPlayer
-  : public IPlayer, public IRenderLoop
+class CUPnPPlayer : public IPlayer, public CThread
 {
 public:
   CUPnPPlayer(IPlayerCallback& callback, const char* uuid);
@@ -39,15 +37,12 @@ public:
   bool CloseFile(bool reopen = false) override;
   bool IsPlaying() const override;
   void Pause() override;
-  bool HasVideo() const override { return false; }
-  bool HasAudio() const override { return false; }
+  bool HasVideo() const override { return m_hasVideo; }
+  bool HasAudio() const override { return m_hasAudio; }
   void Seek(bool bPlus, bool bLargeStep, bool bChapterOverride) override;
   void SeekPercentage(float fPercent = 0) override;
   void SetVolume(float volume) override;
 
-  int GetChapterCount() override { return 0; }
-  int GetChapter() override { return -1; }
-  void GetChapterName(std::string& strChapterName, int chapterIdx = -1) override { }
   int SeekChapter(int iChapter) override { return -1; }
 
   void SeekTime(int64_t iTime = 0) override;
@@ -55,26 +50,37 @@ public:
 
   bool IsCaching() const override { return false; }
   int GetCacheLevel() const override { return -1; }
-  void DoAudioWork() override;
   bool OnAction(const CAction &action) override;
 
-  void FrameMove() override;
-
-  int PlayFile(const CFileItem& file, const CPlayerOptions& options, CGUIDialogBusy*& dialog, XbmcThreads::EndTime& timeout);
+  int PlayFile(const CFileItem& file,
+               const CPlayerOptions& options,
+               XbmcThreads::EndTime<>& timeout);
 
 private:
+  bool BuildResource(const CFileItem& file, std::string& uri, std::string& metadata);
+  void FollowQueue();
   bool IsPaused() const;
   int64_t GetTime();
   int64_t GetTotalTime();
   float GetPercentage();
 
-  PLT_MediaController* m_control;
-  CUPnPPlayerController* m_delegate;
-  std::string m_current_uri;
-  std::string m_current_meta;
-  bool m_started;
-  bool m_stopremote;
-  XbmcThreads::EndTime m_updateTimer;
+  // implementation of CThread
+  void Process() override;
+  void OnExit() override;
+
+  PLT_MediaController* m_control = nullptr;
+  std::unique_ptr<CUPnPPlayerController> m_delegate;
+  bool m_started = false;
+  std::atomic<bool> m_stopremote{false};
+  bool m_hasVideo{false};
+  bool m_hasAudio{false};
+  XbmcThreads::EndTime<> m_updateTimer;
+
+  CCriticalSection m_queueSection;
+  bool m_canQueueNext{false};
+  std::string m_trackUri;
+  std::unique_ptr<CFileItem> m_queued;
+  bool m_nextRequested{false};
 
   Logger m_logger;
 };

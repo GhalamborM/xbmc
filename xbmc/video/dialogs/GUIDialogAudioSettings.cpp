@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2005-2018 Team Kodi
+ *  Copyright (C) 2005-2026 Team Kodi
  *  This file is part of Kodi - https://kodi.tv
  *
  *  SPDX-License-Identifier: GPL-2.0-or-later
@@ -8,17 +8,20 @@
 
 #include "GUIDialogAudioSettings.h"
 
-#include "Application.h"
 #include "GUIPassword.h"
 #include "ServiceBroker.h"
-#include "URL.h"
 #include "addons/Skin.h"
+#include "application/ApplicationComponents.h"
+#include "application/ApplicationPlayer.h"
+#include "application/ApplicationVolumeHandling.h"
 #include "cores/AudioEngine/Utils/AEUtil.h"
 #include "cores/IPlayer.h"
 #include "dialogs/GUIDialogYesNo.h"
-#include "guilib/GUIWindowManager.h"
-#include "guilib/LocalizeStrings.h"
+#include "guilib/GUIComponent.h"
+#include "guilib/GUIMessage.h"
 #include "profiles/ProfileManager.h"
+#include "resources/LocalizeStrings.h"
+#include "resources/ResourcesComponent.h"
 #include "settings/AdvancedSettings.h"
 #include "settings/MediaSettings.h"
 #include "settings/Settings.h"
@@ -26,13 +29,15 @@
 #include "settings/lib/Setting.h"
 #include "settings/lib/SettingDefinitions.h"
 #include "settings/lib/SettingsManager.h"
-#include "utils/LangCodeExpander.h"
 #include "utils/StringUtils.h"
 #include "utils/Variant.h"
 #include "utils/log.h"
 #include "video/VideoDatabase.h"
+#include "video/VideoStreamSelect.h"
 
+#include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #define SETTING_AUDIO_VOLUME                   "audio.volume"
@@ -52,13 +57,16 @@ CGUIDialogAudioSettings::~CGUIDialogAudioSettings() = default;
 void CGUIDialogAudioSettings::FrameMove()
 {
   // update the volume setting if necessary
-  float newVolume = g_application.GetVolumeRatio();
+  const auto& components = CServiceBroker::GetAppComponents();
+  const auto appVolume = components.GetComponent<CApplicationVolumeHandling>();
+  float newVolume = appVolume->GetVolumeRatio();
   if (newVolume != m_volume)
     GetSettingsManager()->SetNumber(SETTING_AUDIO_VOLUME, static_cast<double>(newVolume));
 
-  if (g_application.GetAppPlayer().HasPlayer())
+  const auto appPlayer = components.GetComponent<CApplicationPlayer>();
+  if (appPlayer->HasPlayer())
   {
-    const CVideoSettings videoSettings = g_application.GetAppPlayer().GetVideoSettings();
+    const CVideoSettings videoSettings = appPlayer->GetVideoSettings();
 
     // these settings can change on the fly
     //! @todo (needs special handling): m_settingsManager->SetInt(SETTING_AUDIO_STREAM, g_application.GetAppPlayer().GetAudioStream());
@@ -73,21 +81,27 @@ void CGUIDialogAudioSettings::FrameMove()
 std::string CGUIDialogAudioSettings::FormatDelay(float value, float interval)
 {
   if (fabs(value) < 0.5f * interval)
-    return StringUtils::Format(g_localizeStrings.Get(22003), 0.0);
+    return StringUtils::Format(
+        CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(22003), 0.0);
   if (value < 0)
-    return StringUtils::Format(g_localizeStrings.Get(22004), fabs(value));
+    return StringUtils::Format(
+        CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(22004), fabs(value));
 
-  return StringUtils::Format(g_localizeStrings.Get(22005), value);
+  return StringUtils::Format(
+      CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(22005), value);
 }
 
 std::string CGUIDialogAudioSettings::FormatDecibel(float value)
 {
-  return StringUtils::Format(g_localizeStrings.Get(14054), value);
+  return StringUtils::Format(
+      CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(14054), value);
 }
 
 std::string CGUIDialogAudioSettings::FormatPercentAsDecibel(float value)
 {
-  return StringUtils::Format(g_localizeStrings.Get(14054), CAEUtil::PercentToGain(value));
+  return StringUtils::Format(
+      CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(14054),
+      CAEUtil::PercentToGain(value));
 }
 
 void CGUIDialogAudioSettings::OnSettingChanged(const std::shared_ptr<const CSetting>& setting)
@@ -97,35 +111,39 @@ void CGUIDialogAudioSettings::OnSettingChanged(const std::shared_ptr<const CSett
 
   CGUIDialogSettingsManualBase::OnSettingChanged(setting);
 
+  auto& components = CServiceBroker::GetAppComponents();
+  const auto appPlayer = components.GetComponent<CApplicationPlayer>();
+
   const std::string &settingId = setting->GetId();
   if (settingId == SETTING_AUDIO_VOLUME)
   {
     m_volume = static_cast<float>(std::static_pointer_cast<const CSettingNumber>(setting)->GetValue());
-    g_application.SetVolume(m_volume, false); // false - value is not in percent
+    const auto appVolume = components.GetComponent<CApplicationVolumeHandling>();
+    appVolume->SetVolume(m_volume, false); // false - value is not in percent
   }
   else if (settingId == SETTING_AUDIO_VOLUME_AMPLIFICATION)
   {
     float value = static_cast<float>(std::static_pointer_cast<const CSettingNumber>(setting)->GetValue());
-    g_application.GetAppPlayer().SetDynamicRangeCompression((long)(value * 100));
+    appPlayer->SetDynamicRangeCompression((long)(value * 100));
   }
   else if (settingId == SETTING_AUDIO_CENTERMIXLEVEL)
   {
-    CVideoSettings vs = g_application.GetAppPlayer().GetVideoSettings();
+    CVideoSettings vs = appPlayer->GetVideoSettings();
     vs.m_CenterMixLevel = std::static_pointer_cast<const CSettingInt>(setting)->GetValue();
-    g_application.GetAppPlayer().SetVideoSettings(vs);
+    appPlayer->SetVideoSettings(vs);
   }
   else if (settingId == SETTING_AUDIO_DELAY)
   {
     float value = static_cast<float>(std::static_pointer_cast<const CSettingNumber>(setting)->GetValue());
-    g_application.GetAppPlayer().SetAVDelay(value);
+    appPlayer->SetAVDelay(value);
   }
   else if (settingId == SETTING_AUDIO_STREAM)
   {
     m_audioStream = std::static_pointer_cast<const CSettingInt>(setting)->GetValue();
     // only change the audio stream if a different one has been asked for
-    if (g_application.GetAppPlayer().GetAudioStream() != m_audioStream)
+    if (appPlayer->GetAudioStream() != m_audioStream)
     {
-      g_application.GetAppPlayer().SetAudioStream(m_audioStream);    // Set the audio stream to the one selected
+      appPlayer->SetAudioStream(m_audioStream); // Set the audio stream to the one selected
     }
   }
   else if (settingId == SETTING_AUDIO_PASSTHROUGH)
@@ -152,7 +170,7 @@ bool CGUIDialogAudioSettings::Save()
   const std::shared_ptr<CProfileManager> profileManager = CServiceBroker::GetSettingsComponent()->GetProfileManager();
 
   if (!g_passwordManager.CheckSettingLevelLock(SettingLevel::Expert) &&
-      profileManager->GetMasterProfile().getLockMode() != LOCK_MODE_EVERYONE)
+      profileManager->GetMasterProfile().getLockMode() != LockMode::EVERYONE)
     return true;
 
   // prompt user if they are sure
@@ -167,7 +185,9 @@ bool CGUIDialogAudioSettings::Save()
   db.EraseAllVideoSettings();
   db.Close();
 
-  CMediaSettings::GetInstance().GetDefaultVideoSettings() = g_application.GetAppPlayer().GetVideoSettings();
+  const auto& components = CServiceBroker::GetAppComponents();
+  const auto appPlayer = components.GetComponent<CApplicationPlayer>();
+  CMediaSettings::GetInstance().GetDefaultVideoSettings() = appPlayer->GetVideoSettings();
   CMediaSettings::GetInstance().GetDefaultVideoSettings().m_AudioStream = -1;
   CServiceBroker::GetSettingsComponent()->GetSettings()->Save();
 
@@ -215,13 +235,16 @@ void CGUIDialogAudioSettings::InitializeSettings()
     return;
   }
 
-  bool usePopup = g_SkinInfo->HasSkinFile("DialogSlider.xml");
+  auto skin = CServiceBroker::GetGUI()->GetSkinInfo();
+  const bool usePopup = skin && skin->HasSkinFile("DialogSlider.xml");
 
-  const CVideoSettings videoSettings = g_application.GetAppPlayer().GetVideoSettings();
+  const auto& components = CServiceBroker::GetAppComponents();
+  const auto appPlayer = components.GetComponent<CApplicationPlayer>();
 
-  if (g_application.GetAppPlayer().HasPlayer())
+  const CVideoSettings videoSettings = appPlayer->GetVideoSettings();
+  if (appPlayer->HasPlayer())
   {
-    g_application.GetAppPlayer().GetAudioCapabilities(m_audioCaps);
+    appPlayer->GetAudioCapabilities(m_audioCaps);
   }
 
   // register IsPlayingPassthrough condition
@@ -229,20 +252,28 @@ void CGUIDialogAudioSettings::InitializeSettings()
 
   CSettingDependency dependencyAudioOutputPassthroughDisabled(SettingDependencyType::Enable, GetSettingsManager());
   dependencyAudioOutputPassthroughDisabled.Or()
-    ->Add(CSettingDependencyConditionPtr(new CSettingDependencyCondition(SETTING_AUDIO_PASSTHROUGH, "false", SettingDependencyOperator::Equals, false, GetSettingsManager())))
-    ->Add(CSettingDependencyConditionPtr(new CSettingDependencyCondition("IsPlayingPassthrough", "", "", true, GetSettingsManager())));
+      ->Add(std::make_shared<CSettingDependencyCondition>(SETTING_AUDIO_PASSTHROUGH, "false",
+                                                          SettingDependencyOperator::Equals, false,
+                                                          GetSettingsManager()))
+      ->Add(std::make_shared<CSettingDependencyCondition>("IsPlayingPassthrough", "", "", true,
+                                                          GetSettingsManager()));
   SettingDependencies depsAudioOutputPassthroughDisabled;
   depsAudioOutputPassthroughDisabled.push_back(dependencyAudioOutputPassthroughDisabled);
 
   // audio settings
   // audio volume setting
-  m_volume = g_application.GetVolumeRatio();
-  std::shared_ptr<CSettingNumber> settingAudioVolume = AddSlider(groupAudio, SETTING_AUDIO_VOLUME, 13376, SettingLevel::Basic, m_volume, 14054, VOLUME_MINIMUM, VOLUME_MAXIMUM / 100.0f, VOLUME_MAXIMUM);
+  const auto appVolume = components.GetComponent<CApplicationVolumeHandling>();
+  m_volume = appVolume->GetVolumeRatio();
+  std::shared_ptr<CSettingNumber> settingAudioVolume =
+      AddSlider(groupAudio, SETTING_AUDIO_VOLUME, 13376, SettingLevel::Basic, m_volume, 14054,
+                CApplicationVolumeHandling::VOLUME_MINIMUM,
+                CApplicationVolumeHandling::VOLUME_MAXIMUM / 100.0f,
+                CApplicationVolumeHandling::VOLUME_MAXIMUM);
   settingAudioVolume->SetDependencies(depsAudioOutputPassthroughDisabled);
   std::static_pointer_cast<CSettingControlSlider>(settingAudioVolume->GetControl())->SetFormatter(SettingFormatterPercentAsDecibel);
 
   // audio volume amplification setting
-  if (SupportsAudioFeature(IPC_AUD_AMP))
+  if (SupportsAudioFeature(IPlayerAudioCaps::VOLUME_AMP))
   {
     std::shared_ptr<CSettingNumber> settingAudioVolumeAmplification = AddSlider(groupAudio, SETTING_AUDIO_VOLUME_AMPLIFICATION, 660, SettingLevel::Basic, videoSettings.m_VolumeAmplification, 14054, VOLUME_DRC_MINIMUM * 0.01f, (VOLUME_DRC_MAXIMUM - VOLUME_DRC_MINIMUM) / 6000.0f, VOLUME_DRC_MAXIMUM * 0.01f);
     settingAudioVolumeAmplification->SetDependencies(depsAudioOutputPassthroughDisabled);
@@ -256,18 +287,23 @@ void CGUIDialogAudioSettings::InitializeSettings()
   }
 
   // audio delay setting
-  if (SupportsAudioFeature(IPC_AUD_OFFSET))
+  if (SupportsAudioFeature(IPlayerAudioCaps::OFFSET))
   {
-    std::shared_ptr<CSettingNumber> settingAudioDelay = AddSlider(groupAudio, SETTING_AUDIO_DELAY, 297, SettingLevel::Basic, videoSettings.m_AudioDelay, 0, -CServiceBroker::GetSettingsComponent()->GetAdvancedSettings()->m_videoAudioDelayRange, 0.025f, CServiceBroker::GetSettingsComponent()->GetAdvancedSettings()->m_videoAudioDelayRange, 297, usePopup);
+    std::shared_ptr<CSettingNumber> settingAudioDelay = AddSlider(
+        groupAudio, SETTING_AUDIO_DELAY, 297, SettingLevel::Basic, videoSettings.m_AudioDelay, 0,
+        -CServiceBroker::GetSettingsComponent()->GetAdvancedSettings()->m_videoAudioDelayRange,
+        CServiceBroker::GetSettingsComponent()->GetAdvancedSettings()->m_videoAudioDelayStep,
+        CServiceBroker::GetSettingsComponent()->GetAdvancedSettings()->m_videoAudioDelayRange, 297,
+        usePopup);
     std::static_pointer_cast<CSettingControlSlider>(settingAudioDelay->GetControl())->SetFormatter(SettingFormatterDelay);
   }
 
   // audio stream setting
-  if (SupportsAudioFeature(IPC_AUD_SELECT_STREAM))
+  if (SupportsAudioFeature(IPlayerAudioCaps::SELECT_STREAM))
     AddAudioStreams(groupAudio, SETTING_AUDIO_STREAM);
 
   // audio digital/analog setting
-  if (SupportsAudioFeature(IPC_AUD_SELECT_OUTPUT))
+  if (SupportsAudioFeature(IPlayerAudioCaps::SELECT_OUTPUT))
   {
     m_passthrough = CServiceBroker::GetSettingsComponent()->GetSettings()->GetBool(CSettings::SETTING_AUDIOOUTPUT_PASSTHROUGH);
     AddToggle(groupAudio, SETTING_AUDIO_PASSTHROUGH, 348, SettingLevel::Basic, m_passthrough);
@@ -277,11 +313,11 @@ void CGUIDialogAudioSettings::InitializeSettings()
   AddButton(groupSaveAsDefault, SETTING_AUDIO_MAKE_DEFAULT, 12376, SettingLevel::Basic);
 }
 
-bool CGUIDialogAudioSettings::SupportsAudioFeature(int feature)
+bool CGUIDialogAudioSettings::SupportsAudioFeature(IPlayerAudioCaps feature)
 {
-  for (Features::iterator itr = m_audioCaps.begin(); itr != m_audioCaps.end(); ++itr)
+  for (IPlayerAudioCaps cap : m_audioCaps)
   {
-    if (*itr == feature || *itr == IPC_AUD_ALL)
+    if (cap == feature || cap == IPlayerAudioCaps::ALL)
       return true;
   }
 
@@ -294,7 +330,9 @@ void CGUIDialogAudioSettings::AddAudioStreams(const std::shared_ptr<CSettingGrou
   if (group == NULL || settingId.empty())
     return;
 
-  m_audioStream = g_application.GetAppPlayer().GetAudioStream();
+  auto& components = CServiceBroker::GetAppComponents();
+  const auto appPlayer = components.GetComponent<CApplicationPlayer>();
+  m_audioStream = appPlayer->GetAudioStream();
   if (m_audioStream < 0)
     m_audioStream = 0;
 
@@ -303,47 +341,78 @@ void CGUIDialogAudioSettings::AddAudioStreams(const std::shared_ptr<CSettingGrou
 
 bool CGUIDialogAudioSettings::IsPlayingPassthrough(const std::string& condition,
                                                    const std::string& value,
-                                                   const SettingConstPtr& setting,
-                                                   void* data)
+                                                   const SettingConstPtr& setting)
 {
-  return g_application.GetAppPlayer().IsPassthrough();
+  const auto& components = CServiceBroker::GetAppComponents();
+  const auto appPlayer = components.GetComponent<CApplicationPlayer>();
+  return appPlayer->IsPassthrough();
 }
+
+namespace
+{
+std::string FormatCodec(const AudioStreamInfo& info)
+{
+  std::string codec = " (";
+  if (!info.codecDesc.empty())
+  {
+    codec += info.codecDesc;
+  }
+  else
+  {
+    codec += StringUtils::Format(
+        "{} - {} {}",
+        info.codecName.empty()
+            ? CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(13205) // unknown
+            : info.codecName,
+        info.channels,
+        CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(10127) // channels
+    );
+  }
+  codec += ")";
+
+  return codec;
+}
+} // namespace
 
 void CGUIDialogAudioSettings::AudioStreamsOptionFiller(const SettingConstPtr& setting,
                                                        std::vector<IntegerSettingOption>& list,
-                                                       int& current,
-                                                       void* data)
+                                                       int& current)
 {
-  int audioStreamCount = g_application.GetAppPlayer().GetAudioStreamCount();
+  const auto& components = CServiceBroker::GetAppComponents();
+  const auto appPlayer = components.GetComponent<CApplicationPlayer>();
 
-  std::string strFormat = "{:s} - {:s} - {:d} " + g_localizeStrings.Get(10127);
-  std::string strUnknown = "[" + g_localizeStrings.Get(13205) + "]";
-
-  // cycle through each audio stream and add it to our list control
-  for (int i = 0; i < audioStreamCount; ++i)
+  if (appPlayer != nullptr)
   {
-    std::string strItem;
-    std::string strLanguage;
+    using namespace KODI::VIDEO;
+    const std::vector<AudioStreamInfoExt> streams =
+        CVideoStreamSelect::GetAudioStreams(appPlayer.get());
+    const int streamCount = streams.size();
 
-    AudioStreamInfo info;
-    g_application.GetAppPlayer().GetAudioStreamInfo(i, info);
+    // cycle through each audio stream and add it to our list control
+    for (int i = 0; i < streamCount; ++i)
+    {
+      const AudioStreamInfoExt& info = streams[i];
 
-    if (!g_LangCodeExpander.Lookup(info.language, strLanguage))
-      strLanguage = strUnknown;
+      std::string strItem = info.languageDesc;
 
-    if (info.name.length() == 0)
-      info.name = strUnknown;
+      if (!info.name.empty())
+        strItem += " - " + info.name;
 
-    strItem = StringUtils::Format(strFormat, strLanguage, info.name, info.channels);
+      strItem += FormatCodec(info);
+      strItem += FormatFlags(info.flags);
+      strItem += StringUtils::Format(" ({}/{})", i + 1, streamCount);
 
-    strItem += FormatFlags(info.flags);
-    strItem += StringUtils::Format(" ({}/{})", i + 1, audioStreamCount);
-    list.emplace_back(strItem, i);
+      list.emplace_back(std::move(strItem), info.streamId);
+    }
+  }
+  else
+  {
+    CLog::LogF(LOGERROR, "No application player.");
   }
 
   if (list.empty())
   {
-    list.emplace_back(g_localizeStrings.Get(231), -1);
+    list.emplace_back(CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(231), -1);
     current = -1;
   }
 }
@@ -362,11 +431,14 @@ std::string CGUIDialogAudioSettings::SettingFormatterDelay(
   float fStep = step.asFloat();
 
   if (fabs(fValue) < 0.5f * fStep)
-    return StringUtils::Format(g_localizeStrings.Get(22003), 0.0);
+    return StringUtils::Format(
+        CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(22003), 0.0);
   if (fValue < 0)
-    return StringUtils::Format(g_localizeStrings.Get(22004), fabs(fValue));
+    return StringUtils::Format(
+        CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(22004), fabs(fValue));
 
-  return StringUtils::Format(g_localizeStrings.Get(22005), fValue);
+  return StringUtils::Format(
+      CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(22005), fValue);
 }
 
 std::string CGUIDialogAudioSettings::SettingFormatterPercentAsDecibel(
@@ -381,7 +453,8 @@ std::string CGUIDialogAudioSettings::SettingFormatterPercentAsDecibel(
 
   std::string formatString = control->GetFormatString();
   if (control->GetFormatLabel() > -1)
-    formatString = g_localizeStrings.Get(control->GetFormatLabel());
+    formatString =
+        CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(control->GetFormatLabel());
 
   return StringUtils::Format(formatString, CAEUtil::PercentToGain(value.asFloat()));
 }
@@ -390,15 +463,20 @@ std::string CGUIDialogAudioSettings::FormatFlags(StreamFlags flags)
 {
   std::vector<std::string> localizedFlags;
   if (flags & StreamFlags::FLAG_DEFAULT)
-    localizedFlags.emplace_back(g_localizeStrings.Get(39105));
+    localizedFlags.emplace_back(
+        CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(39105));
   if (flags & StreamFlags::FLAG_FORCED)
-    localizedFlags.emplace_back(g_localizeStrings.Get(39106));
+    localizedFlags.emplace_back(
+        CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(39106));
   if (flags & StreamFlags::FLAG_HEARING_IMPAIRED)
-    localizedFlags.emplace_back(g_localizeStrings.Get(39107));
+    localizedFlags.emplace_back(
+        CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(39107));
   if (flags &  StreamFlags::FLAG_VISUAL_IMPAIRED)
-    localizedFlags.emplace_back(g_localizeStrings.Get(39108));
+    localizedFlags.emplace_back(
+        CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(39108));
   if (flags & StreamFlags::FLAG_ORIGINAL)
-    localizedFlags.emplace_back(g_localizeStrings.Get(39111));
+    localizedFlags.emplace_back(
+        CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(39111));
 
   std::string formated = StringUtils::Join(localizedFlags, ", ");
 

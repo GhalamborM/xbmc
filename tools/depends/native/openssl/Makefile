@@ -1,12 +1,6 @@
-include ../../Makefile.include
+include ../../Makefile.include OPENSSL-VERSION ../../download-files.include
 PLATFORM=$(NATIVEPLATFORM)
-DEPS= ../../Makefile.include Makefile
-
-# lib name, version
-LIBNAME=openssl
-VERSION=1.1.1k
-SOURCE=$(LIBNAME)-$(VERSION)
-ARCHIVE=$(SOURCE).tar.gz
+DEPS = ../../Makefile.include Makefile OPENSSL-VERSION ../../download-files.include
 
 # configuration settings
 CONFIGURE=MACHINE=$(PLATFORM) ./config no-shared zlib no-asm --prefix=$(NATIVEPREFIX) --with-zlib-include=$(NATIVEPREFIX)/include --with-zlib-lib=$(NATIVEPREFIX)/lib
@@ -19,6 +13,8 @@ ifeq ($(NATIVE_OS), osx)
   endif
 endif
 
+CONFIGURE += --libdir=lib
+
 CFLAGS=$(NATIVE_CFLAGS)
 LDFLAGS=$(NATIVE_LDFLAGS)
 CXXFLAGS=$(NATIVE_CXXFLAGS)
@@ -30,15 +26,14 @@ LIBDYLIB=$(PLATFORM)/libssl.a
 
 all: .installed-$(PLATFORM)
 
-$(TARBALLS_LOCATION)/$(ARCHIVE):
-	cd $(TARBALLS_LOCATION); $(RETRIEVE_TOOL) $(RETRIEVE_TOOL_FLAGS) $(BASE_URL)/$(ARCHIVE)
 
-$(PLATFORM): $(TARBALLS_LOCATION)/$(ARCHIVE) $(DEPS)
+.configured-$(PLATFORM): $(DEPS) | $(TARBALLS_LOCATION)/$(ARCHIVE).$(HASH_TYPE)
 	rm -rf $(PLATFORM); mkdir -p $(PLATFORM)
 	cd $(PLATFORM); $(ARCHIVE_TOOL) $(ARCHIVE_TOOL_FLAGS) $(TARBALLS_LOCATION)/$(ARCHIVE)
 	cd $(PLATFORM); $(CONFIGURE)
+	touch $@
 
-$(LIBDYLIB): $(PLATFORM)
+$(LIBDYLIB): .configured-$(PLATFORM)
 	$(MAKE) -C $(PLATFORM)
 	touch $@
 
@@ -48,7 +43,7 @@ $(LIBDYLIB): $(PLATFORM)
 
 clean:
 	$(MAKE) -C $(PLATFORM) clean
-	rm -f .installed-$(PLATFORM)
+	rm -f .installed-$(PLATFORM) .configured-$(PLATFORM)
 
 distclean::
-	rm -rf $(PLATFORM) .installed-$(PLATFORM)
+	rm -rf $(PLATFORM) .installed-$(PLATFORM) .configured-$(PLATFORM)

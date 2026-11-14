@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2014-2018 Team Kodi
+ *  Copyright (C) 2014-2024 Team Kodi
  *  This file is part of Kodi - https://kodi.tv
  *
  *  SPDX-License-Identifier: GPL-2.0-or-later
@@ -18,13 +18,18 @@
 namespace PERIPHERALS
 {
 class CPeripheral;
+class CPeripherals;
 
+/*!
+ * \ingroup peripherals
+ */
 class CAddonButtonMap : public KODI::JOYSTICK::IButtonMap
 {
 public:
   CAddonButtonMap(CPeripheral* device,
                   const std::weak_ptr<CPeripheralAddon>& addon,
-                  const std::string& strControllerId);
+                  const std::string& strControllerId,
+                  CPeripherals& manager);
 
   ~CAddonButtonMap(void) override;
 
@@ -38,6 +43,10 @@ public:
   void Reset(void) override;
 
   bool IsEmpty(void) const override;
+
+  std::string GetAppearance() const override;
+
+  bool SetAppearance(const std::string& controllerId) const override;
 
   bool GetFeature(const KODI::JOYSTICK::CDriverPrimitive& primitive,
                   KODI::JOYSTICK::FeatureName& feature) override;
@@ -113,6 +122,17 @@ private:
   typedef std::map<KODI::JOYSTICK::CDriverPrimitive, KODI::JOYSTICK::FeatureName> DriverMap;
   typedef std::vector<KODI::JOYSTICK::CDriverPrimitive> JoystickPrimitiveVector;
 
+  /*!
+   * \brief Position of a motor among the motors this controller declares
+   *
+   * Motors are never mapped by the configuration wizard, because a motor is
+   * not something the user can activate on request. Position is what the
+   * drivers order them by, so it is what they are matched on here.
+   *
+   * \return True if the controller declares this feature as a motor
+   */
+  bool GetMotorIndex(const KODI::JOYSTICK::FeatureName& feature, unsigned int& motorIndex) const;
+
   // Utility functions
   static DriverMap CreateLookupTable(const FeatureMap& features);
 
@@ -122,12 +142,19 @@ private:
   static JOYSTICK_FEATURE_PRIMITIVE GetPrimitiveIndex(KODI::JOYSTICK::WHEEL_DIRECTION dir);
   static JOYSTICK_FEATURE_PRIMITIVE GetPrimitiveIndex(KODI::JOYSTICK::THROTTLE_DIRECTION dir);
 
+  // Construction parameters
   CPeripheral* const m_device;
-  std::weak_ptr<CPeripheralAddon> m_addon;
+  const std::weak_ptr<CPeripheralAddon> m_addon;
   const std::string m_strControllerId;
+  CPeripherals& m_manager;
+
+  // Button map state
+  std::string m_controllerAppearance;
   FeatureMap m_features;
   DriverMap m_driverMap;
   JoystickPrimitiveVector m_ignoredPrimitives;
+
+  // Synchronization parameters
   mutable CCriticalSection m_mutex;
 };
 } // namespace PERIPHERALS

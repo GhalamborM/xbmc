@@ -6,9 +6,15 @@
  *  See LICENSES/README.md for more information.
  */
 
+#include "CompileInfo.h"
+#include "addons/Repository.h"
+#include "addons/addoninfo/AddonInfo.h"
 #include "addons/addoninfo/AddonInfoBuilder.h"
+#include "addons/addoninfo/AddonType.h"
+#include "utils/XBMCTinyXML2.h"
 
 #include <set>
+#include <string>
 
 #include <gtest/gtest.h>
 
@@ -45,6 +51,29 @@ const std::string addonXML = R"xml(
 </addon>
 )xml";
 
+namespace
+{
+AddonInfoPtr GenerateWithLibrary(const std::string& libraryName)
+{
+  const std::string xml = R"xml(
+<addon id="binary.blablabla.org"
+       name="The Binary Bla Bla Bla Addon"
+       version="1.2.3"
+       provider-name="Team Kodi">
+  <extension point="xbmc.python.module" library=")xml" +
+                          libraryName + R"xml("/>
+  <extension point="kodi.addon.metadata">
+    <platform>all</platform>
+  </extension>
+</addon>
+)xml";
+
+  CXBMCTinyXML2 doc;
+  EXPECT_TRUE(doc.Parse(xml));
+  return CAddonInfoBuilder::Generate(doc.RootElement(), RepositoryDirInfo{});
+}
+} // namespace
+
 class TestAddonInfoBuilder : public ::testing::Test
 {
 protected:
@@ -53,39 +82,39 @@ protected:
 
 TEST_F(TestAddonInfoBuilder, ShouldFailWhenIdIsNotSet)
 {
-  AddonInfoPtr addon = CAddonInfoBuilder::Generate("", ADDON_UNKNOWN);
+  AddonInfoPtr addon = CAddonInfoBuilder::Generate("", AddonType::UNKNOWN);
   EXPECT_EQ(nullptr, addon);
 }
 
 TEST_F(TestAddonInfoBuilder, TestGenerate_Id_Type)
 {
-  AddonInfoPtr addon = CAddonInfoBuilder::Generate("foo.baz", ADDON_VIZ);
+  AddonInfoPtr addon = CAddonInfoBuilder::Generate("foo.baz", AddonType::VISUALIZATION);
   EXPECT_NE(nullptr, addon);
   EXPECT_EQ(addon->ID(), "foo.baz");
-  EXPECT_EQ(addon->MainType(), ADDON_VIZ);
-  EXPECT_TRUE(addon->HasType(ADDON_VIZ));
-  EXPECT_FALSE(addon->HasType(ADDON_SCREENSAVER));
+  EXPECT_EQ(addon->MainType(), AddonType::VISUALIZATION);
+  EXPECT_TRUE(addon->HasType(AddonType::VISUALIZATION));
+  EXPECT_FALSE(addon->HasType(AddonType::SCREENSAVER));
 }
 
 TEST_F(TestAddonInfoBuilder, TestGenerate_Repo)
 {
-  CXBMCTinyXML doc;
+  CXBMCTinyXML2 doc;
   EXPECT_TRUE(doc.Parse(addonXML));
   ASSERT_NE(nullptr, doc.RootElement());
 
-  CRepository::DirInfo repo;
+  RepositoryDirInfo repo;
   AddonInfoPtr addon = CAddonInfoBuilder::Generate(doc.RootElement(), repo);
   ASSERT_NE(nullptr, addon);
   EXPECT_EQ(addon->ID(), "metadata.blablabla.org");
 
-  EXPECT_EQ(addon->MainType(), ADDON_SCRAPER_MOVIES);
-  EXPECT_TRUE(addon->HasType(ADDON_SCRAPER_MOVIES));
-  EXPECT_EQ(addon->Type(ADDON_SCRAPER_MOVIES)->LibName(), "blablabla.xml");
-  EXPECT_EQ(addon->Type(ADDON_SCRAPER_MOVIES)->GetValue("@language").asString(), "en");
+  EXPECT_EQ(addon->MainType(), AddonType::SCRAPER_MOVIES);
+  EXPECT_TRUE(addon->HasType(AddonType::SCRAPER_MOVIES));
+  EXPECT_EQ(addon->Type(AddonType::SCRAPER_MOVIES)->LibName(), "blablabla.xml");
+  EXPECT_EQ(addon->Type(AddonType::SCRAPER_MOVIES)->GetValue("@language").asString(), "en");
 
-  EXPECT_TRUE(addon->HasType(ADDON_SCRIPT_MODULE));
-  EXPECT_EQ(addon->Type(ADDON_SCRIPT_MODULE)->LibName(), "lib.so");
-  EXPECT_FALSE(addon->HasType(ADDON_SCRAPER_ARTISTS));
+  EXPECT_TRUE(addon->HasType(AddonType::SCRIPT_MODULE));
+  EXPECT_EQ(addon->Type(AddonType::SCRIPT_MODULE)->LibName(), "lib.so");
+  EXPECT_FALSE(addon->HasType(AddonType::SCRAPER_ARTISTS));
 
   EXPECT_EQ(addon->Name(), "The Bla Bla Bla Addon");
   EXPECT_EQ(addon->Author(), "Team Kodi");
@@ -124,12 +153,35 @@ TEST_F(TestAddonInfoBuilder, TestGenerate_Repo)
   EXPECT_EQ(info->second, "marsian");
 }
 
+TEST_F(TestAddonInfoBuilder, BinaryDetection_AcceptsPlatformSharedLibrary)
+{
+  const std::string suffix = CCompileInfo::GetSharedLibrarySuffix();
+
+  EXPECT_TRUE(GenerateWithLibrary("libfoo" + suffix)->IsBinary());
+  // linux is different and has the version number after the suffix
+  EXPECT_TRUE(GenerateWithLibrary("libfoo" + suffix + ".1")->IsBinary());
+  EXPECT_TRUE(GenerateWithLibrary("libfoo" + suffix + ".1.2.3")->IsBinary());
+}
+
+TEST_F(TestAddonInfoBuilder, BinaryDetection_RejectsNonSharedLibrary)
+{
+  const std::string suffix = CCompileInfo::GetSharedLibrarySuffix();
+  ASSERT_TRUE(suffix.starts_with('.')); // the escaping in the regex depends on this
+
+  // the dot of the suffix must be matched literally, not as "any character"
+  EXPECT_FALSE(GenerateWithLibrary("libfooX" + suffix.substr(1))->IsBinary());
+  EXPECT_FALSE(GenerateWithLibrary("libfoo_" + suffix.substr(1))->IsBinary());
+
+  EXPECT_FALSE(GenerateWithLibrary("blablabla.xml")->IsBinary());
+  EXPECT_FALSE(GenerateWithLibrary("default.py")->IsBinary());
+}
+
 TEST_F(TestAddonInfoBuilder, TestGenerate_DBEntry)
 {
-  CAddonInfoBuilder::CFromDB builder;
+  CAddonInfoBuilderFromDB builder;
   builder.SetId("video.blablabla.org");
-  builder.SetVersion(AddonVersion("1.2.3"));
-  CAddonType addonType(ADDON_PLUGIN);
+  builder.SetVersion(CAddonVersion("1.2.3"));
+  CAddonType addonType(AddonType::PLUGIN);
   addonType.Insert("provides", "video audio");
   builder.SetExtensions(addonType);
   builder.SetName("The Bla Bla Bla Addon");
@@ -137,11 +189,6 @@ TEST_F(TestAddonInfoBuilder, TestGenerate_DBEntry)
   builder.SetSummary("Summary bla bla bla");
   builder.SetDescription("Description bla bla bla");
   builder.SetDisclaimer("Disclaimer bla bla bla");
-  builder.SetLicense("GPL v2.0");
-  builder.SetForum("https://forum.kodi.tv");
-  builder.SetWebsite("https://kodi.tv");
-  builder.SetEMail("a@a.dummy");
-  builder.SetSource("https://github.com/xbmc/xbmc");
   InfoMap extrainfo;
   extrainfo["language"] = "marsian";
   builder.SetExtrainfo(extrainfo);
@@ -150,11 +197,11 @@ TEST_F(TestAddonInfoBuilder, TestGenerate_DBEntry)
   ASSERT_NE(nullptr, addon);
   EXPECT_EQ(addon->ID(), "video.blablabla.org");
 
-  EXPECT_EQ(addon->MainType(), ADDON_PLUGIN);
-  EXPECT_TRUE(addon->HasType(ADDON_PLUGIN));
-  EXPECT_TRUE(addon->HasType(ADDON_VIDEO));
-  EXPECT_TRUE(addon->HasType(ADDON_AUDIO));
-  EXPECT_FALSE(addon->HasType(ADDON_GAME));
+  EXPECT_EQ(addon->MainType(), AddonType::PLUGIN);
+  EXPECT_TRUE(addon->HasType(AddonType::PLUGIN));
+  EXPECT_TRUE(addon->HasType(AddonType::VIDEO));
+  EXPECT_TRUE(addon->HasType(AddonType::AUDIO));
+  EXPECT_FALSE(addon->HasType(AddonType::GAME));
 
   EXPECT_EQ(addon->Name(), "The Bla Bla Bla Addon");
   EXPECT_EQ(addon->Author(), "Team Kodi");
@@ -163,11 +210,6 @@ TEST_F(TestAddonInfoBuilder, TestGenerate_DBEntry)
   EXPECT_EQ(addon->Summary(), "Summary bla bla bla");
   EXPECT_EQ(addon->Description(), "Description bla bla bla");
   EXPECT_EQ(addon->Disclaimer(), "Disclaimer bla bla bla");
-  EXPECT_EQ(addon->License(), "GPL v2.0");
-  EXPECT_EQ(addon->Forum(), "https://forum.kodi.tv");
-  EXPECT_EQ(addon->Website(), "https://kodi.tv");
-  EXPECT_EQ(addon->EMail(), "a@a.dummy");
-  EXPECT_EQ(addon->Source(), "https://github.com/xbmc/xbmc");
 
   auto info = addon->ExtraInfo().find("language");
   ASSERT_NE(info, addon->ExtraInfo().end());

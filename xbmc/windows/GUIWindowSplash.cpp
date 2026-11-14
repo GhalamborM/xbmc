@@ -8,16 +8,19 @@
 
 #include "GUIWindowSplash.h"
 
+#include "ServiceBroker.h"
 #include "Util.h"
 #include "guilib/GUIImage.h"
-#include "guilib/GUIWindowManager.h"
+#include "guilib/WindowIDs.h"
 #include "settings/AdvancedSettings.h"
 #include "settings/SettingsComponent.h"
+#include "windowing/WinSystem.h"
 
-CGUIWindowSplash::CGUIWindowSplash(void) : CGUIWindow(WINDOW_SPLASH, "")
+#include <memory>
+
+CGUIWindowSplash::CGUIWindowSplash(void) : CGUIWindow(WINDOW_SPLASH, ""), m_image(nullptr)
 {
   m_loadType = LOAD_ON_GUI_INIT;
-  m_image = nullptr;
 }
 
 CGUIWindowSplash::~CGUIWindowSplash(void) = default;
@@ -27,8 +30,12 @@ void CGUIWindowSplash::OnInitWindow()
   if (!CServiceBroker::GetSettingsComponent()->GetAdvancedSettings()->m_splashImage)
     return;
 
-  m_image = std::unique_ptr<CGUIImage>(new CGUIImage(0, 0, 0, 0, CServiceBroker::GetWinSystem()->GetGfxContext().GetWidth(), CServiceBroker::GetWinSystem()->GetGfxContext().GetHeight(), CTextureInfo(CUtil::GetSplashPath())));
-  m_image->SetAspectRatio(CAspectRatio::AR_SCALE);
+  m_image = std::make_unique<CGUIImage>(
+      0, 0, .0f, .0f,
+      static_cast<float>(CServiceBroker::GetWinSystem()->GetGfxContext().GetWidth()),
+      static_cast<float>(CServiceBroker::GetWinSystem()->GetGfxContext().GetHeight()),
+      CTextureInfo(CUtil::GetSplashPath()));
+  m_image->SetAspectRatio(CAspectRatio::SCALE);
 }
 
 void CGUIWindowSplash::Render()

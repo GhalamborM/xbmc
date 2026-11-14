@@ -96,7 +96,6 @@ CRenderInfo CRendererMediaCodec::GetRenderInfo()
 {
   CRenderInfo info;
   info.max_buffer_size = 4;
-  info.optimal_buffer_size = 3;
   return info;
 }
 
@@ -108,12 +107,25 @@ bool CRendererMediaCodec::LoadShadersHook()
   return true;
 }
 
+bool CRendererMediaCodec::Supports(ERENDERFEATURE feature) const
+{
+  // RGB input, the YUV conversion matrix is not used
+  if (feature == RENDERFEATURE_HUE || feature == RENDERFEATURE_SATURATION ||
+      feature == RENDERFEATURE_GAMMA)
+    return false;
+
+  return CLinuxRendererGLES::Supports(feature);
+}
+
+EShaderFormat CRendererMediaCodec::GetShaderFormat()
+{
+  return SHADER_RGB;
+}
+
 bool CRendererMediaCodec::RenderHook(int index)
 {
   CYuvPlane &plane = m_buffers[index].fields[0][0];
   CYuvPlane &planef = m_buffers[index].fields[m_currentField][0];
-
-  glDisable(GL_DEPTH_TEST);
 
   glActiveTexture(GL_TEXTURE0);
   glBindTexture(GL_TEXTURE_EXTERNAL_OES, plane.id);
@@ -140,6 +152,8 @@ bool CRendererMediaCodec::RenderHook(int index)
   glUniform1f(contrastLoc, m_videoSettings.m_Contrast * 0.02f);
   GLint   brightnessLoc = renderSystem->GUIShaderGetBrightness();
   glUniform1f(brightnessLoc, m_videoSettings.m_Brightness * 0.01f - 0.5f);
+  GLint depthLoc = renderSystem->GUIShaderGetDepth();
+  glUniform1f(depthLoc, -1.0f);
 
   glUniformMatrix4fv(renderSystem->GUIShaderGetCoord0Matrix(), 1, GL_FALSE, m_textureMatrix);
 

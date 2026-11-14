@@ -16,15 +16,20 @@
 #include "utils/ColorUtils.h"
 #include "utils/TransformMatrix.h"
 
+#if defined(HAS_GLES)
+#include "utils/GLBufferArena.h"
+#endif
+
 #include <algorithm>
 #include <cassert>
+#include <chrono>
 #include <cstddef>
 #include <cstring>
 #include <memory>
+#include <span>
 #include <stdint.h>
 #include <vector>
 
-constexpr unsigned int FONT_CACHE_TIME_LIMIT = 1000;
 constexpr float FONT_CACHE_DIST_LIMIT = 0.01f;
 
 class CGraphicContext;
@@ -40,21 +45,23 @@ template<class Position>
 struct CGUIFontCacheKey
 {
   Position m_pos;
-  std::vector<UTILS::COLOR::Color>& m_colors;
-  vecText& m_text;
+  std::span<const KODI::UTILS::COLOR::Color> m_colors;
+  std::span<const character_t> m_text;
   uint32_t m_alignment;
   float m_maxPixelWidth;
   bool m_scrolling;
+  bool m_shadow;
   const TransformMatrix& m_matrix;
   float m_scaleX;
   float m_scaleY;
 
   CGUIFontCacheKey(Position pos,
-                   std::vector<UTILS::COLOR::Color>& colors,
-                   vecText& text,
+                   std::span<const KODI::UTILS::COLOR::Color> colors,
+                   std::span<const character_t> text,
                    uint32_t alignment,
                    float maxPixelWidth,
                    bool scrolling,
+                   bool shadow,
                    const TransformMatrix& matrix,
                    float scaleX,
                    float scaleY)
@@ -64,6 +71,7 @@ struct CGUIFontCacheKey
       m_alignment(alignment),
       m_maxPixelWidth(maxPixelWidth),
       m_scrolling(scrolling),
+      m_shadow(shadow),
       m_matrix(matrix),
       m_scaleX(scaleX),
       m_scaleY(scaleY)
@@ -75,34 +83,37 @@ template<class Position, class Value>
 struct CGUIFontCacheEntry
 {
   const CGUIFontCache<Position, Value>& m_cache;
-  CGUIFontCacheKey<Position> m_key;
+  std::vector<KODI::UTILS::COLOR::Color> m_color;
+  std::vector<character_t> m_text;
   TransformMatrix m_matrix;
-  unsigned int m_lastUsedMillis;
+  CGUIFontCacheKey<Position> m_key;
+  std::chrono::steady_clock::time_point m_lastUsed;
   Value m_value;
 
   CGUIFontCacheEntry(const CGUIFontCache<Position, Value>& cache,
                      const CGUIFontCacheKey<Position>& key,
-                     unsigned int nowMillis)
+                     std::chrono::steady_clock::time_point now)
     : m_cache(cache),
+      m_color(key.m_colors.begin(), key.m_colors.end()),
+      m_text(key.m_text.begin(), key.m_text.end()),
+      m_matrix(key.m_matrix),
       m_key(key.m_pos,
-            *new std::vector<UTILS::COLOR::Color>,
-            *new vecText,
+            m_color,
+            m_text,
             key.m_alignment,
             key.m_maxPixelWidth,
             key.m_scrolling,
+            key.m_shadow,
             m_matrix,
             key.m_scaleX,
             key.m_scaleY),
-      m_lastUsedMillis(nowMillis)
+      m_lastUsed(now)
   {
-    m_key.m_colors.assign(key.m_colors.begin(), key.m_colors.end());
-    m_key.m_text.assign(key.m_text.begin(), key.m_text.end());
-    m_matrix = key.m_matrix;
   }
 
   ~CGUIFontCacheEntry();
 
-  void Assign(const CGUIFontCacheKey<Position>& key, unsigned int nowMillis);
+  void Assign(const CGUIFontCacheKey<Position>& key, std::chrono::steady_clock::time_point now);
 };
 
 template<class Position>
@@ -127,10 +138,11 @@ struct CGUIFontCacheKeysMatch
   bool operator()(const CGUIFontCacheKey<Position>& a, const CGUIFontCacheKey<Position>& b) const
   {
     // clang-format off
-    return a.m_text == b.m_text &&
-           a.m_colors == b.m_colors &&
+    return std::ranges::equal(a.m_text, b.m_text) &&
+           std::ranges::equal(a.m_colors, b.m_colors) &&
            a.m_alignment == b.m_alignment &&
            a.m_scrolling == b.m_scrolling &&
+           a.m_shadow == b.m_shadow &&
            a.m_maxPixelWidth == b.m_maxPixelWidth &&
            Match(a.m_pos, a.m_matrix, b.m_pos, b.m_matrix, a.m_scrolling) &&
            a.m_scaleX == b.m_scaleX &&
@@ -143,7 +155,7 @@ struct CGUIFontCacheKeysMatch
 template<class Position, class Value>
 class CGUIFontCache
 {
-  CGUIFontCacheImpl<Position, Value>* m_impl;
+  std::unique_ptr<CGUIFontCacheImpl<Position, Value>> m_impl;
 
   CGUIFontCache(const CGUIFontCache<Position, Value>&) = delete;
   const CGUIFontCache<Position, Value>& operator=(const CGUIFontCache<Position, Value>&) = delete;
@@ -157,12 +169,13 @@ public:
 
   Value& Lookup(const CGraphicContext& context,
                 Position& pos,
-                const std::vector<UTILS::COLOR::Color>& colors,
-                const vecText& text,
+                std::span<const KODI::UTILS::COLOR::Color> colors,
+                std::span<const character_t> text,
                 uint32_t alignment,
                 float maxPixelWidth,
                 bool scrolling,
-                unsigned int nowMillis,
+                bool shadow,
+                std::chrono::steady_clock::time_point now,
                 bool& dirtyCache);
   void Flush();
 };
@@ -228,11 +241,23 @@ struct CVertexBuffer
 #endif
   BufferHandleType bufferHandle = BUFFER_HANDLE_INIT; // this is really a GLuint
   size_t size = 0;
+#if defined(HAS_GLES)
+  // Used instead of bufferHandle when the vertices share a buffer with other text
+  KODI::UTILS::GL::CGLBufferArena::Range range;
+#endif
   CVertexBuffer() : m_font(nullptr) {}
   CVertexBuffer(BufferHandleType bufferHandle, size_t size, const CGUIFontTTF* font)
     : bufferHandle(bufferHandle), size(size), m_font(font)
   {
   }
+#if defined(HAS_GLES)
+  CVertexBuffer(KODI::UTILS::GL::CGLBufferArena::Range range, size_t size, const CGUIFontTTF* font)
+    : size(size),
+      range(range),
+      m_font(font)
+  {
+  }
+#endif
   CVertexBuffer(const CVertexBuffer& other)
     : bufferHandle(other.bufferHandle), size(other.size), m_font(other.m_font)
   {
@@ -247,6 +272,10 @@ struct CVertexBuffer
     assert(bufferHandle == 0);
     bufferHandle = other.bufferHandle;
     other.bufferHandle = 0;
+#if defined(HAS_GLES)
+    range = other.range;
+    other.range = {};
+#endif
     size = other.size;
     m_font = other.m_font;
     return *this;

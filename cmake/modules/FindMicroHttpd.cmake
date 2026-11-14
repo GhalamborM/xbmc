@@ -3,41 +3,85 @@
 # --------------
 # Finds the MicroHttpd library
 #
-# This will define the following variables::
+# This will define the following target:
 #
-# MICROHTTPD_FOUND - system has MicroHttpd
-# MICROHTTPD_INCLUDE_DIRS - the MicroHttpd include directory
-# MICROHTTPD_LIBRARIES - the MicroHttpd libraries
-# MICROHTTPD_DEFINITIONS - the MicroHttpd definitions
-#
-# and the following imported targets::
-#
-#   MicroHttpd::MicroHttpd   - The MicroHttpd library
+#   ${APP_NAME_LC}::MicroHttpd   - The microhttpd library
 
-if(PKG_CONFIG_FOUND)
-  pkg_check_modules(PC_MICROHTTPD libmicrohttpd>=0.9.40 QUIET)
-endif()
+if(NOT TARGET ${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME})
 
-find_path(MICROHTTPD_INCLUDE_DIR NAMES microhttpd.h
-                                 PATHS ${PC_MICROHTTPD_INCLUDEDIR})
-find_library(MICROHTTPD_LIBRARY NAMES microhttpd libmicrohttpd
-                                PATHS ${PC_MICROHTTPD_LIBDIR})
+  include(cmake/scripts/common/ModuleHelpers.cmake)
 
-set(MICROHTTPD_VERSION ${PC_MICROHTTPD_VERSION})
+  macro(buildmacroMicroHttpd)
 
-include(FindPackageHandleStandardArgs)
-find_package_handle_standard_args(MicroHttpd
-                                  REQUIRED_VARS MICROHTTPD_LIBRARY MICROHTTPD_INCLUDE_DIR
-                                  VERSION_VAR MICROHTTPD_VERSION)
+    if(WIN32 OR WINDOWS_STORE)
 
-if(MICROHTTPD_FOUND)
-  set(MICROHTTPD_LIBRARIES ${MICROHTTPD_LIBRARY})
-  set(MICROHTTPD_INCLUDE_DIRS ${MICROHTTPD_INCLUDE_DIR})
-  set(MICROHTTPD_DEFINITIONS -DHAS_WEB_SERVER=1 -DHAS_WEB_INTERFACE=1)
+      set(patches "${CMAKE_SOURCE_DIR}/tools/depends/target/${${CMAKE_FIND_PACKAGE_NAME}_MODULE_LC}/01-win-cmake.patch")
 
-  if(${MICROHTTPD_LIBRARY} MATCHES ".+\.a$" AND PC_MICROHTTPD_STATIC_LIBRARIES)
-    list(APPEND MICROHTTPD_LIBRARIES ${PC_MICROHTTPD_STATIC_LIBRARIES})
+      generate_patchcommand("${patches}")
+      unset(patches)
+
+      set(${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_DEBUG_POSTFIX _d)
+
+      set(CMAKE_ARGS -DDUMMY_ARGS=ON)
+
+    else()
+      # Todo: gnutls libgcrypt libgpg-error
+      # find_package(xxx)
+
+      if (CMAKE_HOST_SYSTEM_NAME MATCHES "(Free|Net|Open)BSD")
+        find_program(MAKE_EXECUTABLE gmake)
+      endif()
+      find_program(MAKE_EXECUTABLE make REQUIRED)
+
+      set(CONFIGURE_COMMAND ./configure --prefix ${DEPENDS_PATH}
+                                        --disable-shared
+                                        --disable-doc
+                                        --disable-examples
+                                        --disable-curl
+                                        --enable-https
+                                        ${EXTRA_ARGS})
+
+      set(BUILD_COMMAND ${MAKE_EXECUTABLE})
+      set(INSTALL_COMMAND ${MAKE_EXECUTABLE} install)
+
+      set(BUILD_IN_SOURCE 1)
+
+    endif()
+
+    BUILD_DEP_TARGET()
+  endmacro()
+
+  set(${CMAKE_FIND_PACKAGE_NAME}_MODULE_LC libmicrohttpd)
+
+  SETUP_BUILD_VARS()
+
+  SETUP_FIND_SPECS()
+
+  SEARCH_EXISTING_PACKAGES()
+
+  if(("${${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME}_VERSION}" VERSION_LESS ${${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_VER} AND ENABLE_INTERNAL_LIBMICROHTTPD) OR
+     (((CORE_SYSTEM_NAME STREQUAL linux AND NOT "webos" IN_LIST CORE_PLATFORM_NAME_LC) OR CORE_SYSTEM_NAME STREQUAL freebsd) AND ENABLE_INTERNAL_LIBMICROHTTPD))
+    message(STATUS "Building ${${CMAKE_FIND_PACKAGE_NAME}_MODULE_LC}: \(version \"${${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_VER}\"\)")
+    cmake_language(EVAL CODE "
+      buildmacro${CMAKE_FIND_PACKAGE_NAME}()
+    ")
+  endif()
+
+  if(${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME}_FOUND)
+    if(TARGET PkgConfig::${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME} AND NOT TARGET ${${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_BUILD_NAME})
+      add_library(${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME} ALIAS PkgConfig::${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME_PC})
+    elseif(TARGET libmicrohttpd::libmicrohttpd AND NOT TARGET ${${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_BUILD_NAME})
+      # Kodi target - windows prebuilt lib
+      add_library(${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME} ALIAS libmicrohttpd::libmicrohttpd)
+    else()
+      SETUP_BUILD_TARGET()
+
+      add_dependencies(${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME} ${${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_BUILD_NAME})
+    endif()
+
+    set(${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_COMPILE_DEFINITIONS "HAS_WEB_SERVER;HAS_WEB_INTERFACE")
+    ADD_TARGET_COMPILE_DEFINITION()
+
+    ADD_MULTICONFIG_BUILDMACRO()
   endif()
 endif()
-
-mark_as_advanced(MICROHTTPD_LIBRARY MICROHTTPD_INCLUDE_DIR)

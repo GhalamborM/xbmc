@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2005-2018 Team Kodi
+ *  Copyright (C) 2005-2026 Team Kodi
  *  This file is part of Kodi - https://kodi.tv
  *
  *  SPDX-License-Identifier: GPL-2.0-or-later
@@ -10,19 +10,31 @@
 
 #include "InfoScanner.h"
 #include "VideoDatabase.h"
+#include "VideoManagerTypes.h"
 #include "addons/Scraper.h"
+#include "settings/VideoVersionsSettings.h"
+#include "utils/RegExp.h"
+#include "video/VideoInfoScannerArt.h"
+#include "video/VideoInfoScannerExtras.h"
 
+#include <atomic>
+#include <cstdint>
+#include <functional>
 #include <set>
 #include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
 
+class CAdvancedSettings;
 class CRegExp;
 class CFileItem;
 class CFileItemList;
 
-namespace VIDEO
+namespace KODI::VIDEO
 {
   class IVideoInfoTagLoader;
+  class ISetInfoTagLoader;
 
   typedef struct SScanSettings
   {
@@ -49,6 +61,22 @@ namespace VIDEO
     CVideoInfoScanner();
     ~CVideoInfoScanner() override;
 
+    /*! \brief Retrieve any artwork associated with an item
+     \sa CVideoInfoScannerArt::GetArtwork
+     */
+    void GetArtwork(CFileItem* pItem,
+                    ADDON::ContentType content,
+                    bool bApplyToDir = false,
+                    bool useLocal = true,
+                    const std::string& actorArtPath = "",
+                    CVideoInfoScannerArt::UseRemoteArtWithLocalScraper useRemoteArt =
+                        CVideoInfoScannerArt::UseRemoteArtWithLocalScraper::YES,
+                    const CFileItem* mediaItem = nullptr) const
+    {
+      m_art.GetArtwork(pItem, content, bApplyToDir, useLocal, actorArtPath, useRemoteArt,
+                       mediaItem);
+    }
+
     /*! \brief Scan a folder using the background scanner
      \param strDirectory path to scan
      \param scanAll whether to scan everything not already scanned (regardless of whether the user normally doesn't want a folder scanned.) Defaults to false.
@@ -56,62 +84,115 @@ namespace VIDEO
     void Start(const std::string& strDirectory, bool scanAll = false);
     void Stop();
 
+    /*! \brief Add a set to the database.
+     \param set CSetInfoTag to add to the database.
+     \return true if successful, false otherwise.
+     */
+    bool AddSet(const CSetInfoTag& set);
+
     /*! \brief Add an item to the database.
      \param pItem item to add to the database.
-     \param content content type of the item.
+     \param scraper scraper used for the lookup.
      \param videoFolder whether the video is represented by a folder (single movie per folder). Defaults to false.
      \param useLocal whether to use local information for artwork etc.
-     \param showInfo pointer to CVideoInfoTag details for the show if this is an episode. Defaults to NULL.
+     \param showInfo pointer to CVideoInfoTag details for the show if this is an episode. Defaults to nullptr.
      \param libraryImport Whether this call belongs to a full library import or not. Defaults to false.
+     \param contentOverride content type of the item. Defaults to CONTENT_NONE (which is ignored).
      \return database id of the added item, or -1 on failure.
      */
-    long AddVideo(CFileItem *pItem, const CONTENT_TYPE &content, bool videoFolder = false, bool useLocal = true, const CVideoInfoTag *showInfo = NULL, bool libraryImport = false);
+    long AddVideo(CFileItem* pItem,
+                  const ADDON::ScraperPtr& scraper,
+                  bool videoFolder = false,
+                  bool useLocal = true,
+                  const CVideoInfoTag* showInfo = nullptr,
+                  bool libraryImport = false,
+                  ADDON::ContentType contentOverride = ADDON::ContentType::NONE);
 
     /*! \brief Retrieve information for a list of items and add them to the database.
      \param items list of items to retrieve info for.
      \param bDirNames whether we should use folder or file names for lookups.
      \param content type of content to retrieve.
      \param useLocal should local data (.nfo and art) be used. Defaults to true.
-     \param pURL an optional URL to use to retrieve online info.  Defaults to NULL.
+     \param pURL an optional URL to use to retrieve online info.  Defaults to nullptr.
      \param fetchEpisodes whether we are fetching episodes with shows. Defaults to true.
-     \param pDlgProgress progress dialog to update and check for cancellation during processing.  Defaults to NULL.
+     \param pDlgProgress progress dialog to update and check for cancellation during processing.  Defaults to nullptr.
      \return true if we successfully found information for some items, false otherwise
      */
-    bool RetrieveVideoInfo(CFileItemList& items, bool bDirNames, CONTENT_TYPE content, bool useLocal = true, CScraperUrl *pURL = NULL, bool fetchEpisodes = true, CGUIDialogProgress* pDlgProgress = NULL);
+    bool RetrieveVideoInfo(const CFileItemList& items,
+                           bool bDirNames,
+                           ADDON::ContentType content,
+                           bool useLocal = true,
+                           CScraperUrl* pURL = nullptr,
+                           bool fetchEpisodes = true,
+                           CGUIDialogProgress* pDlgProgress = nullptr);
 
-    static void ApplyThumbToFolder(const std::string &folder, const std::string &imdbThumb);
+    /*! \brief Leave adding the extras of the movies RetrieveVideoInfo() adds to AddMovieExtras().
+     A refresh adds a movie again before moving its old versions and extras to it, and they must
+     be its own for those already there to be seen.
+     */
+    void DeferMovieExtras() { m_deferMovieExtras = true; }
+
+    /*! \brief Look the videos up with these scrapers, as CVideoDatabase::GetScraperForPath()
+     cached them, so that the details already read with them are read from their cache.
+     */
+    void UseScrapers(const CVideoDatabase::ScraperCache& scrapers)
+    {
+      m_scraperCache.insert(scrapers.begin(), scrapers.end());
+    }
+
+    /*! \brief Look the movies or tv shows up by these ids with a python scraper, rather than search
+     for them.
+     */
+    void LookUpBy(const ADDON::CScraper::UniqueIDs& uniqueIDs) { m_uniqueIDs = uniqueIDs; }
+
+    /*! \brief Add the extras of a refreshed movie: those its discs name, and those of the extras
+     folders beside it, which a scan finds as it lists the movie's folders.
+     \param dbId the movie, once its versions and extras are its own
+     \param useFolderNames whether the movie's folder names it (the scraper's "movies are in
+     separate folders"), without which it has no extras folders
+     */
+    void AddMovieExtras(int dbId, bool useFolderNames);
+
     static bool DownloadFailed(CGUIDialogProgress* pDlgProgress);
 
-    /*! \brief Retrieve any artwork associated with an item
-     \param pItem item to find artwork for.
-     \param content content type of the item.
-     \param bApplyToDir whether we should apply any thumbs to a folder.  Defaults to false.
-     \param useLocal whether we should use local thumbs. Defaults to true.
-     \param actorArtPath the path to search for actor thumbs. Defaults to empty.
+    /*! \brief Update the set information from a SET.NFO in the Movie Set Information Folder
+     Gets set details from the VideoInfoTag of a movie
+     \param tag     info tag
      */
-    void GetArtwork(CFileItem *pItem, const CONTENT_TYPE &content, bool bApplyToDir=false, bool useLocal=true, const std::string &actorArtPath = "");
-
-    /*! \brief Get season thumbs for a tvshow.
-     All seasons (regardless of whether the user has episodes) are added to the art map.
-     \param show     tvshow info tag
-     \param art      artwork map to which season thumbs are added.
-     \param useLocal whether to use local thumbs, defaults to true
-     */
-    static void GetSeasonThumbs(const CVideoInfoTag &show, std::map<int, std::map<std::string, std::string> > &art, const std::vector<std::string> &artTypes, bool useLocal = true);
-    static std::string GetImage(const CScraperUrl::SUrlEntry &image, const std::string& itemPath);
-
-    bool EnumerateEpisodeItem(const CFileItem *item, EPISODELIST& episodeList);
+    static bool UpdateSetInTag(CVideoInfoTag& tag);
 
     static std::string GetMovieSetInfoFolder(const std::string& setTitle);
 
   protected:
     virtual void Process();
-    bool DoScan(const std::string& strDirectory) override;
+    std::pair<ScanComplete, ContentFound> DoScan(const std::string& strDirectory) override;
 
-    INFO_RET RetrieveInfoForTvShow(CFileItem *pItem, bool bDirNames, ADDON::ScraperPtr &scraper, bool useLocal, CScraperUrl* pURL, bool fetchEpisodes, CGUIDialogProgress* pDlgProgress);
-    INFO_RET RetrieveInfoForMovie(CFileItem *pItem, bool bDirNames, ADDON::ScraperPtr &scraper, bool useLocal, CScraperUrl* pURL, CGUIDialogProgress* pDlgProgress);
-    INFO_RET RetrieveInfoForMusicVideo(CFileItem *pItem, bool bDirNames, ADDON::ScraperPtr &scraper, bool useLocal, CScraperUrl* pURL, CGUIDialogProgress* pDlgProgress);
-    INFO_RET RetrieveInfoForEpisodes(CFileItem *item, long showID, const ADDON::ScraperPtr &scraper, bool useLocal, CGUIDialogProgress *progress = NULL);
+    InfoRet RetrieveInfoForTvShow(CFileItem* pItem,
+                                  bool bDirNames,
+                                  ADDON::ScraperPtr& scraper,
+                                  bool useLocal,
+                                  CScraperUrl* pURL,
+                                  bool fetchEpisodes,
+                                  CGUIDialogProgress* pDlgProgress);
+    InfoRet RetrieveInfoForMovie(CFileItem* pItem,
+                                 bool bDirNames,
+                                 ADDON::ScraperPtr& scraper,
+                                 bool useLocal,
+                                 CScraperUrl* pURL,
+                                 CGUIDialogProgress* pDlgProgress);
+    InfoRet RetrieveInfoForMusicVideo(CFileItem* pItem,
+                                      bool bDirNames,
+                                      ADDON::ScraperPtr& scraper,
+                                      bool useLocal,
+                                      CScraperUrl* pURL,
+                                      CGUIDialogProgress* pDlgProgress);
+    InfoRet RetrieveInfoForEpisodes(CFileItem* item,
+                                    long showID,
+                                    EPISODELIST& files,
+                                    const ADDON::ScraperPtr& scraper,
+                                    bool useLocal,
+                                    CGUIDialogProgress* progress = nullptr,
+                                    bool alreadyHasArt = false);
 
     /*! \brief Update the progress bar with the heading and line and check for cancellation
      \param progress CGUIDialogProgress bar
@@ -143,14 +224,17 @@ namespace VIDEO
     /*! \brief Retrieve detailed information for an item from an online source, optionally supplemented with local data
      @todo sort out some better return codes.
      \param pItem item to retrieve online details for.
+     \param uniqueIDs Unique IDs for additional information for scrapers.
      \param url URL to use to retrieve online details.
      \param scraper Scraper that handles parsing the online data.
-     \param nfoFile if set, we override the online data with the locally supplied data. Defaults to NULL.
-     \param pDialog progress dialog to update and check for cancellation during processing. Defaults to NULL.
+     \param nfoFile if set, we override the online data with the locally supplied data. Defaults to nullptr.
+     \param pDialog progress dialog to update and check for cancellation during processing. Defaults to nullptr.
      \return true if information is found, false if an error occurred, the lookup was cancelled, or no information was found.
      */
-    bool GetDetails(CFileItem *pItem, CScraperUrl &url,
-                    const ADDON::ScraperPtr &scraper,
+    bool GetDetails(CFileItem* pItem,
+                    const ADDON::CScraper::UniqueIDs& uniqueIDs,
+                    CScraperUrl& url,
+                    const ADDON::ScraperPtr& scraper,
                     VIDEO::IVideoInfoTagLoader* nfoFile = nullptr,
                     CGUIDialogProgress* pDialog = nullptr);
 
@@ -169,26 +253,12 @@ namespace VIDEO
      */
     bool GetAirDateFromRegExp(CRegExp &reg, EPISODE &episodeInfo);
 
-    /*! \brief Fetch thumbs for actors
-     Updates each actor with their thumb (local or online)
-     \param actors - vector of SActorInfo
-     \param strPath - path on filesystem to look for local thumbs
+    /*! \brief Extract episode title from a processed regexp
+     \param reg Regular expression object with at least 1 match
+     \param episodeInfo Episode information to fill in.
+     \return true on success (1 match), false on failure (no matches)
      */
-    void FetchActorThumbs(std::vector<SActorInfo>& actors, const std::string& strPath);
-
-    static int GetPathHash(const CFileItemList &items, std::string &hash);
-
-    /*! \brief Retrieve a "fast" hash of the given directory (if available)
-     Performs a stat() on the directory, and uses modified time to create a "fast"
-     hash of the folder. If no modified time is available, the create time is used,
-     and if neither are available, an empty hash is returned.
-     In case exclude from scan expressions are present, the string array will be appended
-     to the md5 hash to ensure we're doing a re-scan whenever the user modifies those.
-     \param directory folder to hash
-     \param excludes string array of exclude expressions
-     \return the md5 hash of the folder"
-     */
-    std::string GetFastHash(const std::string &directory, const std::vector<std::string> &excludes) const;
+    bool GetEpisodeTitleFromRegExp(CRegExp& reg, EPISODE& episodeInfo);
 
     /*! \brief Retrieve a "fast" hash of the given directory recursively (if available)
      Performs a stat() on the directory, and uses modified time to create a "fast"
@@ -212,41 +282,169 @@ namespace VIDEO
      */
     bool CanFastHash(const CFileItemList &items, const std::vector<std::string> &excludes) const;
 
+    /*! \brief Queue a scanned directory to be cleaned, along with the paths holding its media
+     A disc rip or archive is not anchored in the folder that was scanned but under a
+     bluray:// or zip:// path of its own. Those are queued too, otherwise the clean never
+     looks at them and media removed with the disc stays in the library.
+     The video extras folders of the directory are queued too, as the scan adds their
+     extras without scanning them as directories of their own.
+     \param directory the directory that was scanned
+     */
+    void AddPathToClean(const std::string& directory);
+
     /*! \brief Process a series folder, filling in episode details and adding them to the database.
-     @todo Ideally we would return INFO_HAVE_ALREADY if we don't have to update any episodes
-     and we should return INFO_NOT_FOUND only if no information is found for any of
-     the episodes. INFO_ADDED then indicates we've added one or more episodes.
+     @todo Ideally we would return InfoRet:HAVE_ALREADY if we don't have to update any episodes
+     and we should return InfoRet::NOT_FOUND only if no information is found for any of
+     the episodes. InfoRet::ADDED then indicates we've added one or more episodes.
      \param files the episode files to process.
      \param scraper scraper to use for finding online info
      \param showInfo information for the show.
-     \param pDlgProcess progress dialog to update during processing.  Defaults to NULL.
-     \return INFO_ERROR on failure, INFO_CANCELLED on cancellation,
-     INFO_NOT_FOUND if an episode isn't found, or INFO_ADDED if all episodes are added.
+     \param pDlgProcess progress dialog to update during processing.  Defaults to nullptr.
+     \return InfoRet::ERROR on failure, InfoRet::CANCELLED on cancellation,
+     InfoRet::NOT_FOUND if an episode isn't found, or InfoRet::ADDED if all episodes are added.
      */
-    INFO_RET OnProcessSeriesFolder(EPISODELIST& files, const ADDON::ScraperPtr &scraper, bool useLocal, const CVideoInfoTag& showInfo, CGUIDialogProgress* pDlgProgress = NULL);
+    InfoRet OnProcessSeriesFolder(EPISODELIST& files,
+                                  const ADDON::ScraperPtr& scraper,
+                                  bool useLocal,
+                                  const CVideoInfoTag& showInfo,
+                                  CGUIDialogProgress* pDlgProgress = nullptr);
 
-    bool EnumerateSeriesFolder(CFileItem* item, EPISODELIST& episodeList);
+    enum class EpisodeResult
+    {
+      NO_MEDIA, //!< .nomedia file is present
+      NO_FILES, //!< No episode candidate files found
+      NO_EPISODES, //!< Episode candidate files found, but none could be parsed
+      NOT_CHANGED, //!< No new episodes found (directory hash unchanged)
+      FOUND_EPISODES //!< Episodes found
+    };
+
+    EpisodeResult EnumerateSeriesFolder(CFileItem* item, EPISODELIST& episodeList);
     bool ProcessItemByVideoInfoTag(const CFileItem *item, EPISODELIST &episodeList);
 
-    bool m_bStop;
+    std::pair<VersionConversionResult, int> ProcessVideoVersion(VideoDbContentType itemType,
+                                                                int dbId,
+                                                                int targetDbId = -1,
+                                                                bool canBecomeDefault = true);
+    static void RemovePartNumberFromTitle(int dbId,
+                                          VideoDbContentType itemType,
+                                          CVideoDatabase& db);
+
+    /*!
+     * \brief Add bluray playlists found for the same disc as movie and/or versions.
+     * \param[in] blurayItems all candidate playlists found for the disc
+     * \param[in] scraper scraper used for the lookup
+     * \param[in] bDirNames whether directory names are used for identification
+     * \param[in] useLocal whether to use local information for artwork etc.
+     * \return InfoRet::INFO_ERROR on failure, InfoRet::ADDED if movie added, InfoRet::HAVE_ALREADY if versions added
+     */
+    InfoRet AddBlurayPlaylistVersions(const CFileItemList& blurayItems,
+                                      const ADDON::ScraperPtr& scraper,
+                                      bool bDirNames,
+                                      bool useLocal);
+
+    std::pair<InfoType, std::unique_ptr<IVideoInfoTagLoader>> ReadInfoTag(
+        CFileItem& item, const ADDON::ScraperPtr& scraper, bool lookInFolder, bool resetTag);
+
+    //! Sticky - never reset, so a scanner instance is good for one scan only
+    std::atomic<bool> m_bStop{false};
     bool m_scanAll;
-    std::string m_strStartDir;
+    bool m_scanSubtree{false};
+
+    //! Lookups so far that failed, rather than finding nothing. A directory in which one failed
+    //! isn't hashed, so that the next scan tries it again.
+    unsigned int m_failedLookups{0};
+
+    //! What the scan did, logged once it has finished
+    struct ScanSummary
+    {
+      enum class Type
+      {
+        MOVIE,
+        VERSION, //!< of a movie
+        TV_SHOW,
+        EPISODE,
+        MUSIC_VIDEO
+      };
+
+      struct Item
+      {
+        Type type;
+        std::string path;
+        std::string title; //!< of an item added
+      };
+
+      std::vector<Item> added;
+      std::vector<Item> existing; //!< items in rescanned directories already in the library
+      unsigned int unchangedDirectories{0};
+      std::vector<Item> notFound;
+      std::vector<Item> failed;
+    };
+    ScanSummary m_summary;
+
+    SimilarVideoScanAction m_similarVideoAction{SimilarVideoScanAction::NONE};
+    bool m_ignoreVideoExtras{false};
+
+    //! Whether RetrieveVideoInfo() leaves a movie's extras to AddMovieExtras()
+    bool m_deferMovieExtras{false};
+
+    //! The ids RetrieveVideoInfo() looks movies and tv shows up by, where it would otherwise search
+    ADDON::CScraper::UniqueIDs m_uniqueIDs;
+
+    //! Whether the folder a movie is in names it (the scraper's "movies are in separate folders")
+    bool m_useFolderNames{false};
+
     CVideoDatabase m_database;
-    std::set<std::string> m_pathsToCount;
     std::set<int> m_pathsToClean;
+    std::shared_ptr<CAdvancedSettings> m_advancedSettings;
+    CVideoDatabase::ScraperCache m_scraperCache;
+
+    //! The artwork side of the scan
+    CVideoInfoScannerArt m_art;
+    CVideoInfoScannerExtras m_extras{m_database, m_art};
 
   private:
-    static void AddLocalItemArtwork(CGUIListItem::ArtMap& itemArt,
-      const std::vector<std::string>& wantedArtTypes, const std::string& itemPath,
-      bool addAll, bool exactName);
-
-    /*! \brief Retrieve the art type for an image from the given size.
-     \param width the width of the image.
-     \param height the height of the image.
-     \return "poster" if the aspect ratio is at most 4:5, "banner" if the aspect ratio
-             is at least 1:4, "thumb" otherwise.
+    /*!
+     * \brief Count an item that wasn't added in the summary, and log it as an event
+     * \param[in] type What the item is
+     * \param[in] path Path of the item
+     * \param[in] failed Whether its lookup failed, rather than found nothing
      */
-    static std::string GetArtTypeFromSize(unsigned int width, unsigned int height);
-  };
-}
+    void NotAdded(ScanSummary::Type type, const std::string& path, bool failed);
+    void ReportSummary() const;
 
+    /*!
+     * \brief Remove paths that share missing ancestors with \p directory from the list of paths
+     *        to scan
+     * \param[in] directory The non-existent directory
+     */
+    void SkipRelatedDirectories(std::string_view directory);
+
+    /*!
+     * \brief Removes the directory and sub directories of \p directory from the paths to be
+     *        scanned. Paths must end with a directory separator.
+     * \param[in] directories List of paths
+     * \param[in] directory Path of the directory to remove
+     * \param[in] f function to execute before the removal of a path
+     * \return number of elements removed
+     */
+    static size_t RemoveSubDirectories(std::set<std::string, std::less<>>& directories,
+                                       std::string_view directory,
+                                       std::function<void(const std::string&)> f);
+
+    /*!
+     * \brief Look for the name of an edition known to the library (ex. "Director's Cut") within the
+     *        name of the folder holding a disc. The longest match wins, and a match at the very
+     *        start of the folder name is ignored as that is a movie whose title is an edition name
+     *        (ex. "The Final Cut (2004)") rather than a version of another movie.
+     * \param[in] folderName Name of the folder holding the disc
+     * \return The edition's name as held in the library, empty if none was recognised
+     */
+    std::string GetEditionFromFolderName(const std::string& folderName);
+
+    mutable KODI::REGEXP::RegExpCache m_regexpCache;
+
+    //! Editions known to the library, cached for the duration of a scan
+    std::vector<std::string> m_videoVersionTypes;
+    bool m_videoVersionTypesCached{false};
+  };
+  } // namespace KODI::VIDEO

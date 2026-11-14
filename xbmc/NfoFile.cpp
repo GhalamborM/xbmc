@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2005-2018 Team Kodi
+ *  Copyright (C) 2005-2026 Team Kodi
  *  This file is part of Kodi - https://kodi.tv
  *
  *  SPDX-License-Identifier: GPL-2.0-or-later
@@ -11,128 +11,225 @@
 
 #include "NfoFile.h"
 
-#include "FileItem.h"
 #include "ServiceBroker.h"
 #include "addons/AddonManager.h"
 #include "addons/AddonSystemSettings.h"
+#include "addons/addoninfo/AddonType.h"
 #include "filesystem/File.h"
-#include "music/Album.h"
-#include "music/Artist.h"
+#include "utils/StringUtils.h"
+#include "utils/XMLUtils.h"
 #include "video/VideoInfoDownloader.h"
 
+#include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
 using namespace XFILE;
 using namespace ADDON;
 
-CInfoScanner::INFO_TYPE CNfoFile::Create(const std::string& strPath,
-                                         const ScraperPtr& info, int episode)
+// Forward declarations
+namespace
 {
-  m_info = info; // assume we can use these settings
-  m_type = ScraperTypeFromContent(info->Content());
-  if (Load(strPath) != 0)
-    return CInfoScanner::NO_NFO;
+std::vector<ScraperPtr> GetScrapers(AddonType type, const ScraperPtr& selectedScraper);
 
-  CFileItemList items;
-  bool bNfo=false;
+} // unnamed namespace
 
-  if (m_type == ADDON_SCRAPER_ALBUMS)
+const TiXmlElement* CNfoFile::GetRootElement() const
+{
+  if (!m_xmlParsed)
   {
-    CAlbum album;
-    bNfo = GetDetails(album);
+    if (m_headPos < m_doc.size())
+      m_xmlDoc.Parse(m_doc.substr(m_headPos), TIXML_ENCODING_UNKNOWN);
+    m_xmlParsed = true;
   }
-  else if (m_type == ADDON_SCRAPER_ARTISTS)
+  return m_xmlDoc.RootElement();
+}
+
+int CNfoFile::GetBlurayPlaylist() const
+{
+  int playlist{-1};
+  if (const TiXmlElement * root{GetRootElement()}; root)
+    XMLUtils::GetInt(root, "playlist", playlist);
+  return playlist;
+}
+
+std::vector<XFILE::StackPartPlaylist> CNfoFile::GetStackParts() const
+{
+  std::vector<XFILE::StackPartPlaylist> parts;
+
+  const TiXmlElement* root{GetRootElement()};
+  if (!root)
+    return parts;
+
+  const TiXmlElement* stack{root->FirstChildElement("stack")};
+  if (!stack)
+    return parts;
+
+  for (const TiXmlElement* part{stack->FirstChildElement("part")}; part;
+       part = part->NextSiblingElement("part"))
   {
-    CArtist artist;
-    bNfo = GetDetails(artist);
+    XFILE::StackPartPlaylist stackPart;
+    if (!XMLUtils::GetString(part, "file", stackPart.file) || stackPart.file.empty())
+      continue;
+    if (!XMLUtils::GetInt(part, "playlist", stackPart.playlist) || stackPart.playlist < 0)
+      continue;
+    parts.emplace_back(std::move(stackPart));
   }
-  else if (m_type == ADDON_SCRAPER_TVSHOWS || m_type == ADDON_SCRAPER_MOVIES
-           || m_type == ADDON_SCRAPER_MUSICVIDEOS)
+  return parts;
+}
+
+CInfoScanner::InfoType CNfoFile::TryParsing(ADDON::AddonType addonType) const
+{
+  using enum CInfoScanner::InfoType;
+  using enum ADDON::AddonType;
+
+  // Classification only needs the root element (to avoid a full ParseNative)
+  // and its "override" attribute (for videos)
+  const TiXmlElement* root = GetRootElement();
+  if (!root)
+    return NONE;
+
+  if (addonType == SCRAPER_ALBUMS || addonType == SCRAPER_ARTISTS)
+    return FULL;
+
+  if (addonType == SCRAPER_MOVIES || addonType == SCRAPER_TVSHOWS ||
+      addonType == SCRAPER_MUSICVIDEOS)
   {
-    // first check if it's an XML file with the info we need
-    CVideoInfoTag details;
-    bNfo = GetDetails(details);
-    if (episode > -1 && bNfo && m_type == ADDON_SCRAPER_TVSHOWS)
-    {
-      int infos=0;
-      while (m_headPos != std::string::npos && details.m_iEpisode != episode)
-      {
-        m_headPos = m_doc.find("<episodedetails", m_headPos + 1);
-        if (m_headPos == std::string::npos)
-          break;
-
-        bNfo  = GetDetails(details);
-        infos++;
-      }
-      if (details.m_iEpisode != episode)
-      {
-        bNfo = false;
-        details.Reset();
-        m_headPos = 0;
-        if (infos == 1) // still allow differing nfo/file numbers for single ep nfo's
-          bNfo = GetDetails(details);
-      }
-    }
+    return StringUtils::EqualsNoCase(XMLUtils::GetAttribute(root, "override"), "true") ? OVERRIDE
+                                                                                       : FULL;
   }
+  return NONE;
+}
 
-  std::vector<ScraperPtr> vecScrapers = GetScrapers(m_type, m_info);
-
-  // search ..
-  int res = -1;
-  for (unsigned int i=0; i<vecScrapers.size(); ++i)
-    if ((res = Scrape(vecScrapers[i], m_scurl, m_doc)) == 0 || res == 2)
+bool CNfoFile::SeekToMovieIndex(int index)
+{
+  // Find nth <movie> tag (index is 1 based)
+  m_headPos = m_doc.find("<movies>");
+  while (index-- > 0)
+  {
+    m_headPos = m_doc.find("<movie", m_headPos + 1);
+    if (m_headPos == std::string::npos)
       break;
-
-  if (res == 2)
-    return CInfoScanner::ERROR_NFO;
-  if (bNfo)
-  {
-    if (!m_scurl.HasUrls())
-    {
-      if (m_doc.find("[scrape url]") != std::string::npos)
-        return CInfoScanner::OVERRIDE_NFO;
-      else
-        return CInfoScanner::FULL_NFO;
-    }
-    else
-      return CInfoScanner::COMBINED_NFO;
   }
-  return m_scurl.HasUrls() ? CInfoScanner::URL_NFO : CInfoScanner::NO_NFO;
+  return m_headPos != std::string::npos;
 }
 
-// return value: 0 - success; 1 - no result; skip; 2 - error
-int CNfoFile::Scrape(ScraperPtr& scraper, CScraperUrl& url,
-                     const std::string& content)
+CInfoScanner::InfoType CNfoFile::TryParsing(const CURL& nfoPath, ADDON::ContentType contentType)
 {
-  if (scraper->IsNoop())
-  {
-    url = CScraperUrl();
-    return 0;
-  }
+  if (Load(nfoPath) != 0) // Setup m_doc and m_headPos
+    return CInfoScanner::InfoType::ERROR_NFO;
 
-  scraper->ClearCache();
+  m_addonType = ScraperTypeFromContent(contentType);
 
-  try
-  {
-    url = scraper->NfoUrl(content);
-  }
-  catch (const CScraperError &sce)
-  {
-    CVideoInfoDownloader::ShowErrorDialog(sce);
-    if (!sce.FAborted())
-      return 2;
-  }
+  if (m_addonType == ADDON::AddonType::SCRAPER_MOVIES && !SeekToMovieIndex(1))
+    return CInfoScanner::InfoType::NONE;
 
-  return url.HasUrls() ? 0 : 1;
+  return TryParsing(m_addonType);
 }
 
-int CNfoFile::Load(const std::string& strFile)
+CInfoScanner::InfoType CNfoFile::Reparse(int index)
+{
+  using enum CInfoScanner::InfoType;
+
+  // Only movie nfos can hold more than one entry
+  if (m_doc.empty() || m_addonType != ADDON::AddonType::SCRAPER_MOVIES)
+    return NONE;
+
+  // Seek before discarding anything
+  const size_t previousHeadPos{m_headPos};
+  if (!SeekToMovieIndex(index))
+  {
+    m_headPos = previousHeadPos;
+    return NONE;
+  }
+
+  // Discard the element parsed previously and re-parse starting from the requested one
+  m_xmlDoc.Clear();
+  m_xmlParsed = false;
+
+  return TryParsing(m_addonType);
+}
+
+CInfoScanner::InfoType CNfoFile::Create(const std::string& nfoPath, const ScraperPtr& info)
+{
+  /* `TryParsing` creates a close approximation to the desired result.
+   * The desired result would be knowing if any valid URLs have been
+   * found in the NFO which could be interpreted by a scraper.
+   * Determining if any valid URLs exist in the NFO file is an expensive
+   * operation so should only be called if necessary. If the approximate
+   * result from `TryParsing` is sufficient then use that result.
+   *
+   * Below is a table to show the result from `TryParsing` and the
+   * potential desired results.
+   *
+   * | result   | Could be converted to:     |
+   * | -------- | -------------------------- |
+   * | NONE     | URL NONE                   |
+   * | OVERRIDE | COMBINED OVERRIDE          |
+   * | FULL     | COMBINED OVERRIDE FULL     |
+   *
+   * The following call to `SearchNfoForScraperUrls` will generate the
+   * desired result from this approximation.
+   *
+   * This call is expensive as it encodes the NFO file into a URL param
+   * and executes a python interpreter for each installed python scraper.
+  */
+  const CInfoScanner::InfoType result = TryParsing(CURL{nfoPath}, info->Content());
+  if (result == CInfoScanner::InfoType::ERROR_NFO)
+    return CInfoScanner::InfoType::NONE;
+  return SearchNfoForScraperUrls(result, info);
+}
+
+CInfoScanner::InfoType CNfoFile::SearchNfoForScraperUrls(CInfoScanner::InfoType parseResult,
+                                                         const ScraperPtr& info)
+{
+  using enum CInfoScanner::InfoType;
+
+  SetScraperInfo(info); // assume we can use these settings
+  const AddonType addonType = ScraperTypeFromContent(info->Content());
+
+  // A video's url is only taken from the scraper chosen for its path, which is the one the url is
+  // fetched with. A tv show's episodes are also looked up in the episode guide stored with it,
+  // which only the scraper that added it understands.
+  const bool isVideo{addonType == AddonType::SCRAPER_MOVIES ||
+                     addonType == AddonType::SCRAPER_TVSHOWS ||
+                     addonType == AddonType::SCRAPER_MUSICVIDEOS};
+  for (const auto& scraper : isVideo ? std::vector<ScraperPtr>{info} : GetScrapers(addonType, info))
+  {
+    if (scraper->IsNoop())
+    {
+      m_scurl = CScraperUrl();
+      break;
+    }
+
+    scraper->ClearCache();
+    try
+    {
+      m_scurl = scraper->NfoUrl(m_doc);
+    }
+    catch (const CScraperError& sce)
+    {
+      CVideoInfoDownloader::ShowErrorDialog(sce);
+      if (!sce.FAborted())
+        return ERROR_NFO;
+    }
+
+    if (m_scurl.HasUrls())
+      return (parseResult == FULL || parseResult == OVERRIDE) ? COMBINED : URL;
+  }
+
+  if (parseResult == FULL && m_doc.find("[scrape url]") != std::string::npos)
+    return OVERRIDE;
+
+  return parseResult;
+}
+
+int CNfoFile::Load(const CURL& nfoPath)
 {
   Close();
   XFILE::CFile file;
-  std::vector<uint8_t> buf;
-  if (file.LoadFile(strFile, buf) > 0)
+  if (std::vector<uint8_t> buf; file.LoadFile(nfoPath, buf) > 0)
   {
     m_doc.assign(reinterpret_cast<char*>(buf.data()), buf.size());
     m_headPos = 0;
@@ -146,10 +243,16 @@ void CNfoFile::Close()
 {
   m_doc.clear();
   m_headPos = 0;
+  m_addonType = {}; // ADDON::AddonType::UNKNOWN
   m_scurl.Clear();
+  m_xmlDoc.Clear();
+  m_xmlParsed = false;
 }
 
-std::vector<ScraperPtr> CNfoFile::GetScrapers(TYPE type, const ScraperPtr& selectedScraper)
+namespace
+{
+
+std::vector<ScraperPtr> GetScrapers(AddonType type, const ScraperPtr& selectedScraper)
 {
   AddonPtr addon;
   ScraperPtr defaultScraper;
@@ -187,3 +290,5 @@ std::vector<ScraperPtr> CNfoFile::GetScrapers(TYPE type, const ScraperPtr& selec
 
   return vecScrapers;
 }
+
+} // unnamed namespace

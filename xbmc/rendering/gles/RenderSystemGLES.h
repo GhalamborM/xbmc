@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2005-2018 Team Kodi
+ *  Copyright (C) 2005-2024 Team Kodi
  *  This file is part of Kodi - https://kodi.tv
  *
  *  SPDX-License-Identifier: GPL-2.0-or-later
@@ -9,10 +9,17 @@
 #pragma once
 
 #include "GLESShader.h"
+#include "guilib/GUIQuadDrawerGLES.h"
 #include "rendering/RenderSystem.h"
 #include "utils/ColorUtils.h"
+#include "utils/GLBufferObject.h"
+#include "utils/Map.h"
 
+#include <cstddef>
 #include <map>
+#include <vector>
+
+#include <fmt/format.h>
 
 #include "system_gl.h"
 
@@ -20,16 +27,67 @@ enum class ShaderMethodGLES
 {
   SM_DEFAULT,
   SM_TEXTURE,
+  SM_TEXTURE_111R,
   SM_MULTI,
+  SM_MULTI_RGBA_111R,
   SM_FONTS,
+  SM_FONTS_SHADER_CLIP,
   SM_TEXTURE_NOBLEND,
   SM_MULTI_BLENDCOLOR,
+  SM_MULTI_RGBA_111R_BLENDCOLOR,
+  SM_MULTI_111R_111R_BLENDCOLOR,
   SM_TEXTURE_RGBA,
   SM_TEXTURE_RGBA_OES,
   SM_TEXTURE_RGBA_BLENDCOLOR,
   SM_TEXTURE_RGBA_BOB,
   SM_TEXTURE_RGBA_BOB_OES,
-  SM_TEXTURE_NOALPHA
+  SM_TEXTURE_NOALPHA,
+  SM_FONTS_RGBA,
+  SM_FONTS_RGBA_SHADER_CLIP,
+  SM_MAX
+};
+
+template<>
+struct fmt::formatter<ShaderMethodGLES> : fmt::formatter<std::string_view>
+{
+  template<typename FormatContext>
+  constexpr auto format(const ShaderMethodGLES& shaderMethod, FormatContext& ctx)
+  {
+    const auto it = ShaderMethodGLESMap.find(shaderMethod);
+    if (it == ShaderMethodGLESMap.cend())
+      throw std::range_error("no string mapping found for shader method");
+
+    return fmt::formatter<string_view>::format(it->second, ctx);
+  }
+
+private:
+  static constexpr auto ShaderMethodGLESMap = make_map<ShaderMethodGLES, std::string_view>({
+      {ShaderMethodGLES::SM_DEFAULT, "default"},
+      {ShaderMethodGLES::SM_TEXTURE, "texture"},
+      {ShaderMethodGLES::SM_TEXTURE_111R, "alpha texture with diffuse color"},
+      {ShaderMethodGLES::SM_MULTI, "multi"},
+      {ShaderMethodGLES::SM_MULTI_RGBA_111R, "multi with color/alpha texture"},
+      {ShaderMethodGLES::SM_FONTS, "fonts"},
+      {ShaderMethodGLES::SM_FONTS_SHADER_CLIP, "fonts with vertex shader based clipping"},
+      {ShaderMethodGLES::SM_TEXTURE_NOBLEND, "texture no blending"},
+      {ShaderMethodGLES::SM_MULTI_BLENDCOLOR, "multi blend colour"},
+      {ShaderMethodGLES::SM_MULTI_RGBA_111R_BLENDCOLOR,
+       "multi with color/alpha texture and blend color"},
+      {ShaderMethodGLES::SM_MULTI_111R_111R_BLENDCOLOR,
+       "multi with alpha/alpha texture and blend color"},
+      {ShaderMethodGLES::SM_TEXTURE_RGBA, "texture rgba"},
+      {ShaderMethodGLES::SM_TEXTURE_RGBA_OES, "texture rgba OES"},
+      {ShaderMethodGLES::SM_TEXTURE_RGBA_BLENDCOLOR, "texture rgba blend colour"},
+      {ShaderMethodGLES::SM_TEXTURE_RGBA_BOB, "texture rgba bob"},
+      {ShaderMethodGLES::SM_TEXTURE_RGBA_BOB_OES, "texture rgba bob OES"},
+      {ShaderMethodGLES::SM_TEXTURE_NOALPHA, "texture no alpha"},
+      {ShaderMethodGLES::SM_FONTS_RGBA, "fonts rgba"},
+      {ShaderMethodGLES::SM_FONTS_RGBA_SHADER_CLIP, "fonts rgba with vertex shader based clipping"},
+  });
+
+  static_assert(static_cast<size_t>(ShaderMethodGLES::SM_MAX) == ShaderMethodGLESMap.size(),
+                "ShaderMethodGLESMap doesn't match the size of ShaderMethodGLES, did you forget to "
+                "add/remove a mapping?");
 };
 
 class CRenderSystemGLES : public CRenderSystemBase
@@ -45,8 +103,11 @@ public:
   bool BeginRender() override;
   bool EndRender() override;
   void PresentRender(bool rendered, bool videoLayer) override;
-  bool ClearBuffers(UTILS::COLOR::Color color) override;
+  void InvalidateColorBuffer() override;
+  bool ClearBuffers(KODI::UTILS::COLOR::Color color) override;
   bool IsExtSupported(const char* extension) const override;
+  // WebGL 2.0 exposes GLES 3.0 without GL_TEXTURE_SWIZZLE_*, so platforms can opt out
+  virtual bool SupportsTextureSwizzle() const { return m_RenderVersionMajor >= 3; }
 
   void SetVSync(bool vsync);
   void ResetVSync() { m_bVsyncInit = false; }
@@ -59,16 +120,18 @@ public:
   void SetScissors(const CRect& rect) override;
   void ResetScissors() override;
 
+  void SetDepthCulling(DepthCulling culling) override;
+
   void CaptureStateBlock() override;
   void ApplyStateBlock() override;
 
   void SetCameraPosition(const CPoint &camera, int screenWidth, int screenHeight, float stereoFactor = 0.0f) override;
 
-  bool SupportsStereo(RENDER_STEREO_MODE mode) const override;
+  bool SupportsStereo(RenderStereoMode mode) const override;
 
   void Project(float &x, float &y, float &z) override;
 
-  std::string GetShaderPath(const std::string &filename) override { return "GLES/2.0/"; }
+  std::string GetShaderPath(const std::string& filename) override;
 
   void InitialiseShaders();
   void ReleaseShaders();
@@ -85,7 +148,35 @@ public:
   GLint GUIShaderGetStep();
   GLint GUIShaderGetContrast();
   GLint GUIShaderGetBrightness();
-  GLint GUIShaderGetModel();
+  GLint GUIShaderGetMatrix();
+  GLint GUIShaderGetClip();
+  GLint GUIShaderGetCoordStep();
+  GLint GUIShaderGetDepth();
+  GLint GUIShaderGetPma();
+  GLint GUIShaderGetGUIMatrix();
+  GLint GUIShaderGetSnap();
+  GLint GUIShaderGetAttrSnap();
+  GLint GUIShaderGetQuadRect();
+  GLint GUIShaderGetQuadClip();
+  GLint GUIShaderGetTexSwap();
+
+  // Binds an index buffer for quadCount quads laid out as 0,1,2 2,3,0.
+  void BindGUIQuadIndices(std::size_t quadCount);
+
+  // Binds a static quad with corners (0, 0), (1, 0), (0, 1) and (1, 1), in GL_TRIANGLE_STRIP order.
+  void BindGUIUnitQuad();
+
+  /*!
+   * @brief Draw a static unit quad with the current GUI shader, which must use gles_shader.vert.
+   *
+   * The quad is mapped onto the parallelogram whose corners are @p origin, @p right and @p down
+   * (the fourth corner follows), and its texture coordinates span @p texCoords if given.
+   */
+  void DrawGUIQuad(const CPoint& origin,
+                   const CPoint& right,
+                   const CPoint& down,
+                   const CRect* texCoords = nullptr);
+  void DrawGUIQuad(const CRect& rect, const CRect* texCoords = nullptr);
 
 protected:
   virtual void SetVSyncImpl(bool enable) = 0;
@@ -102,5 +193,10 @@ protected:
   ShaderMethodGLES m_method = ShaderMethodGLES::SM_DEFAULT;
 
   GLint      m_viewPort[4];
-};
 
+  CGUIQuadDrawerGLES m_quadDrawer;
+
+  KODI::UTILS::GL::CGLBufferObject m_guiQuadIndexBuffer{GL_ELEMENT_ARRAY_BUFFER};
+  KODI::UTILS::GL::CGLBufferObject m_guiUnitQuad{GL_ARRAY_BUFFER};
+  std::vector<GLushort> m_guiQuadIndices;
+};

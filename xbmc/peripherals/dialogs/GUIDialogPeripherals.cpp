@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2017-2018 Team Kodi
+ *  Copyright (C) 2017-2024 Team Kodi
  *  This file is part of Kodi - https://kodi.tv
  *
  *  SPDX-License-Identifier: GPL-2.0-or-later
@@ -18,8 +18,9 @@
 #include "messaging/helpers/DialogOKHelper.h"
 #include "peripherals/Peripherals.h"
 #include "peripherals/dialogs/GUIDialogPeripheralSettings.h"
-#include "threads/SingleLock.h"
 #include "utils/Variant.h"
+
+#include <mutex>
 
 using namespace KODI;
 using namespace PERIPHERALS;
@@ -57,7 +58,7 @@ CFileItemPtr CGUIDialogPeripherals::GetItem(unsigned int pos) const
 {
   CFileItemPtr item;
 
-  CSingleLock lock(m_peripheralsMutex);
+  std::unique_lock lock(m_peripheralsMutex);
 
   if (static_cast<int>(pos) < m_peripherals.Size())
     item = m_peripherals[pos];
@@ -95,7 +96,7 @@ void CGUIDialogPeripherals::Show(CPeripherals& manager)
 
       // Show an error if the peripheral doesn't have any settings
       PeripheralPtr peripheral = manager.GetByPath(pItem->GetPath());
-      if (!peripheral || peripheral->GetSettings().empty())
+      if (!peripheral || !peripheral->HasConfigurableSettings())
       {
         MESSAGING::HELPERS::ShowOKDialogText(CVariant{35000}, CVariant{35004});
         continue;
@@ -117,7 +118,9 @@ void CGUIDialogPeripherals::Show(CPeripherals& manager)
 
         // Open settings dialog
         pSettingsDialog->SetFileItem(pItem.get());
+        pSettingsDialog->RegisterPeripheralManager(manager);
         pSettingsDialog->Open();
+        pSettingsDialog->UnregisterPeripheralManager();
       }
     }
   } while (pDialog->IsConfirmed());
@@ -130,14 +133,26 @@ bool CGUIDialogPeripherals::OnMessage(CGUIMessage& message)
     case GUI_MSG_REFRESH_LIST:
     {
       if (m_manager && message.GetControlId() == -1)
+      {
         UpdatePeripheralsSync();
-      return true;
+        return true;
+      }
     }
     default:
       break;
   }
 
   return CGUIDialogSelect::OnMessage(message);
+}
+
+void CGUIDialogPeripherals::FreeResources(bool immediately /* = false */)
+{
+  // Free GUI resources
+  for (auto it = m_peripherals.begin(); it != m_peripherals.end(); ++it)
+    (*it)->FreeMemory();
+
+  // Free ancestor resources
+  CGUIDialogSelect::FreeResources(immediately);
 }
 
 void CGUIDialogPeripherals::Notify(const Observable& obs, const ObservableMessage msg)
@@ -155,14 +170,14 @@ void CGUIDialogPeripherals::Notify(const Observable& obs, const ObservableMessag
 void CGUIDialogPeripherals::UpdatePeripheralsAsync()
 {
   CGUIMessage msg(GUI_MSG_REFRESH_LIST, GetID(), -1);
-  MESSAGING::CApplicationMessenger::GetInstance().SendGUIMessage(msg);
+  CServiceBroker::GetAppMessenger()->SendGUIMessage(msg);
 }
 
 void CGUIDialogPeripherals::UpdatePeripheralsSync()
 {
   int iPos = GetSelectedItem();
 
-  CSingleLock lock(m_peripheralsMutex);
+  std::unique_lock lock(m_peripheralsMutex);
 
   CFileItemPtr selectedItem;
   if (iPos > 0)
@@ -171,13 +186,4 @@ void CGUIDialogPeripherals::UpdatePeripheralsSync()
   m_peripherals.Clear();
   m_manager->GetDirectory("peripherals://all/", m_peripherals);
   SetItems(m_peripherals);
-
-  if (selectedItem)
-  {
-    for (int i = 0; i < m_peripherals.Size(); i++)
-    {
-      if (m_peripherals[i]->GetPath() == selectedItem->GetPath())
-        SetSelected(i);
-    }
-  }
 }

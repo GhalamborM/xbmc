@@ -9,6 +9,7 @@
 #pragma once
 
 #include "JSONRPC.h"
+#include "rendering/RenderSystemTypes.h"
 
 class CVariant;
 
@@ -25,8 +26,19 @@ namespace JSONRPC
     static JSONRPC_STATUS SetFullscreen(const std::string &method, ITransportLayer *transport, IClient *client, const CVariant &parameterObject, CVariant &result);
     static JSONRPC_STATUS SetStereoscopicMode(const std::string &method, ITransportLayer *transport, IClient *client, const CVariant &parameterObject, CVariant &result);
     static JSONRPC_STATUS GetStereoscopicModes(const std::string &method, ITransportLayer *transport, IClient *client, const CVariant &parameterObject, CVariant &result);
+    static JSONRPC_STATUS ActivateScreenSaver(const std::string& method,
+                                                  ITransportLayer* transport,
+                                                  IClient* client,
+                                                  const CVariant& parameterObject,
+                                                  CVariant& result);
+    static JSONRPC_STATUS TakeScreenshot(const std::string& method,
+                                         ITransportLayer* transport,
+                                         IClient* client,
+                                         const CVariant& parameterObject,
+                                         CVariant& result);
+
   private:
     static JSONRPC_STATUS GetPropertyValue(const std::string &property, CVariant &result);
-    static CVariant GetStereoModeObjectFromGuiMode(const RENDER_STEREO_MODE &mode);
+    static CVariant GetStereoModeObjectFromGuiMode(const RenderStereoMode mode);
   };
 }

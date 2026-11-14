@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2013-2018 Team Kodi
+ *  Copyright (C) 2013-2024 Team Kodi
  *  This file is part of Kodi - https://kodi.tv
  *
  *  SPDX-License-Identifier: GPL-2.0-or-later
@@ -55,8 +55,8 @@ bool CGenericTouchPinchDetector::OnTouchMove(unsigned int index, const Pointer& 
   // update the internal pointers
   m_pointers[index] = pointer;
 
-  Pointer& primaryPointer = m_pointers[0];
-  Pointer& secondaryPointer = m_pointers[1];
+  const Pointer& primaryPointer = m_pointers[0];
+  const Pointer& secondaryPointer = m_pointers[1];
 
   if (!primaryPointer.valid() || !secondaryPointer.valid() ||
       (!primaryPointer.moving && !secondaryPointer.moving))

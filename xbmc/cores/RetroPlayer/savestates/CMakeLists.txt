@@ -1,13 +1,13 @@
 set(SOURCES SavestateDatabase.cpp
+            SavestateBlob.cpp
             SavestateFlatBuffer.cpp
-            SavestateUtils.cpp
 )
 
 set(HEADERS ISavestate.h
+            SavestateBlob.h
             SavestateDatabase.h
             SavestateFlatBuffer.h
             SavestateTypes.h
-            SavestateUtils.h
 )
 
 core_add_library(retroplayer_savestates)

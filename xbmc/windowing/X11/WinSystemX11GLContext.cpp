@@ -8,27 +8,33 @@
 
 #include "WinSystemX11GLContext.h"
 
-#include "Application.h"
 #include "GLContextEGL.h"
 #include "OptionalsReg.h"
+#include "ServiceBroker.h"
 #include "VideoSyncOML.h"
 #include "X11DPMSSupport.h"
+#include "application/AppParams.h"
+#include "application/ApplicationComponents.h"
+#include "application/ApplicationSkinHandling.h"
 #include "cores/RetroPlayer/process/X11/RPProcessInfoX11.h"
 #include "cores/RetroPlayer/rendering/VideoRenderers/RPRendererOpenGL.h"
 #include "cores/VideoPlayer/DVDCodecs/DVDFactoryCodec.h"
 #include "cores/VideoPlayer/Process/X11/ProcessInfoX11.h"
+#include "cores/VideoPlayer/VideoReferenceClock.h"
 #include "cores/VideoPlayer/VideoRenderers/LinuxRendererGL.h"
 #include "cores/VideoPlayer/VideoRenderers/RenderFactory.h"
 #include "guilib/DispResource.h"
 #include "rendering/gl/ScreenshotSurfaceGL.h"
-#include "threads/SingleLock.h"
-#include "utils/StringUtils.h"
-#include "utils/log.h"
 #include "windowing/GraphicContext.h"
 #include "windowing/WindowSystemFactory.h"
 
+#include <memory>
+#include <mutex>
 #include <vector>
 
+#if defined(HAS_GLX)
+#include <GL/glx.h>
+#endif
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
 
@@ -59,7 +65,7 @@ void CWinSystemX11GLContext::PresentRenderImpl(bool rendered)
   if (m_delayDispReset && m_dispResetTimer.IsTimePast())
   {
     m_delayDispReset = false;
-    CSingleLock lock(m_resourceSection);
+    std::unique_lock lock(m_resourceSection);
     // tell any shared resources
     for (std::vector<IDispResource *>::iterator i = m_resources.begin(); i != m_resources.end(); ++i)
       (*i)->OnResetDisplay();
@@ -89,24 +95,54 @@ void* CWinSystemX11GLContext::GetGlxContext() const
   return GLXGetContext(m_pGLContext);
 }
 
+// X11 creates an EGL context by default, but --gl-interface=glx and the VDPAU
+// fallback both leave a GLX context here instead, which holds no EGL handles.
 EGLDisplay CWinSystemX11GLContext::GetEGLDisplay() const
 {
-  return static_cast<CGLContextEGL*>(m_pGLContext)->m_eglDisplay;
+  auto* context = dynamic_cast<CGLContextEGL*>(m_pGLContext);
+  return context != nullptr ? context->m_eglDisplay : EGL_NO_DISPLAY;
 }
 
 EGLSurface CWinSystemX11GLContext::GetEGLSurface() const
 {
-  return static_cast<CGLContextEGL*>(m_pGLContext)->m_eglSurface;
+  auto* context = dynamic_cast<CGLContextEGL*>(m_pGLContext);
+  return context != nullptr ? context->m_eglSurface : EGL_NO_SURFACE;
 }
 
 EGLContext CWinSystemX11GLContext::GetEGLContext() const
 {
-  return static_cast<CGLContextEGL*>(m_pGLContext)->m_eglContext;
+  auto* context = dynamic_cast<CGLContextEGL*>(m_pGLContext);
+  return context != nullptr ? context->m_eglContext : EGL_NO_CONTEXT;
 }
 
 EGLConfig CWinSystemX11GLContext::GetEGLConfig() const
 {
-  return static_cast<CGLContextEGL*>(m_pGLContext)->m_eglConfig;
+  auto* context = dynamic_cast<CGLContextEGL*>(m_pGLContext);
+  return context != nullptr ? context->m_eglConfig : nullptr;
+}
+
+bool CWinSystemX11GLContext::BindTextureUploadContext()
+{
+  if (m_pGLContext)
+    return static_cast<CGLContextEGL*>(m_pGLContext)->BindTextureUploadContext();
+  else
+    return false;
+}
+
+bool CWinSystemX11GLContext::UnbindTextureUploadContext()
+{
+  if (m_pGLContext)
+    return static_cast<CGLContextEGL*>(m_pGLContext)->UnbindTextureUploadContext();
+  else
+    return false;
+}
+
+bool CWinSystemX11GLContext::HasContext()
+{
+  if (m_pGLContext)
+    return static_cast<CGLContextEGL*>(m_pGLContext)->HasContext();
+  else
+    return false;
 }
 
 bool CWinSystemX11GLContext::SetWindow(int width, int height, bool fullscreen, const std::string &output, int *winstate)
@@ -116,7 +152,7 @@ bool CWinSystemX11GLContext::SetWindow(int width, int height, bool fullscreen, c
   CWinSystemX11::SetWindow(width, height, fullscreen, output, &newwin);
   if (newwin)
   {
-    RefreshGLContext(m_currentOutput.compare(output) != 0);
+    RefreshGLContext(m_currentOutput.compare(output) != 0, width, height, fullscreen, output);
     XSync(m_dpy, False);
     CServiceBroker::GetWinSystem()->GetGfxContext().Clear(0);
     CServiceBroker::GetWinSystem()->GetGfxContext().Flip(true, false);
@@ -127,7 +163,7 @@ bool CWinSystemX11GLContext::SetWindow(int width, int height, bool fullscreen, c
 
     if (!m_delayDispReset)
     {
-      CSingleLock lock(m_resourceSection);
+      std::unique_lock lock(m_resourceSection);
       // tell any shared resources
       for (std::vector<IDispResource *>::iterator i = m_resources.begin(); i != m_resources.end(); ++i)
         (*i)->OnResetDisplay();
@@ -142,6 +178,7 @@ bool CWinSystemX11GLContext::CreateNewWindow(const std::string& name, bool fullS
     return false;
 
   m_pGLContext->QueryExtensions();
+  m_bufferAgeSupport = m_pGLContext->IsBufferAgeSupported();
   return true;
 }
 
@@ -152,7 +189,11 @@ bool CWinSystemX11GLContext::ResizeWindow(int newWidth, int newHeight, int newLe
   CRenderSystemGL::ResetRenderSystem(newWidth, newHeight);
 
   if (m_newGlContext)
-    g_application.ReloadSkin();
+  {
+    auto& components = CServiceBroker::GetAppComponents();
+    const auto appSkin = components.GetComponent<CApplicationSkinHandling>();
+    appSkin->ReloadSkin();
+  }
 
   return true;
 }
@@ -164,7 +205,11 @@ void CWinSystemX11GLContext::FinishWindowResize(int newWidth, int newHeight)
   CRenderSystemGL::ResetRenderSystem(newWidth, newHeight);
 
   if (m_newGlContext)
-    g_application.ReloadSkin();
+  {
+    auto& components = CServiceBroker::GetAppComponents();
+    const auto appSkin = components.GetComponent<CApplicationSkinHandling>();
+    appSkin->ReloadSkin();
+  }
 }
 
 bool CWinSystemX11GLContext::SetFullScreen(bool fullScreen, RESOLUTION_INFO& res, bool blankOtherDisplays)
@@ -174,7 +219,11 @@ bool CWinSystemX11GLContext::SetFullScreen(bool fullScreen, RESOLUTION_INFO& res
   CRenderSystemGL::ResetRenderSystem(res.iWidth, res.iHeight);
 
   if (m_newGlContext)
-    g_application.ReloadSkin();
+  {
+    auto& components = CServiceBroker::GetAppComponents();
+    const auto appSkin = components.GetComponent<CApplicationSkinHandling>();
+    appSkin->ReloadSkin();
+  }
 
   return true;
 }
@@ -195,6 +244,27 @@ bool CWinSystemX11GLContext::DestroyWindow()
 
 XVisualInfo* CWinSystemX11GLContext::GetVisual()
 {
+#if defined(HAS_GLX)
+  if ((m_pGLContext && m_pGLContext->ExtPrefix() == "GLX_") ||
+      CServiceBroker::GetAppParams()->GetGlInterface() == "glx")
+  {
+    int attribs[] = {GLX_RGBA,
+                     GLX_DOUBLEBUFFER,
+                     GLX_RED_SIZE,
+                     8,
+                     GLX_GREEN_SIZE,
+                     8,
+                     GLX_BLUE_SIZE,
+                     8,
+                     GLX_DEPTH_SIZE,
+                     24,
+                     GLX_STENCIL_SIZE,
+                     8,
+                     None};
+    return glXChooseVisual(m_dpy, m_screen, attribs);
+  }
+#endif
+
   int count = 0;
   XVisualInfo vTemplate;
   XVisualInfo *visual = nullptr;
@@ -216,14 +286,17 @@ XVisualInfo* CWinSystemX11GLContext::GetVisual()
   return visual;
 }
 
-bool CWinSystemX11GLContext::RefreshGLContext(bool force)
+bool CWinSystemX11GLContext::RefreshGLContext(
+    bool force, int width, int height, bool fullscreen, const std::string& output)
 {
   bool success = false;
   if (m_pGLContext)
   {
     if (force)
     {
-      g_application.UnloadSkin();
+      auto& components = CServiceBroker::GetAppComponents();
+      const auto appSkin = components.GetComponent<CApplicationSkinHandling>();
+      appSkin->UnloadSkin();
       CRenderSystemGL::DestroyRenderSystem();
     }
     success = m_pGLContext->Refresh(force, m_screen, m_glWindow, m_newGlContext);
@@ -251,12 +324,13 @@ bool CWinSystemX11GLContext::RefreshGLContext(bool force)
   const char* vend = (const char*) glGetString(GL_VENDOR);
   if (vend)
     gpuvendor = vend;
-  std::transform(gpuvendor.begin(), gpuvendor.end(), gpuvendor.begin(), ::tolower);
+  std::ranges::transform(gpuvendor, gpuvendor.begin(), ::tolower);
   bool isNvidia = (gpuvendor.compare(0, 6, "nvidia") == 0);
   bool isIntel = (gpuvendor.compare(0, 5, "intel") == 0);
-  std::string gli = (getenv("KODI_GL_INTERFACE") != nullptr) ? getenv("KODI_GL_INTERFACE") : "";
 
-  if (gli != "GLX")
+  std::string_view gli = CServiceBroker::GetAppParams()->GetGlInterface();
+
+  if (gli != "glx")
   {
     m_pGLContext = new CGLContextEGL(m_dpy, EGL_OPENGL_API);
     success = m_pGLContext->Refresh(force, m_screen, m_glWindow, m_newGlContext);
@@ -275,11 +349,11 @@ bool CWinSystemX11GLContext::RefreshGLContext(bool force)
           VAAPIRegister(m_vaapiProxy.get(), deepColor);
           return true;
         }
-        if (isIntel || gli == "EGL")
+        if (isIntel || gli == "egl")
           return true;
       }
     }
-    else if (gli == "EGL_PB")
+    else if (gli == "egl-pb")
     {
       success = m_pGLContext->CreatePB();
       if (success)
@@ -291,6 +365,13 @@ bool CWinSystemX11GLContext::RefreshGLContext(bool force)
 
   // fallback for vdpau
   m_pGLContext = GLXContextCreate(m_dpy);
+  if (gli != "glx")
+  {
+    // GLX requires the window and context to use the same visual.
+    m_windowDirty = true;
+    if (!CWinSystemX11::SetWindow(width, height, fullscreen, output))
+      return false;
+  }
   success = m_pGLContext->Refresh(force, m_screen, m_glWindow, m_newGlContext);
   if (success)
   {
@@ -300,13 +381,13 @@ bool CWinSystemX11GLContext::RefreshGLContext(bool force)
   return success;
 }
 
-std::unique_ptr<CVideoSync> CWinSystemX11GLContext::GetVideoSync(void *clock)
+std::unique_ptr<CVideoSync> CWinSystemX11GLContext::GetVideoSync(CVideoReferenceClock* clock)
 {
   std::unique_ptr<CVideoSync> pVSync;
 
   if (dynamic_cast<CGLContextEGL*>(m_pGLContext))
   {
-    pVSync.reset(new CVideoSyncOML(clock, *this));
+    pVSync = std::make_unique<CVideoSyncOML>(clock, *this);
   }
   else
   {

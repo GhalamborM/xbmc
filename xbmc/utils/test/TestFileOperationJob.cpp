@@ -6,6 +6,7 @@
  *  See LICENSES/README.md for more information.
  */
 
+#include "dialogs/GUIDialogExtendedProgressBar.h"
 #include "filesystem/Directory.h"
 #include "filesystem/File.h"
 #include "test/TestUtils.h"
@@ -27,7 +28,7 @@ TEST(TestFileOperationJob, ActionCopy)
 
   CFileItemPtr item(new CFileItem(tmpfilepath));
   item->SetPath(tmpfilepath);
-  item->m_bIsFolder = false;
+  item->SetFolder(false);
   item->Select(true);
   items.Add(item);
 
@@ -61,7 +62,7 @@ TEST(TestFileOperationJob, ActionMove)
 
   CFileItemPtr item(new CFileItem(tmpfilepath));
   item->SetPath(tmpfilepath);
-  item->m_bIsFolder = false;
+  item->SetFolder(false);
   item->Select(true);
   items.Add(item);
 
@@ -80,6 +81,8 @@ TEST(TestFileOperationJob, ActionMove)
 
   EXPECT_TRUE(XFILE::CFile::Delete(destfile));
   EXPECT_TRUE(XFILE::CDirectory::Remove(destpath));
+
+  EXPECT_FALSE(XBMC_DELETETEMPFILE(tmpfile));
 }
 
 TEST(TestFileOperationJob, ActionDelete)
@@ -95,7 +98,7 @@ TEST(TestFileOperationJob, ActionDelete)
 
   CFileItemPtr item(new CFileItem(tmpfilepath));
   item->SetPath(tmpfilepath);
-  item->m_bIsFolder = false;
+  item->SetFolder(false);
   item->Select(true);
   items.Add(item);
 
@@ -120,7 +123,7 @@ TEST(TestFileOperationJob, ActionDelete)
   items.Clear();
   CFileItemPtr item2(new CFileItem(destfile));
   item2->SetPath(destfile);
-  item2->m_bIsFolder = false;
+  item2->SetFolder(false);
   item2->Select(true);
   items.Add(item2);
 
@@ -130,6 +133,8 @@ TEST(TestFileOperationJob, ActionDelete)
   EXPECT_TRUE(job.DoWork());
   EXPECT_FALSE(XFILE::CFile::Exists(destfile));
   EXPECT_TRUE(XFILE::CDirectory::Remove(destpath));
+
+  EXPECT_FALSE(XBMC_DELETETEMPFILE(tmpfile));
 }
 
 TEST(TestFileOperationJob, ActionReplace)
@@ -145,7 +150,7 @@ TEST(TestFileOperationJob, ActionReplace)
 
   CFileItemPtr item(new CFileItem(tmpfilepath));
   item->SetPath(tmpfilepath);
-  item->m_bIsFolder = false;
+  item->SetFolder(false);
   item->Select(true);
   items.Add(item);
 
@@ -193,7 +198,7 @@ TEST(TestFileOperationJob, ActionCreateFolder)
 
   CFileItemPtr item(new CFileItem(destpath));
   item->SetPath(destpath);
-  item->m_bIsFolder = true;
+  item->SetFolder(true);
   item->Select(true);
   items.Add(item);
 
@@ -229,7 +234,7 @@ TEST(TestFileOperationJob, ActionDeleteFolder)
 
   CFileItemPtr item(new CFileItem(destpath));
   item->SetPath(destpath);
-  item->m_bIsFolder = true;
+  item->SetFolder(true);
   item->Select(true);
   items.Add(item);
 
@@ -261,7 +266,7 @@ TEST(TestFileOperationJob, GetFunctions)
 
   CFileItemPtr item(new CFileItem(tmpfilepath));
   item->SetPath(tmpfilepath);
-  item->m_bIsFolder = false;
+  item->SetFolder(false);
   item->Select(true);
   items.Add(item);
 
@@ -278,9 +283,40 @@ TEST(TestFileOperationJob, GetFunctions)
   EXPECT_TRUE(XFILE::CFile::Exists(destfile));
 
   std::cout << "GetAverageSpeed(): " << job.GetAverageSpeed() << std::endl;
-  std::cout << "GetCurrentOperation(): " << job.GetCurrentOperation() << std::endl;
   std::cout << "GetCurrentFile(): " << job.GetCurrentFile() << std::endl;
   EXPECT_FALSE(job.GetItems().IsEmpty());
+
+  EXPECT_TRUE(XBMC_DELETETEMPFILE(tmpfile));
+  EXPECT_TRUE(XFILE::CFile::Delete(destfile));
+  EXPECT_TRUE(XFILE::CDirectory::Remove(destpath));
+}
+
+TEST(TestFileOperationJob, ExternalProgressBarStaysOpen)
+{
+  XFILE::CFile* tmpfile;
+  ASSERT_NE(nullptr, (tmpfile = XBMC_CREATETEMPFILE("")));
+  const std::string tmpfilepath = XBMC_TEMPFILEPATH(tmpfile);
+  tmpfile->Close();
+
+  CFileItemList items;
+  CFileItemPtr item(new CFileItem(tmpfilepath));
+  item->SetPath(tmpfilepath);
+  item->SetFolder(false);
+  item->Select(true);
+  items.Add(item);
+
+  const std::string destpath =
+      URIUtils::AddFileToFolder(URIUtils::GetDirectory(tmpfilepath), "progress");
+  const std::string destfile =
+      URIUtils::AddFileToFolder(destpath, URIUtils::GetFileName(tmpfilepath));
+
+  CGUIDialogProgressBarHandle progressBar("");
+  {
+    CFileOperationJob job(CFileOperationJob::ActionCopy, items, destpath);
+    job.SetProgressIndicators(&progressBar, nullptr);
+    EXPECT_TRUE(job.DoWork());
+  }
+  EXPECT_FALSE(progressBar.IsFinished());
 
   EXPECT_TRUE(XBMC_DELETETEMPFILE(tmpfile));
   EXPECT_TRUE(XFILE::CFile::Delete(destfile));

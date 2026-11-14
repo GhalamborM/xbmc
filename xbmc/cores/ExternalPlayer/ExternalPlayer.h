@@ -17,6 +17,11 @@
 
 class CGUIDialogOK;
 
+namespace tinyxml2
+{
+class XMLElement;
+} // namespace tinyxml2
+
 class CExternalPlayer : public IPlayer, public CThread
 {
 public:
@@ -24,14 +29,14 @@ public:
 
   explicit CExternalPlayer(IPlayerCallback& callback);
   ~CExternalPlayer() override;
-  bool Initialize(TiXmlElement* pConfig) override;
+  bool Initialize(tinyxml2::XMLElement* pConfig) override;
   bool OpenFile(const CFileItem& file, const CPlayerOptions &options) override;
   bool CloseFile(bool reopen = false) override;
   bool IsPlaying() const override;
   void Pause() override;
   bool HasVideo() const override;
   bool HasAudio() const override;
-  bool CanSeek() override;
+  bool CanSeek() const override;
   void Seek(bool bPlus, bool bLargeStep, bool bChapterOverride) override;
   void SeekPercentage(float iPercent) override;
   void SetVolume(float volume) override {}
@@ -44,9 +49,7 @@ public:
 
   void SeekTime(int64_t iTime) override;
   void SetSpeed(float speed) override;
-  void DoAudioWork() override {}
 
-  std::string GetPlayerState() override;
   bool SetPlayerState(const std::string& state) override;
 
 #if defined(TARGET_WINDOWS_DESKTOP)
@@ -59,7 +62,8 @@ public:
 #endif
 
 private:
-  void GetCustomRegexpReplacers(TiXmlElement *pRootElement, std::vector<std::string>& settings);
+  void GetCustomRegexpReplacers(tinyxml2::XMLElement* pRootElement,
+                                std::vector<std::string>& settings);
   void Process() override;
 
   bool m_bAbortRequest;

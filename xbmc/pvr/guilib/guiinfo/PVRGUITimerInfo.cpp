@@ -9,16 +9,17 @@
 #include "PVRGUITimerInfo.h"
 
 #include "ServiceBroker.h"
-#include "guilib/LocalizeStrings.h"
 #include "pvr/PVRManager.h"
 #include "pvr/timers/PVRTimerInfoTag.h"
 #include "pvr/timers/PVRTimers.h"
+#include "resources/LocalizeStrings.h"
+#include "resources/ResourcesComponent.h"
 #include "settings/AdvancedSettings.h"
 #include "settings/SettingsComponent.h"
-#include "threads/SingleLock.h"
 #include "utils/StringUtils.h"
 
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -31,7 +32,7 @@ CPVRGUITimerInfo::CPVRGUITimerInfo()
 
 void CPVRGUITimerInfo::ResetProperties()
 {
-  CSingleLock lock(m_critSection);
+  std::unique_lock lock(m_critSection);
   m_strActiveTimerTitle.clear();
   m_strActiveTimerChannelName.clear();
   m_strActiveTimerChannelIcon.clear();
@@ -49,7 +50,7 @@ void CPVRGUITimerInfo::ResetProperties()
 
 bool CPVRGUITimerInfo::TimerInfoToggle()
 {
-  CSingleLock lock(m_critSection);
+  std::unique_lock lock(m_critSection);
   if (m_iTimerInfoToggleStart.time_since_epoch().count() == 0)
   {
     m_iTimerInfoToggleStart = std::chrono::steady_clock::now();
@@ -66,7 +67,8 @@ bool CPVRGUITimerInfo::TimerInfoToggle()
   {
     unsigned int iPrevious = m_iTimerInfoToggleCurrent;
     unsigned int iBoundary = m_iRecordingTimerAmount > 0 ? m_iRecordingTimerAmount : m_iTimerAmount;
-    if (++m_iTimerInfoToggleCurrent > iBoundary - 1)
+    m_iTimerInfoToggleCurrent++;
+    if (m_iTimerInfoToggleCurrent > iBoundary - 1)
       m_iTimerInfoToggleCurrent = 0;
 
     if (m_iTimerInfoToggleCurrent != iPrevious)
@@ -95,7 +97,7 @@ void CPVRGUITimerInfo::UpdateTimersToggle()
     std::vector<std::shared_ptr<CPVRTimerInfoTag>> activeTags = GetActiveRecordings();
     if (m_iTimerInfoToggleCurrent < activeTags.size())
     {
-      const std::shared_ptr<CPVRTimerInfoTag> tag = activeTags.at(m_iTimerInfoToggleCurrent);
+      const std::shared_ptr<const CPVRTimerInfoTag> tag = activeTags.at(m_iTimerInfoToggleCurrent);
       strActiveTimerTitle = tag->Title();
       strActiveTimerChannelName = tag->ChannelName();
       strActiveTimerChannelIcon = tag->ChannelIcon();
@@ -103,7 +105,7 @@ void CPVRGUITimerInfo::UpdateTimersToggle()
     }
   }
 
-  CSingleLock lock(m_critSection);
+  std::unique_lock lock(m_critSection);
   m_strActiveTimerTitle = strActiveTimerTitle;
   m_strActiveTimerChannelName = strActiveTimerChannelName;
   m_strActiveTimerChannelIcon = strActiveTimerChannelIcon;
@@ -116,7 +118,7 @@ void CPVRGUITimerInfo::UpdateTimersCache()
   int iRecordingTimerAmount = AmountActiveRecordings();
 
   {
-    CSingleLock lock(m_critSection);
+    std::unique_lock lock(m_critSection);
     m_iTimerAmount = iTimerAmount;
     m_iRecordingTimerAmount = iRecordingTimerAmount;
     m_iTimerInfoToggleStart = {};
@@ -133,7 +135,7 @@ void CPVRGUITimerInfo::UpdateNextTimer()
   std::string strNextRecordingTime;
   std::string strNextTimerInfo;
 
-  const std::shared_ptr<CPVRTimerInfoTag> timer = GetNextActiveTimer();
+  const std::shared_ptr<const CPVRTimerInfoTag> timer = GetNextActiveTimer();
   if (timer)
   {
     strNextRecordingTitle = timer->Title();
@@ -141,13 +143,14 @@ void CPVRGUITimerInfo::UpdateNextTimer()
     strNextRecordingChannelIcon = timer->ChannelIcon();
     strNextRecordingTime = timer->StartAsLocalTime().GetAsLocalizedDateTime(false, false);
 
-    strNextTimerInfo = StringUtils::Format("{} {} {} {}", g_localizeStrings.Get(19106),
-                                           timer->StartAsLocalTime().GetAsLocalizedDate(true),
-                                           g_localizeStrings.Get(19107),
-                                           timer->StartAsLocalTime().GetAsLocalizedTime("", false));
+    strNextTimerInfo = StringUtils::Format(
+        "{} {} {} {}", CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(19106),
+        timer->StartAsLocalTime().GetAsLocalizedDate(true),
+        CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(19107),
+        timer->StartAsLocalTime().GetAsLocalizedTime("", false));
   }
 
-  CSingleLock lock(m_critSection);
+  std::unique_lock lock(m_critSection);
   m_strNextRecordingTitle = strNextRecordingTitle;
   m_strNextRecordingChannelName = strNextRecordingChannelName;
   m_strNextRecordingChannelIcon = strNextRecordingChannelIcon;
@@ -157,55 +160,55 @@ void CPVRGUITimerInfo::UpdateNextTimer()
 
 const std::string& CPVRGUITimerInfo::GetActiveTimerTitle() const
 {
-  CSingleLock lock(m_critSection);
+  std::unique_lock lock(m_critSection);
   return m_strActiveTimerTitle;
 }
 
 const std::string& CPVRGUITimerInfo::GetActiveTimerChannelName() const
 {
-  CSingleLock lock(m_critSection);
+  std::unique_lock lock(m_critSection);
   return m_strActiveTimerChannelName;
 }
 
 const std::string& CPVRGUITimerInfo::GetActiveTimerChannelIcon() const
 {
-  CSingleLock lock(m_critSection);
+  std::unique_lock lock(m_critSection);
   return m_strActiveTimerChannelIcon;
 }
 
 const std::string& CPVRGUITimerInfo::GetActiveTimerDateTime() const
 {
-  CSingleLock lock(m_critSection);
+  std::unique_lock lock(m_critSection);
   return m_strActiveTimerTime;
 }
 
 const std::string& CPVRGUITimerInfo::GetNextTimerTitle() const
 {
-  CSingleLock lock(m_critSection);
+  std::unique_lock lock(m_critSection);
   return m_strNextRecordingTitle;
 }
 
 const std::string& CPVRGUITimerInfo::GetNextTimerChannelName() const
 {
-  CSingleLock lock(m_critSection);
+  std::unique_lock lock(m_critSection);
   return m_strNextRecordingChannelName;
 }
 
 const std::string& CPVRGUITimerInfo::GetNextTimerChannelIcon() const
 {
-  CSingleLock lock(m_critSection);
+  std::unique_lock lock(m_critSection);
   return m_strNextRecordingChannelIcon;
 }
 
 const std::string& CPVRGUITimerInfo::GetNextTimerDateTime() const
 {
-  CSingleLock lock(m_critSection);
+  std::unique_lock lock(m_critSection);
   return m_strNextRecordingTime;
 }
 
 const std::string& CPVRGUITimerInfo::GetNextTimer() const
 {
-  CSingleLock lock(m_critSection);
+  std::unique_lock lock(m_critSection);
   return m_strNextTimerInfo;
 }
 

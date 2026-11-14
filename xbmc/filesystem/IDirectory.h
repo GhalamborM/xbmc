@@ -15,30 +15,45 @@
 class CFileItemList;
 class CProfileManager;
 class CURL;
+class CFileItem;
 
 namespace XFILE
 {
-  enum DIR_CACHE_TYPE
-  {
-    DIR_CACHE_NEVER = 0, ///< Never cache this directory to memory
-    DIR_CACHE_ONCE,      ///< Cache this directory to memory for each fetch (so that FileExists() checks are fast)
-    DIR_CACHE_ALWAYS     ///< Always cache this directory to memory, so that each additional fetch of this folder will utilize the cache (until it's cleared)
-  };
+/*!
+ \brief max attempts to resolve an item.
+ \sa Resolve
+ */
+static constexpr size_t MAX_ITEM_RESOLVE_ATTEMPTS{5};
 
-  /*! \brief Available directory flags
+/*! \brief Optional item properties a GetDirectory implementation may set.
+ Raw stat times in seconds since epoch, exactly as the filesystem reported
+ them, no local time conversion; consumers decide any mtime/ctime fallback.
+ */
+static constexpr const char* DIR_PROPERTY_STAT_MTIME{"stat:st_mtime"};
+static constexpr const char* DIR_PROPERTY_STAT_CTIME{"stat:st_ctime"};
+
+enum class CacheType
+{
+  NEVER = 0, ///< Never cache this directory to memory
+  ONCE, ///< Cache this directory to memory for each fetch (so that FileExists() checks are fast)
+  ALWAYS ///< Always cache this directory to memory, so that each additional fetch of this folder will utilize the cache (until it's cleared)
+};
+
+/*! \brief Available directory flags
    The defaults are to allow file directories, no prompting, retrieve file information, hide hidden files, and utilise the directory cache
    based on the implementation's wishes.
    */
-  enum DIR_FLAG
-  {
-    DIR_FLAG_DEFAULTS      = 0,
-    DIR_FLAG_NO_FILE_DIRS  = (2 << 0), ///< Don't convert files (zip, rar etc.) to directories
-    DIR_FLAG_ALLOW_PROMPT  = (2 << 1), ///< Allow prompting for further info (passwords etc.)
-    DIR_FLAG_NO_FILE_INFO  = (2 << 2), ///< Don't read additional file info (stat for example)
-    DIR_FLAG_GET_HIDDEN    = (2 << 3), ///< Get hidden files
-    DIR_FLAG_READ_CACHE    = (2 << 4), ///< Force reading from the directory cache (if available)
-    DIR_FLAG_BYPASS_CACHE  = (2 << 5)  ///< Completely bypass the directory cache (no reading, no writing)
-  };
+enum DIR_FLAG
+{
+  DIR_FLAG_DEFAULTS = 0,
+  DIR_FLAG_NO_FILE_DIRS = (2 << 0), ///< Don't convert files (zip, rar etc.) to directories
+  DIR_FLAG_ALLOW_PROMPT = (2 << 1), ///< Allow prompting for further info (passwords etc.)
+  DIR_FLAG_NO_FILE_INFO = (2 << 2), ///< Don't read additional file info (stat for example)
+  DIR_FLAG_GET_HIDDEN = (2 << 3), ///< Get hidden files
+  DIR_FLAG_READ_CACHE = (2 << 4), ///< Force reading from the directory cache (if available)
+  DIR_FLAG_BYPASS_CACHE =
+      (2 << 5) ///< Completely bypass the directory cache (no reading, no writing)
+};
 /*!
  \ingroup filesystem
  \brief Interface to the directory on a file system.
@@ -96,6 +111,13 @@ public:
   virtual bool Remove(const CURL& url) { return false; }
 
   /*!
+  \brief Provided a path, attempts to resolve to a mount point
+  \param path Path to resolve
+  \return Returns the mountpoint if found, else the provided path
+  */
+  virtual std::string ResolveMountPoint(const std::string& path) const { return path; }
+
+  /*!
   \brief Recursively removes the directory
   \param url Directory to remove.
   \return Returns \e false if not successful
@@ -119,7 +141,7 @@ public:
   \param url Directory at hand.
   \return Returns the cache type.
   */
-  virtual DIR_CACHE_TYPE GetCacheType(const CURL& url) const { return DIR_CACHE_ONCE; }
+  virtual CacheType GetCacheType(const CURL& url) const { return CacheType::ONCE; }
 
   void SetMask(const std::string& strMask);
   void SetFlags(int flags);
@@ -132,6 +154,14 @@ public:
    \sa GetKeyboardInput, SetErrorDialog, RequireAuthentication
    */
   bool ProcessRequirements();
+
+  /*!
+  \brief Resolves a given item to a playable item
+  \note Some directories (e.g. dvd, bluray, plugins etc) need to be translated/resolved to the actual playback url
+  \param item The item being manipulated (which the path points to a vfs protocol implementation)
+  \return true if the item was resolved, false if it failed to resolve
+  */
+  virtual bool Resolve(CFileItem& item) const { return true; }
 
 protected:
   /*! \brief Prompt the user for some keyboard input

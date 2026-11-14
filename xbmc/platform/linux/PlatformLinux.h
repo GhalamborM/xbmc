@@ -21,7 +21,12 @@ public:
   ~CPlatformLinux() override = default;
 
   bool InitStageOne() override;
-  bool IsConfigureAddonsAtStartupEnabled() override { return true; }
+  void DeinitStageOne() override;
+
+  bool IsConfigureAddonsAtStartupEnabled() override;
+
+protected:
+  virtual void RegisterPowerManagement();
 
 private:
   std::unique_ptr<OPTIONALS::CLircContainer, OPTIONALS::delete_CLircContainer> m_lirc;

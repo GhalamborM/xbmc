@@ -8,7 +8,6 @@
 
 #pragma once
 
-#include "XBDateTime.h"
 #include "guilib/DirtyRegion.h"
 #include "guilib/GUIControl.h"
 #include "guilib/GUIListItemLayout.h"
@@ -19,256 +18,301 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
+class CDateTime;
 class CFileItem;
 class CFileItemList;
 class CGUIListItem;
 class CGUIListItemLayout;
+class TiXmlElement;
 
 namespace PVR
 {
-  class CPVRChannel;
-  class CPVRChannelGroupMember;
-  class CPVRChannelNumber;
+class CPVRChannel;
+class CPVRChannelGroupMember;
+class CPVRChannelNumber;
 
-  class CGUIEPGGridContainerModel;
+class CGUIEPGGridContainerModel;
 
-  class CGUIEPGGridContainer : public IGUIContainer
-  {
-  public:
-    CGUIEPGGridContainer(int parentID, int controlID, float posX, float posY, float width, float height,
-                         ORIENTATION orientation, int scrollTime, int preloadItems, int minutesPerPage,
-                         int rulerUnit, const CTextureInfo& progressIndicatorTexture);
-    CGUIEPGGridContainer(const CGUIEPGGridContainer& other);
+class CGUIEPGGridContainer : public IGUIContainer
+{
+public:
+  static constexpr unsigned int DEFAULT_MINUTES_PER_BLOCK{5};
+  static constexpr unsigned int MINUTES_PER_RULER_UNIT{5};
 
-    CGUIEPGGridContainer* Clone() const override { return new CGUIEPGGridContainer(*this); }
+  CGUIEPGGridContainer(int parentID,
+                       int controlID,
+                       float posX,
+                       float posY,
+                       float width,
+                       float height,
+                       ORIENTATION orientation,
+                       int scrollTime,
+                       int preloadItems,
+                       int timeBlocks,
+                       unsigned int minutesPerTimeBlock,
+                       int rulerUnit,
+                       const CTextureInfo& progressIndicatorTexture);
+  CGUIEPGGridContainer(const CGUIEPGGridContainer& other);
 
-    /*!
-     * @brief Check whether the control currently holds data.
-     * @return true if the control has data, false otherwise.
-     */
-    bool HasData() const;
+  CGUIEPGGridContainer* Clone() const override { return new CGUIEPGGridContainer(*this); }
 
-    void AllocResources() override;
-    void FreeResources(bool immediately) override;
+  /*!
+   * @brief Check whether the control currently holds data.
+   * @return true if the control has data, false otherwise.
+   */
+  bool HasData() const;
 
-    bool OnAction(const CAction& action) override;
-    void OnDown() override;
-    void OnUp() override;
-    void OnLeft() override;
-    void OnRight() override;
-    bool OnMouseOver(const CPoint& point) override;
-    bool OnMessage(CGUIMessage& message) override;
-    void SetFocus(bool focus) override;
-    std::string GetDescription() const override;
-    EVENT_RESULT OnMouseEvent(const CPoint& point, const CMouseEvent& event) override;
+  void AllocResources() override;
+  void FreeResources(bool immediately) override;
 
-    void Process(unsigned int currentTime, CDirtyRegionList& dirtyregions) override;
-    void Render() override;
+  bool OnAction(const CAction& action) override;
+  void OnDown() override;
+  void OnUp() override;
+  void OnLeft() override;
+  void OnRight() override;
+  bool OnMouseOver(const CPoint& point) override;
+  bool OnMessage(CGUIMessage& message) override;
+  void SetFocus(bool focus) override;
+  std::string GetDescription() const override;
+  EVENT_RESULT OnMouseEvent(const CPoint& point, const KODI::MOUSE::CMouseEvent& event) override;
 
-    CGUIListItemPtr GetListItem(int offset, unsigned int flag = 0) const override;
-    std::string GetLabel(int info) const override;
+  void Process(unsigned int currentTime, CDirtyRegionList& dirtyregions) override;
+  void Render() override;
 
-    std::shared_ptr<CFileItem> GetSelectedGridItem(int offset = 0) const;
-    std::shared_ptr<CPVRChannelGroupMember> GetSelectedChannelGroupMember() const;
-    CDateTime GetSelectedDate() const;
+  std::shared_ptr<CGUIListItem> GetListItem(int offset, unsigned int flag = 0) const override;
+  std::string GetLabel(int info) const override;
 
-    void LoadLayout(TiXmlElement* layout);
-    void SetPageControl(int id);
+  std::shared_ptr<CFileItem> GetSelectedGridItem(int offset = 0) const;
+  std::shared_ptr<CPVRChannelGroupMember> GetSelectedChannelGroupMember() const;
+  CDateTime GetSelectedDate() const;
 
-    /*! \brief Set the offset of the first item in the container from the container's position
-     Useful for lists/panels where the focused item may be larger than the non-focused items and thus
-     normally cut off from the clipping window defined by the container's position + size.
-     \param offset CPoint holding the offset in skin coordinates.
-     */
-    void SetRenderOffset(const CPoint& offset);
+  void LoadLayout(TiXmlElement* layout);
+  void SetPageControl(int id);
 
-    void JumpToNow();
-    void JumpToDate(const CDateTime& date);
+  /*! \brief Set the offset of the first item in the container from the container's position
+   Useful for lists/panels where the focused item may be larger than the non-focused items and thus
+   normally cut off from the clipping window defined by the container's position + size.
+   \param offset CPoint holding the offset in skin coordinates.
+   */
+  void SetRenderOffset(const CPoint& offset);
 
-    void GoToBegin();
-    void GoToEnd();
-    void GoToNow();
-    void GoToDate(const CDateTime& date);
+  void JumpToNow();
+  void JumpToDate(const CDateTime& date);
 
-    void GoToFirstChannel();
-    void GoToLastChannel();
+  void GoToBegin();
+  void GoToEnd();
+  void GoToNow();
+  void GoToDate(const CDateTime& date);
 
-    void GoToTop();
-    void GoToBottom();
-    void GoToMostLeft();
-    void GoToMostRight();
+  void GoToFirstChannel();
+  void GoToLastChannel();
 
-    void SetTimelineItems(const std::unique_ptr<CFileItemList>& items,
-                          const CDateTime& gridStart,
-                          const CDateTime& gridEnd);
+  void GoToTop();
+  void GoToBottom();
+  void GoToMostLeft();
+  void GoToMostRight();
 
-    std::unique_ptr<CFileItemList> GetCurrentTimeLineItems() const;
+  void SetTimelineItems(const CFileItemList& items,
+                        const CDateTime& gridStart,
+                        const CDateTime& gridEnd);
 
-    /*!
-     * @brief Set the control's selection to the given channel and set the control's view port to show the channel.
-     * @param channel the channel.
-     * @return true if the selection was set to the given channel, false otherwise.
-     */
-    bool SetChannel(const std::shared_ptr<CPVRChannel>& channel);
+  std::unique_ptr<CFileItemList> GetCurrentTimeLineItems() const;
 
-    /*!
-     * @brief Set the control's selection to the given channel and set the control's view port to show the channel.
-     * @param channel the channel's path.
-     * @return true if the selection was set to the given channel, false otherwise.
-     */
-    bool SetChannel(const std::string& channel);
+  /*!
+   * @brief Set the control's selection to the given channel and set the control's view port to show the channel.
+   * @param channel the channel.
+   * @return true if the selection was set to the given channel, false otherwise.
+   */
+  bool SetChannel(const std::shared_ptr<CPVRChannel>& channel);
 
-    /*!
-     * @brief Set the control's selection to the given channel and set the control's view port to show the channel.
-     * @param channelNumber the channel's number.
-     * @return true if the selection was set to the given channel, false otherwise.
-     */
-    bool SetChannel(const CPVRChannelNumber& channelNumber);
+  /*!
+   * @brief Set the control's selection to the given channel and set the control's view port to show the channel.
+   * @param channel the channel's path.
+   * @return true if the selection was set to the given channel, false otherwise.
+   */
+  bool SetChannel(std::string_view channel);
 
-  private:
-    bool OnClick(int actionID);
-    bool SelectItemFromPoint(const CPoint& point, bool justGrid = true);
+  /*!
+   * @brief Set the control's selection to the given channel and set the control's view port to show the channel.
+   * @param channelNumber the channel's number.
+   * @return true if the selection was set to the given channel, false otherwise.
+   */
+  bool SetChannel(const CPVRChannelNumber& channelNumber);
 
-    void SetChannel(int channel);
+  void AssignDepth() override;
 
-    void SetBlock(int block, bool bUpdateBlockTravelAxis = true);
-    void UpdateBlock(bool bUpdateBlockTravelAxis = true);
+  void AssignItemDepth(CGUIListItem* item, bool focused) const;
 
-    void ChannelScroll(int amount);
-    void ProgrammesScroll(int amount);
-    void ValidateOffset();
-    void UpdateLayout();
+private:
+  bool OnClick(int actionID) const;
+  bool SelectItemFromPoint(const CPoint& point, bool justGrid = true);
 
-    void SetItem(const std::pair<std::shared_ptr<CFileItem>, int>& itemInfo);
-    bool SetItem(const std::shared_ptr<CFileItem>& item, int channelIndex, int blockIndex);
-    std::shared_ptr<CFileItem> GetItem() const;
-    std::pair<std::shared_ptr<CFileItem>, int> GetNextItem() const;
-    std::pair<std::shared_ptr<CFileItem>, int> GetPrevItem() const;
-    void UpdateItem();
+  void SetChannel(int channel);
 
-    void MoveToRow(int row);
+  void SetBlock(int block, bool bUpdateBlockTravelAxis = true);
+  void UpdateBlock(bool bUpdateBlockTravelAxis = true);
 
-    CGUIListItemLayout* GetFocusedLayout() const;
+  void ChannelScroll(int amount);
+  void ProgrammesScroll(int amount);
+  void ValidateOffset();
+  void UpdateLayout();
 
-    void ScrollToBlockOffset(int offset);
-    void ScrollToChannelOffset(int offset);
-    void GoToBlock(int blockIndex);
-    void GoToChannel(int channelIndex);
-    void UpdateScrollOffset(unsigned int currentTime);
-    void ProcessItem(float posX, float posY, const std::shared_ptr<CFileItem>& item, std::shared_ptr<CFileItem>& lastitem, bool focused, CGUIListItemLayout* normallayout, CGUIListItemLayout* focusedlayout, unsigned int currentTime, CDirtyRegionList& dirtyregions, float resize = -1.0f);
-    void RenderItem(float posX, float posY, CGUIListItem* item, bool focused);
-    void GetCurrentLayouts();
+  void SetItem(const std::pair<std::shared_ptr<CFileItem>, int>& itemInfo);
+  bool SetItem(const std::shared_ptr<CFileItem>& item, int channelIndex, int blockIndex);
+  std::shared_ptr<CFileItem> GetItem() const;
+  std::pair<std::shared_ptr<CFileItem>, int> GetNextItem() const;
+  std::pair<std::shared_ptr<CFileItem>, int> GetPrevItem() const;
+  void UpdateItem();
 
-    void ProcessChannels(unsigned int currentTime, CDirtyRegionList& dirtyregions);
-    void ProcessRuler(unsigned int currentTime, CDirtyRegionList& dirtyregions);
-    void ProcessRulerDate(unsigned int currentTime, CDirtyRegionList& dirtyregions);
-    void ProcessProgrammeGrid(unsigned int currentTime, CDirtyRegionList& dirtyregions);
-    void ProcessProgressIndicator(unsigned int currentTime, CDirtyRegionList& dirtyregions);
-    void RenderChannels();
-    void RenderRulerDate();
-    void RenderRuler();
-    void RenderProgrammeGrid();
-    void RenderProgressIndicator();
+  void MoveToRow(int row);
 
-    CPoint m_renderOffset; ///< \brief render offset of the first item in the list \sa SetRenderOffset
+  CGUIListItemLayout* GetFocusedLayout() const;
 
-    ORIENTATION m_orientation;
+  void ScrollToBlockOffset(int offset);
+  void ScrollToChannelOffset(int offset);
+  void GoToBlock(int blockIndex);
+  void GoToChannel(int channelIndex);
+  void UpdateScrollOffset(unsigned int currentTime);
+  void ProcessItem(float posX,
+                   float posY,
+                   const std::shared_ptr<CFileItem>& item,
+                   std::shared_ptr<CFileItem>& lastitem,
+                   bool focused,
+                   CGUIListItemLayout* normallayout,
+                   CGUIListItemLayout* focusedlayout,
+                   unsigned int currentTime,
+                   CDirtyRegionList& dirtyregions,
+                   float resize = -1.0f);
+  void RenderItem(float posX, float posY, CGUIListItem* item, bool focused) const;
+  void GetCurrentLayouts();
 
-    std::vector<CGUIListItemLayout> m_channelLayouts;
-    std::vector<CGUIListItemLayout> m_focusedChannelLayouts;
-    std::vector<CGUIListItemLayout> m_focusedProgrammeLayouts;
-    std::vector<CGUIListItemLayout> m_programmeLayouts;
-    std::vector<CGUIListItemLayout> m_rulerLayouts;
-    std::vector<CGUIListItemLayout> m_rulerDateLayouts;
+  void ProcessChannels(unsigned int currentTime, CDirtyRegionList& dirtyregions);
+  void ProcessRuler(unsigned int currentTime, CDirtyRegionList& dirtyregions);
+  void ProcessRulerDate(unsigned int currentTime, CDirtyRegionList& dirtyregions);
+  void ProcessProgrammeGrid(unsigned int currentTime, CDirtyRegionList& dirtyregions);
+  void ProcessProgressIndicator(unsigned int currentTime);
+  void RenderChannels();
+  void RenderRulerDate();
+  void RenderRuler();
+  void RenderProgrammeGrid();
+  void RenderProgressIndicator();
 
-    CGUIListItemLayout* m_channelLayout;
-    CGUIListItemLayout* m_focusedChannelLayout;
-    CGUIListItemLayout* m_programmeLayout;
-    CGUIListItemLayout* m_focusedProgrammeLayout;
-    CGUIListItemLayout* m_rulerLayout;
-    CGUIListItemLayout* m_rulerDateLayout;
+  void GetChannelCacheOffsets(int& cacheBefore, int& cacheAfter) const;
+  void GetProgrammeCacheOffsets(int& cacheBefore, int& cacheAfter) const;
 
-    int m_pageControl;
+  bool OnMouseClick(int dwButton, const CPoint& point);
+  bool OnMouseDoubleClick(int dwButton, const CPoint& point);
+  bool OnMouseWheel(char wheel, const CPoint& point);
 
-    void GetChannelCacheOffsets(int& cacheBefore, int& cacheAfter);
-    void GetProgrammeCacheOffsets(int& cacheBefore, int& cacheAfter);
+  void HandleChannels(bool bRender,
+                      unsigned int currentTime,
+                      CDirtyRegionList& dirtyregions,
+                      bool bAssignDepth = false);
+  void HandleRuler(bool bRender,
+                   unsigned int currentTime,
+                   CDirtyRegionList& dirtyregions,
+                   bool bAssignDepth = false);
+  void HandleRulerDate(bool bRender,
+                       unsigned int currentTime,
+                       CDirtyRegionList& dirtyregions,
+                       bool bAssignDepth = false);
+  void HandleProgrammeGrid(bool bRender,
+                           unsigned int currentTime,
+                           CDirtyRegionList& dirtyregions,
+                           bool bAssignDepth = false);
 
-  private:
-    bool OnMouseClick(int dwButton, const CPoint& point);
-    bool OnMouseDoubleClick(int dwButton, const CPoint& point);
-    bool OnMouseWheel(char wheel, const CPoint& point);
+  float GetCurrentTimePositionOnPage() const;
+  float GetProgressIndicatorWidth() const;
+  float GetProgressIndicatorHeight() const;
 
-    void HandleChannels(bool bRender, unsigned int currentTime, CDirtyRegionList& dirtyregions);
-    void HandleRuler(bool bRender, unsigned int currentTime, CDirtyRegionList& dirtyregions);
-    void HandleRulerDate(bool bRender, unsigned int currentTime, CDirtyRegionList& dirtyregions);
-    void HandleProgrammeGrid(bool bRender, unsigned int currentTime, CDirtyRegionList& dirtyregions);
+  void UpdateItems();
 
-    float GetCurrentTimePositionOnPage() const;
-    float GetProgressIndicatorWidth() const;
-    float GetProgressIndicatorHeight() const;
+  float GetChannelScrollOffsetPos() const;
+  float GetProgrammeScrollOffsetPos() const;
+  int GetChannelScrollOffset(const CGUIListItemLayout& layout) const;
+  int GetProgrammeScrollOffset() const;
 
-    void UpdateItems();
+  int GetBlockScrollOffset() const;
 
-    float GetChannelScrollOffsetPos() const;
-    float GetProgrammeScrollOffsetPos() const;
-    int GetChannelScrollOffset(CGUIListItemLayout* layout) const;
-    int GetProgrammeScrollOffset() const;
+  CPoint m_renderOffset; ///< \brief render offset of the first item in the list \sa SetRenderOffset
 
-    int m_rulerUnit; //! number of blocks that makes up one element of the ruler
-    int m_channelsPerPage;
-    int m_programmesPerPage;
-    int m_channelCursor;
-    int m_channelOffset;
-    int m_blocksPerPage;
-    int m_blockCursor;
-    int m_blockOffset;
-    int m_blockTravelAxis;
-    int m_cacheChannelItems;
-    int m_cacheProgrammeItems;
-    int m_cacheRulerItems;
+  ORIENTATION m_orientation{VERTICAL};
 
-    float m_rulerDateHeight; //! height of ruler date item
-    float m_rulerDateWidth; //! width of ruler date item
-    float m_rulerPosX; //! X position of first ruler item
-    float m_rulerPosY; //! Y position of first ruler item
-    float m_rulerHeight; //! height of the scrolling timeline above the ruler items
-    float m_rulerWidth; //! width of each element of the ruler
-    float m_channelPosX; //! X position of first channel row
-    float m_channelPosY; //! Y position of first channel row
-    float m_channelHeight; //! height of the channel item
-    float m_channelWidth; //! width of the channel item
-    float m_gridPosX; //! X position of first grid item
-    float m_gridPosY; //! Y position of first grid item
-    float m_gridWidth; //! width of the epg grid control
-    float m_gridHeight; //! height of the epg grid control
-    float m_blockSize; //! a block's width in pixels
-    float m_analogScrollCount;
+  std::vector<CGUIListItemLayout> m_channelLayouts;
+  std::vector<CGUIListItemLayout> m_focusedChannelLayouts;
+  std::vector<CGUIListItemLayout> m_focusedProgrammeLayouts;
+  std::vector<CGUIListItemLayout> m_programmeLayouts;
+  std::vector<CGUIListItemLayout> m_rulerLayouts;
+  std::vector<CGUIListItemLayout> m_rulerDateLayouts;
 
-    std::unique_ptr<CGUITexture> m_guiProgressIndicatorTexture;
+  CGUIListItemLayout* m_channelLayout{nullptr};
+  CGUIListItemLayout* m_focusedChannelLayout{nullptr};
+  CGUIListItemLayout* m_programmeLayout{nullptr};
+  CGUIListItemLayout* m_focusedProgrammeLayout{nullptr};
+  CGUIListItemLayout* m_rulerLayout{nullptr};
+  CGUIListItemLayout* m_rulerDateLayout{nullptr};
 
-    std::shared_ptr<CFileItem> m_lastItem;
-    std::shared_ptr<CFileItem> m_lastChannel;
+  int m_pageControl{0};
 
-    bool m_bEnableProgrammeScrolling = true;
-    bool m_bEnableChannelScrolling = true;
+  const int m_blocksPerRulerItem{0}; //! number of blocks that make up one element of the ruler
+  const int m_blocksPerPage{0};
+  const unsigned int m_minutesPerBlock{DEFAULT_MINUTES_PER_BLOCK};
 
-    int m_scrollTime;
+  int m_channelsPerPage{0};
+  int m_programmesPerPage{0};
+  int m_channelCursor{0};
+  int m_channelOffset{0};
+  int m_blockCursor{0};
+  int m_blockOffset{0};
+  int m_blockTravelAxis{0};
+  int m_cacheChannelItems{0};
+  int m_cacheProgrammeItems{0};
+  int m_cacheRulerItems{0};
 
-    int m_programmeScrollLastTime;
-    float m_programmeScrollSpeed;
-    float m_programmeScrollOffset;
+  float m_rulerDateHeight{0.0f}; //! height of ruler date item
+  float m_rulerDateWidth{0.0f}; //! width of ruler date item
+  float m_rulerPosX{0.0f}; //! X position of first ruler item
+  float m_rulerPosY{0.0f}; //! Y position of first ruler item
+  float m_rulerHeight{0.0f}; //! height of the scrolling timeline above the ruler items
+  float m_rulerWidth{0.0f}; //! width of each element of the ruler
+  float m_channelPosX{0.0f}; //! X position of first channel row
+  float m_channelPosY{0.0f}; //! Y position of first channel row
+  float m_channelHeight{0.0f}; //! height of the channel item
+  float m_channelWidth{0.0f}; //! width of the channel item
+  float m_gridPosX{0.0f}; //! X position of first grid item
+  float m_gridPosY{0.0f}; //! Y position of first grid item
+  float m_gridWidth{0.0f}; //! width of the epg grid control
+  float m_gridHeight{0.0f}; //! height of the epg grid control
+  float m_blockSize{0.0f}; //! a block's width in pixels
+  float m_analogScrollCount{0.0f};
 
-    int m_channelScrollLastTime;
-    float m_channelScrollSpeed;
-    float m_channelScrollOffset;
+  std::unique_ptr<CGUITexture> m_guiProgressIndicatorTexture;
+  uint32_t m_guiProgressIndicatorTextureDepth{0};
 
-    mutable CCriticalSection m_critSection;
-    std::unique_ptr<CGUIEPGGridContainerModel> m_gridModel;
-    std::unique_ptr<CGUIEPGGridContainerModel> m_updatedGridModel;
+  std::shared_ptr<CFileItem> m_lastItem;
+  std::shared_ptr<CFileItem> m_lastChannel;
 
-    int m_itemStartBlock = 0;
-  };
-}
+  bool m_bEnableProgrammeScrolling{true};
+  bool m_bEnableChannelScrolling{true};
+
+  int m_scrollTime{0};
+
+  unsigned int m_programmeScrollLastTime{0};
+  float m_programmeScrollSpeed{0.0f};
+  float m_programmeScrollOffset{0.0f};
+
+  unsigned int m_channelScrollLastTime{0};
+  float m_channelScrollSpeed{0.0f};
+  float m_channelScrollOffset{0.0f};
+
+  mutable CCriticalSection m_critSection;
+  std::unique_ptr<CGUIEPGGridContainerModel> m_gridModel;
+  std::unique_ptr<CGUIEPGGridContainerModel> m_updatedGridModel;
+
+  int m_itemStartBlock{0};
+};
+} // namespace PVR

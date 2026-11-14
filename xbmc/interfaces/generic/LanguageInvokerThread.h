@@ -11,6 +11,7 @@
 #include "interfaces/generic/ILanguageInvoker.h"
 #include "threads/Thread.h"
 
+#include <chrono>
 #include <string>
 #include <vector>
 
@@ -19,7 +20,7 @@ class CScriptInvocationManager;
 class CLanguageInvokerThread : public ILanguageInvoker, protected CThread
 {
 public:
-  CLanguageInvokerThread(LanguageInvokerPtr invoker,
+  CLanguageInvokerThread(std::shared_ptr<ILanguageInvoker> invoker,
                          CScriptInvocationManager* invocationManager,
                          bool reuseable);
   ~CLanguageInvokerThread() override;
@@ -27,12 +28,22 @@ public:
   virtual InvokerState GetState() const;
 
   const std::string& GetScript() const { return m_script; }
-  LanguageInvokerPtr GetInvoker() const { return m_invoker; }
+  std::shared_ptr<ILanguageInvoker> GetInvoker() const { return m_invoker; }
   bool Reuseable(const std::string& script) const
   {
     return !m_bStop && m_reusable && GetState() == InvokerStateScriptDone && m_script == script;
   };
   virtual void Release();
+
+  /*!
+   * \brief Wait for the thread to end.
+   * \param timeout How long to wait at most.
+   * \return True if the thread is not running.
+   */
+  bool WaitForExit(std::chrono::milliseconds timeout)
+  {
+    return CThread::Join(timeout) || !CThread::IsRunning();
+  }
 
 protected:
   bool execute(const std::string &script, const std::vector<std::string> &arguments) override;
@@ -44,7 +55,7 @@ protected:
   void OnException() override;
 
 private:
-  LanguageInvokerPtr m_invoker;
+  std::shared_ptr<ILanguageInvoker> m_invoker;
   CScriptInvocationManager *m_invocationManager;
   std::string m_script;
   std::vector<std::string> m_args;

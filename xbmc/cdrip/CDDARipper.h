@@ -8,11 +8,12 @@
 
 #pragma once
 
-#include "utils/JobManager.h"
+#include "jobs/JobQueue.h"
 
 #include <string>
 
 class CFileItem;
+enum class LegalPath;
 
 namespace MUSIC_INFO
 {
@@ -79,7 +80,7 @@ private:
    */
   bool CreateAlbumDir(const MUSIC_INFO::CMusicInfoTag& infoTag,
                       std::string& strDirectory,
-                      int& legalType);
+                      LegalPath& legalType);
 
   /*!
    * \brief Return formatted album subfolder for rip path

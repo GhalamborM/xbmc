@@ -9,6 +9,7 @@
 #pragma once
 
 #include "RetroPlayerStreamTypes.h"
+#include "cores/RetroPlayer/RetroPlayerTypes.h"
 
 namespace KODI
 {
@@ -35,6 +36,40 @@ public:
    * \param stream The stream to close
    */
   virtual void CloseStream(StreamPtr stream) = 0;
+
+  /*!
+   * \brief Update the video frame rate reported by the game
+   *
+   * \param fps The new frame rate
+   */
+  virtual void SetVideoFps(float fps) = 0;
+
+  /*!
+   * \brief Get a symbol from the hardware context
+   *
+   * \param symbol The symbol's name
+   *
+   * \return A function pointer for the specified symbol
+   */
+  virtual HwProcedureAddress GetHwProcedureAddress(const char* symbol) = 0;
+
+  /*!
+   * \brief Whether a client can be given a framebuffer to render into
+   */
+  virtual bool HasHardwareRendering() const = 0;
+
+  /*!
+   * \brief Make a hardware-rendering client's context current on this thread
+   *
+   * Calls that negotiate hardware rendering or prepare a stream also need a
+   * scope, before a hardware stream handle exists.
+   */
+  virtual bool BeginClientFrame() { return true; }
+
+  /*!
+   * \brief Give this thread back the binding it had
+   */
+  virtual void EndClientFrame() {}
 };
 
 } // namespace RETRO

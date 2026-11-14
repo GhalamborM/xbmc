@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2005-2018 Team Kodi
+ *  Copyright (C) 2005-2024 Team Kodi
  *  This file is part of Kodi - https://kodi.tv
  *
  *  SPDX-License-Identifier: GPL-2.0-or-later
@@ -12,6 +12,9 @@
 
 namespace PERIPHERALS
 {
+/*!
+ * \ingroup peripherals
+ */
 class CPeripheralNyxboard : public CPeripheralHID
 {
 public:
@@ -19,6 +22,6 @@ public:
                       const PeripheralScanResult& scanResult,
                       CPeripheralBus* bus);
   ~CPeripheralNyxboard(void) override = default;
-  bool LookupSymAndUnicode(XBMC_keysym& keysym, uint8_t* key, char* unicode) override;
+  bool LookupSymAndUnicode(XBMC_keysym& keysym, uint16_t* key, char* unicode) override;
 };
 } // namespace PERIPHERALS

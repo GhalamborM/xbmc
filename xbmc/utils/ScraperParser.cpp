@@ -8,15 +8,16 @@
 
 #include "ScraperParser.h"
 
-#include "addons/AddonManager.h"
-#include "guilib/LocalizeStrings.h"
-#include "RegExp.h"
-#include "HTMLUtil.h"
-#include "addons/Scraper.h"
-#include "URL.h"
-#include "utils/StringUtils.h"
-#include "log.h"
 #include "CharsetConverter.h"
+#include "HTMLUtil.h"
+#include "RegExp.h"
+#include "ServiceBroker.h"
+#include "URL.h"
+#include "addons/Scraper.h"
+#include "log.h"
+#include "resources/LocalizeStrings.h"
+#include "resources/ResourcesComponent.h"
+#include "utils/StringUtils.h"
 #ifdef HAVE_LIBXSLT
 #include "utils/XSLTUtils.h"
 #endif
@@ -74,7 +75,6 @@ void CScraperParser::Clear()
   delete m_document;
 
   m_document = NULL;
-  m_strFile.clear();
 }
 
 bool CScraperParser::Load(const std::string& strXMLFile)
@@ -85,8 +85,6 @@ bool CScraperParser::Load(const std::string& strXMLFile)
 
   if (!m_document)
     return false;
-
-  m_strFile = strXMLFile;
 
   if (m_document->LoadFile(strXMLFile))
     return LoadFromXML();
@@ -171,7 +169,8 @@ void CScraperParser::ReplaceBuffers(std::string& strDest)
     std::string strInfo = strDest.substr(iIndex+10, iEnd - iIndex - 10);
     std::string strReplace;
     if (m_scraper)
-      strReplace = g_localizeStrings.GetAddonString(m_scraper->ID(), strtol(strInfo.c_str(),NULL,10));
+      strReplace = CServiceBroker::GetResourcesComponent().GetLocalizeStrings().GetAddonString(
+          m_scraper->ID(), strtol(strInfo.c_str(), NULL, 10));
     strDest.replace(strDest.begin()+iIndex,strDest.begin()+iEnd+1,strReplace);
     iIndex += strReplace.length();
   }
@@ -274,7 +273,7 @@ void CScraperParser::ParseExpression(const std::string& input, std::string& dest
       if (iOptional > -1) // check that required param is there
       {
         char temp[12];
-        sprintf(temp,"\\%i",iOptional);
+        snprintf(temp, sizeof(temp), "\\%i", iOptional);
         std::string szParam = reg.GetReplaceString(temp);
         CRegExp reg2;
         reg2.RegComp("(.*)(\\\\\\(.*\\\\2.*)\\\\\\)(.*)");
@@ -299,7 +298,7 @@ void CScraperParser::ParseExpression(const std::string& input, std::string& dest
       int iLen = reg.GetFindLen();
       // nasty hack #1 - & means \0 in a replace string
       StringUtils::Replace(strCurOutput, "&","!!!AMPAMP!!!");
-      std::string result = reg.GetReplaceString(strCurOutput.c_str());
+      std::string result = reg.GetReplaceString(strCurOutput);
       if (!result.empty())
       {
         std::string strResult(result);
@@ -594,7 +593,7 @@ void CScraperParser::GetBufferParams(bool* result, const char* attribute, bool d
 void CScraperParser::InsertToken(std::string& strOutput, int buf, const char* token)
 {
   char temp[4];
-  sprintf(temp,"\\%i",buf);
+  snprintf(temp, sizeof(temp), "\\%i", buf);
   size_t i2=0;
   while ((i2 = strOutput.find(temp,i2)) != std::string::npos)
   {

@@ -9,16 +9,15 @@
 #include "InfoScanner.h"
 
 #include "URL.h"
-#include "Util.h"
-#include "filesystem/File.h"
+#include "utils/FileUtils.h"
 #include "utils/URIUtils.h"
 #include "utils/log.h"
 
-bool CInfoScanner::HasNoMedia(const std::string &strDirectory) const
+bool CInfoScanner::HasNoMedia(const std::string& strDirectory)
 {
   std::string noMediaFile = URIUtils::AddFileToFolder(strDirectory, ".nomedia");
 
-  if (!URIUtils::IsPlugin(strDirectory) && XFILE::CFile::Exists(noMediaFile))
+  if (!URIUtils::IsPlugin(strDirectory) && CFileUtils::Exists(noMediaFile))
   {
     CLog::Log(LOGWARNING,
               "Skipping item '{}' with '.nomedia' file in parent directory, it won't be added to "

@@ -8,50 +8,34 @@
 
 #include "DVDSubtitlesLibass.h"
 
+#include "FileItem.h"
+#include "FileItemList.h"
 #include "ServiceBroker.h"
 #include "cores/VideoPlayer/Interface/TimingConstants.h"
+#include "filesystem/Directory.h"
 #include "filesystem/File.h"
 #include "filesystem/SpecialProtocol.h"
 #include "settings/Settings.h"
 #include "settings/SettingsComponent.h"
-#include "threads/SingleLock.h"
+#include "settings/SubtitlesSettings.h"
+#include "utils/FontUtils.h"
 #include "utils/StringUtils.h"
 #include "utils/URIUtils.h"
+#include "utils/XBMCTinyXML2.h"
 #include "utils/log.h"
 
+#include <algorithm>
 #include <cstring>
+#include <mutex>
 
-using namespace KODI::SUBTITLES;
-using namespace UTILS;
+using namespace KODI::SUBTITLES::STYLE;
+using namespace KODI::UTILS;
 
 namespace
 {
 constexpr int ASS_BORDER_STYLE_OUTLINE = 1; // Outline + drop shadow
 constexpr int ASS_BORDER_STYLE_BOX = 3; // Box + drop shadow
 constexpr int ASS_BORDER_STYLE_SQUARE_BOX = 4; // Square box + outline
-
-constexpr int ASS_FONT_ENCODING_AUTO = -1;
-
-// Directory where user defined fonts are located (and where mkv fonts are extracted to)
-constexpr const char* userFontPath = "special://home/media/Fonts/";
-// Directory where Kodi bundled fonts (default ones like Arial or Teletext) are located
-constexpr const char* systemFontPath = "special://xbmc/media/Fonts/";
-
-std::string GetDefaultFontPath(std::string& font)
-{
-  constexpr std::array<const char*, 2> fontSources{userFontPath, systemFontPath};
-
-  for (const auto& path : fontSources)
-  {
-    auto fontPath = URIUtils::AddFileToFolder(path, font);
-    if (XFILE::CFile::Exists(fontPath))
-    {
-      return CSpecialProtocol::TranslatePath(fontPath).c_str();
-    }
-  }
-  CLog::Log(LOGERROR, "CDVDSubtitlesLibass: Could not find font {} in font sources", font);
-  return "";
-}
 
 // Convert RGB/ARGB to RGBA by also applying the opacity value
 COLOR::Color ConvColor(COLOR::Color argbColor, int opacity = 100)
@@ -109,21 +93,144 @@ void CDVDSubtitlesLibass::Configure()
   ass_set_margins(m_renderer, 0, 0, 0, 0);
   ass_set_use_margins(m_renderer, 0);
 
-  // libass uses fontconfig (system lib) by default in some platforms (e.g. linux/android) or as
-  // a fallback for all platforms. It is not wrapped so translate the path before calling into libass
-  ass_set_fonts_dir(m_library, CSpecialProtocol::TranslatePath(userFontPath).c_str());
-  ass_set_font_scale(m_renderer, 1);
+  int fontProvider = ASS_FONTPROVIDER_AUTODETECT;
+  std::string fontconfigPath; // Keep string alive for lifetime of fontconfigConfig pointer
+  const char* fontconfigConfig = nullptr;
+
+#if defined(TARGET_ANDROID)
+  // Libass uses system font provider (like fontconfig) by default on some platforms (e.g. Linux/Windows),
+  // but on Android the font provider is currently not supported by libass.
+  // Workaround: Use fontconfig with a custom configuration pointing to Android system fonts,
+  // enabling automatic font fallback for subtitles with non-Latin scripts.
+  // This is a temporary workaround until libass implements native Android font provider support.
+  fontProvider = ASS_FONTPROVIDER_FONTCONFIG;
+
+  // Write fontconfig configuration to temp directory
+  fontconfigPath = CSpecialProtocol::TranslatePath("special://temp/fonts.conf");
+
+  if (!XFILE::CFile::Exists(fontconfigPath))
+  {
+    // Create fontconfig cache directory
+    const std::string fontconfigCacheDir =
+        CSpecialProtocol::TranslatePath("special://temp/fontconfig");
+    if (!XFILE::CDirectory::Exists(fontconfigCacheDir))
+      XFILE::CDirectory::Create(fontconfigCacheDir);
+
+    // Create fontconfig configuration using XML library
+    CXBMCTinyXML2 xmlDoc;
+    xmlDoc.InsertEndChild(xmlDoc.NewDeclaration("xml version=\"1.0\""));
+    xmlDoc.InsertEndChild(xmlDoc.NewUnknown("DOCTYPE fontconfig SYSTEM \"fonts.dtd\""));
+
+    tinyxml2::XMLElement* eRoot = xmlDoc.NewElement("fontconfig");
+    xmlDoc.InsertEndChild(eRoot);
+
+    auto addRootChildText = [&](const char* name, const std::string& value)
+    {
+      tinyxml2::XMLElement* elem = xmlDoc.NewElement(name);
+      elem->SetText(value.c_str());
+      eRoot->InsertEndChild(elem);
+    };
+
+    // Add Android system font directories
+    // Note: USER and SYSTEM dirs are handled by ass_set_fonts_dir below
+    const std::vector<std::string> fontDirs = {
+        "/system/fonts", // AOSP standard
+        "/product/fonts", // AOSP vendor-specific
+        "/system_ext/fonts" // OEM-specific (may not exist on all devices)
+    };
+
+    for (const auto& dir : fontDirs)
+    {
+      if (XFILE::CDirectory::Exists(dir))
+        addRootChildText("dir", dir);
+    }
+
+    addRootChildText("cachedir", fontconfigCacheDir);
+
+    if (xmlDoc.SaveFile(fontconfigPath))
+    {
+      fontconfigConfig = fontconfigPath.c_str();
+      CLog::Log(LOGINFO, "CDVDSubtitlesLibass: Created fontconfig configuration at {}",
+                fontconfigPath);
+    }
+    else
+    {
+      CLog::LogF(LOGERROR, "Failed to create fontconfig configuration, falling back to "
+                           "ASS_FONTPROVIDER_AUTODETECT");
+      fontProvider = ASS_FONTPROVIDER_AUTODETECT;
+      fontconfigConfig = nullptr;
+    }
+  }
+  else
+  {
+    fontconfigConfig = fontconfigPath.c_str();
+  }
+#endif
+
+  // Set additional fonts directory for libass to scan. This provides font lookup
+  // on platforms without a font provider, and supplements fontconfig on platforms that use it.
+  ass_set_fonts_dir(m_library, CSpecialProtocol::TranslatePath(FONT::FONTPATH::USER).c_str());
+
+  // Load additional fonts into Libass memory
+  CFileItemList items;
+  // Get fonts from system directory
+  if (XFILE::CDirectory::Exists(FONT::FONTPATH::SYSTEM))
+  {
+    XFILE::CDirectory::GetDirectory(FONT::FONTPATH::SYSTEM, items, FONT::SUPPORTED_EXTENSIONS_MASK,
+                                    XFILE::DIR_FLAG_NO_FILE_DIRS | XFILE::DIR_FLAG_NO_FILE_INFO);
+  }
+
+  const std::shared_ptr<CSettings> settings = CServiceBroker::GetSettingsComponent()->GetSettings();
+  const bool overrideFont = settings->GetBool(CSettings::SETTING_SUBTITLES_OVERRIDEFONTS);
+  // Get temporary fonts
+  if (!overrideFont && XFILE::CDirectory::Exists(FONT::FONTPATH::TEMP, false))
+  {
+    XFILE::CDirectory::GetDirectory(FONT::FONTPATH::TEMP, items, FONT::SUPPORTED_EXTENSIONS_MASK,
+                                    XFILE::DIR_FLAG_BYPASS_CACHE | XFILE::DIR_FLAG_NO_FILE_DIRS |
+                                        XFILE::DIR_FLAG_NO_FILE_INFO);
+  }
+  for (const auto& item : items)
+  {
+    if (item->IsFolder())
+      continue;
+    const std::string filepath = item->GetPath();
+    const std::string fileName = item->GetLabel();
+    std::vector<uint8_t> buffer;
+    if (XFILE::CFile().LoadFile(filepath, buffer) <= 0)
+    {
+      CLog::LogF(LOGERROR, "Failed to load file {}", filepath);
+      continue;
+    }
+#if LIBASS_VERSION >= 0x01501000
+    ass_add_font(m_library, fileName.c_str(), reinterpret_cast<const char*>(buffer.data()),
+                 static_cast<int>(buffer.size()));
+#else
+    ass_add_font(m_library, const_cast<char*>(fileName.c_str()),
+                 reinterpret_cast<char*>(buffer.data()), static_cast<int>(buffer.size()));
+#endif
+    if (StringUtils::CompareNoCase(fileName, FONT::FONT_DEFAULT_FILENAME) == 0)
+    {
+      m_defaultFontFamilyName = FONT::GetFontFamily(buffer);
+    }
+  }
+  if (m_defaultFontFamilyName.empty())
+  {
+    CLog::LogF(LOGERROR,
+               "The application font {} is missing. The default subtitle font cannot be set.",
+               FONT::FONT_DEFAULT_FILENAME);
+  }
+
+  ass_set_fonts(m_renderer, FONT::FONTPATH::GetSystemFontPath(FONT::FONT_DEFAULT_FILENAME).c_str(),
+                m_defaultFontFamilyName.c_str(), fontProvider, fontconfigConfig, 1);
 
   // Extract font must be set before loading ASS/SSA data,
   // after that cannot be changed
-  const std::shared_ptr<CSettings> settings = CServiceBroker::GetSettingsComponent()->GetSettings();
-  bool overrideFont = settings->GetBool(CSettings::SETTING_SUBTITLES_OVERRIDEFONTS);
   ass_set_extract_fonts(m_library, overrideFont ? 0 : 1);
 }
 
 bool CDVDSubtitlesLibass::DecodeHeader(char* data, int size)
 {
-  CSingleLock lock(m_section);
+  std::unique_lock lock(m_section);
   if (!m_library || !data)
     return false;
 
@@ -136,7 +243,7 @@ bool CDVDSubtitlesLibass::DecodeHeader(char* data, int size)
 
 bool CDVDSubtitlesLibass::DecodeDemuxPkt(const char* data, int size, double start, double duration)
 {
-  CSingleLock lock(m_section);
+  std::unique_lock lock(m_section);
   if (!m_track)
   {
     CLog::Log(LOGERROR, "{} - No SSA header found.", __FUNCTION__);
@@ -151,7 +258,7 @@ bool CDVDSubtitlesLibass::DecodeDemuxPkt(const char* data, int size, double star
 
 bool CDVDSubtitlesLibass::CreateTrack()
 {
-  CSingleLock lock(m_section);
+  std::unique_lock lock(m_section);
   if (!m_library)
   {
     CLog::Log(LOGERROR, "{} - Failed to create ASS track, library not initialized.", __FUNCTION__);
@@ -169,17 +276,20 @@ bool CDVDSubtitlesLibass::CreateTrack()
   m_track->track_type = m_track->TRACK_TYPE_ASS;
   m_track->Timer = 100.;
   // Set fixed values to PlayRes to allow the use of style override code for positioning
-  m_track->PlayResX = (int)VIEWPORT_WIDTH;
-  m_track->PlayResY = (int)VIEWPORT_HEIGHT;
+  m_track->PlayResX = static_cast<int>(VIEWPORT_WIDTH);
+  m_track->PlayResY = static_cast<int>(VIEWPORT_HEIGHT);
   m_track->Kerning = true; // Font kerning improves the letterspacing
   m_track->WrapStyle = 1; // The line feed \n doesn't break but wraps (instead \N breaks)
+
+  if (ass_track_set_feature(m_track, ASS_FEATURE_BIDI_BRACKETS, 1) != 0)
+    CLog::LogF(LOGWARNING, "ASS track ASS_FEATURE_BIDI_BRACKETS feature cannot be set");
 
   return true;
 }
 
 bool CDVDSubtitlesLibass::CreateStyle()
 {
-  CSingleLock lock(m_section);
+  std::unique_lock lock(m_section);
   if (!m_library)
   {
     CLog::Log(LOGERROR, "{} - Failed to create ASS style, library not initialized.", __FUNCTION__);
@@ -198,7 +308,7 @@ bool CDVDSubtitlesLibass::CreateStyle()
 
 bool CDVDSubtitlesLibass::CreateTrack(char* buf, size_t size)
 {
-  CSingleLock lock(m_section);
+  std::unique_lock lock(m_section);
   if (!m_library)
   {
     CLog::Log(LOGERROR, "{} - No ASS library struct (m_library)", __FUNCTION__);
@@ -214,50 +324,76 @@ bool CDVDSubtitlesLibass::CreateTrack(char* buf, size_t size)
   return true;
 }
 
-ASS_Image* CDVDSubtitlesLibass::RenderImage(
-    double pts,
-    renderOpts opts,
-    bool updateStyle,
-    const std::shared_ptr<struct KODI::SUBTITLES::style>& subStyle,
-    int* changes)
+ASS_Image* CDVDSubtitlesLibass::RenderImage(double pts,
+                                            renderOpts opts,
+                                            const std::shared_ptr<struct style>& subStyle,
+                                            int* changes)
 {
-  CSingleLock lock(m_section);
+  std::unique_lock lock(m_section);
   if (!m_renderer || !m_track)
   {
     CLog::Log(LOGERROR, "{} - ASS renderer/ASS track not initialized.", __FUNCTION__);
-    return NULL;
+    return nullptr;
   }
 
   if (!subStyle)
   {
     CLog::Log(LOGERROR, "{} - The subtitle overlay style is not set.", __FUNCTION__);
-    return NULL;
+    return nullptr;
   }
 
-  if (updateStyle || m_currentDefaultStyleId == ASS_NO_ID)
+  if (subStyle != m_appliedStyle)
   {
-    ApplyStyle(*subStyle.get(), opts);
-    m_drawWithinBlackBars = subStyle->drawWithinBlackBars;
+    ApplyStyle(subStyle, opts);
+    m_appliedStyle = subStyle;
   }
 
-  double sar = static_cast<double>(opts.sourceWidth / opts.sourceHeight);
-  double dar = static_cast<double>(opts.videoWidth / opts.videoHeight);
+  // Reversed par value
+  // from: >1 tighter pixels, <1 wider pixels
+  // to: <1 tighter pixels, >1 wider pixels
+  float par = (opts.m_par - 2.0f) * -1;
+  ass_set_pixel_aspect(m_renderer, static_cast<double>(par));
 
   ass_set_frame_size(m_renderer, static_cast<int>(opts.frameWidth),
                      static_cast<int>(opts.frameHeight));
 
-  if (m_drawWithinBlackBars)
+  bool useFrameMargins;
+
+  if (m_subtitleType == NATIVE)
   {
-    int marginTop = static_cast<int>((opts.frameHeight - opts.videoHeight) / 2);
-    int marginLeft = static_cast<int>((opts.frameWidth - opts.videoWidth) / 2);
-    ass_set_margins(m_renderer, marginTop, marginTop, marginLeft, marginLeft);
+    ass_set_storage_size(m_renderer, static_cast<int>(opts.sourceWidth),
+                         static_cast<int>(opts.sourceHeight));
+    useFrameMargins =
+        opts.marginsMode == MarginsMode::DISABLED || opts.marginsMode == MarginsMode::INSIDE_VIDEO;
   }
-  ass_set_use_margins(m_renderer, m_drawWithinBlackBars);
+  else
+  {
+    // Keep storage to default to keep consistent subtitles effects
+    // (like borders) when video resolution change while in playback
+    ass_set_storage_size(m_renderer, 0, 0);
+    useFrameMargins = opts.marginsMode == MarginsMode::INSIDE_VIDEO;
+  }
 
-  // Vertical text position in percent (if 0 do nothing)
+  FrameMargins margins;
+  if (useFrameMargins)
+    margins = TrackMargins(opts, m_subtitleType == NATIVE);
+
+  ass_set_margins(m_renderer, margins.top, margins.top, margins.left, margins.left);
+  ass_set_use_margins(m_renderer, 0);
+
+  float fontScale{1.0f};
+  if (opts.marginsMode == MarginsMode::INSIDE_VIDEO)
+  {
+    // Make font size relative to window size instead of video,
+    // to show same font size even if the video do not cover in full the
+    // window (e.g. cropped videos, zoom effect) and player add black bars.
+    // The video and not the picture: how much of the window it occupies, coded bars included.
+    fontScale *= std::max(opts.frameHeight / opts.videoHeight, 1.0f);
+  }
+
+  ass_set_font_scale(m_renderer, static_cast<double>(fontScale));
+
   ass_set_line_position(m_renderer, opts.position);
-
-  ass_set_pixel_aspect(m_renderer, sar / dar);
 
   // For posterity ass_render_frame have an inconsistent rendering for overlapped subtitles cases,
   // if the playback occurs in sequence (without seeks) the overlapped subtitles lines will be rendered in right order
@@ -266,18 +402,24 @@ ASS_Image* CDVDSubtitlesLibass::RenderImage(
   return ass_render_frame(m_renderer, m_track, DVD_TIME_TO_MSEC(pts), changes);
 }
 
-void CDVDSubtitlesLibass::ApplyStyle(style subStyle, renderOpts opts)
+void CDVDSubtitlesLibass::ApplyStyle(const std::shared_ptr<struct style>& subStyle,
+                                     const renderOpts& opts)
 {
   CLog::Log(LOGDEBUG, "{} - Start setting up the LibAss style", __FUNCTION__);
 
-  ConfigureFont((m_subtitleType == NATIVE && subStyle.assOverrideFont), subStyle.fontName);
+  if (!subStyle)
+  {
+    CLog::Log(LOGERROR, "{} - The subtitle overlay style is not set.", __FUNCTION__);
+    return;
+  }
 
   // ASS_Style is a POD struct need to be initialized with {}
   ASS_Style defaultStyle{};
   ASS_Style* style = nullptr;
 
   if (m_subtitleType == ADAPTED ||
-      (m_subtitleType == NATIVE && subStyle.assOverrideStyles != OverrideStyles::DISABLED))
+      (m_subtitleType == NATIVE &&
+       (subStyle->assOverrideStyles != OverrideStyles::DISABLED || subStyle->assOverrideFont)))
   {
     m_currentDefaultStyleId = m_defaultKodiStyleId;
 
@@ -290,157 +432,186 @@ void CDVDSubtitlesLibass::ApplyStyle(style subStyle, renderOpts opts)
       style = &m_track->styles[m_currentDefaultStyleId];
     }
 
+    free(style->Name);
     style->Name = strdup("KodiDefault");
 
-    // Calculate the scale (influence ASS style properties)
-    double scale = 1.0;
-    int playResY;
+    // PlayResY and PlayResX are mandatory but some out-of-spec files do not specify them
+    // if both PlayRes are not specified libass fallback to 288x384
+    double playResY = static_cast<double>(m_track->PlayResY);
+    if (m_track->PlayResY == 0 && m_track->PlayResX == 0)
+    {
+      CLog::LogF(LOGWARNING, "PlayResX and PlayResY are not defined in subtitle file. This may "
+                             "cause unexpected rendering issues.");
+      playResY = 288.0;
+    }
+    else if (m_track->PlayResY == 0 && m_track->PlayResX > 0)
+    {
+      // This use case depend strictly on library implementation anyway
+      // the common behavior of the library is to calculate with an aspect ratio of 4/3
+      CLog::LogF(
+          LOGWARNING,
+          "PlayResY is not defined in subtitle file. This may cause unexpected rendering issues.");
+      playResY = std::max(1.0, static_cast<double>(m_track->PlayResX) * 3 / 4);
+    }
+
+    // Calculate the scale
+    // Font size, borders, etc... are specified in pixel unit in scaled
+    // for a window height of 720, so we need to rescale to our PlayResY
+    double scaleDefault{playResY / 720};
+    double scale{scaleDefault};
+
     if (m_subtitleType == NATIVE &&
-        (subStyle.assOverrideStyles == OverrideStyles::STYLES ||
-         subStyle.assOverrideStyles == OverrideStyles::STYLES_POSITIONS))
+        (subStyle->assOverrideStyles == OverrideStyles::STYLES ||
+         subStyle->assOverrideStyles == OverrideStyles::STYLES_POSITIONS ||
+         subStyle->assOverrideFont))
     {
       // With styles overridden the PlayResY will be changed to 288
-      playResY = 288;
-      scale = 288. / 720;
-    }
-    else
-    {
-      playResY = m_track->PlayResY;
+      scale = 288.0 / 720;
     }
 
     // It is mandatory set the FontName, the text is case sensitive
-    style->FontName = strdup(subStyle.fontName.c_str());
+    free(style->FontName);
+    if (subStyle->fontName == KODI::SUBTITLES::FONT_DEFAULT_FAMILYNAME)
+      style->FontName = strdup(m_defaultFontFamilyName.c_str());
+    else
+      style->FontName = strdup(subStyle->fontName.c_str());
 
-    if (m_subtitleType != NATIVE ||
-        (m_subtitleType == NATIVE && subStyle.assOverrideStyles != OverrideStyles::POSITIONS))
+    // Configure the font properties
+    style->FontSize = subStyle->fontSize * scale;
+
+    // Modifies the width/height of the font (1 = 100%)
+    style->ScaleX = 1.0;
+    style->ScaleY = 1.0;
+    // Extra space between characters causes the underlined
+    // text line to become more discontinuous (test on LibAss 15.1)
+    style->Spacing = 0;
+
+    bool isFontBold =
+        (subStyle->fontStyle == FontStyle::BOLD || subStyle->fontStyle == FontStyle::BOLD_ITALIC);
+    bool isFontItalic =
+        (subStyle->fontStyle == FontStyle::ITALIC || subStyle->fontStyle == FontStyle::BOLD_ITALIC);
+    style->Bold = isFontBold * -1;
+    style->Italic = isFontItalic * -1;
+
+    //! @todo Libass has a problem with color transparencies when set to:
+    //! PrimaryColour/SecondaryColour/OutlineColour by causing a gap between border
+    //! and text color. As workaround the SecondaryColour must have no transparency
+    //! this will fix just use cases without transparencies, for a full fix will be
+    //! needed in future update libass library having the gap fix.
+
+    // Set default subtitles color
+    style->PrimaryColour = ConvColor(subStyle->fontColor, subStyle->fontOpacity);
+    // Set secondary colour for karaoke
+    // left part is filled with PrimaryColour, right one with SecondaryColour
+    //! @bug in libass - force secondary color without transparency otherwise
+    //! cause a visible color gap, we also avoid reusing the same primary
+    //! color otherwise the karaoke effect will not be visible.
+    style->SecondaryColour = ConvColor(COLOR::BLACK);
+
+    // Configure the effects
+    if (subStyle->borderStyle == BorderType::OUTLINE ||
+        subStyle->borderStyle == BorderType::OUTLINE_NO_SHADOW)
     {
-      // Configure the font properties
-      // FIXME: The font size need to be scaled to be shown in right PT size
-      style->FontSize = (subStyle.fontSize / 720) * playResY;
-      // Modifies the width/height of the font (1 = 100%)
-      style->ScaleX = 1.0;
-      style->ScaleY = 1.0;
-      // Extra space between characters causes the underlined
-      // text line to become more discontinuous (test on LibAss 15.1)
-      style->Spacing = 0;
-
-      // Set automatic paragraph direction (not VSFilter-compatible)
-      // to fix wrong RTL text direction when there are unicode chars
-      style->Encoding = ASS_FONT_ENCODING_AUTO;
-
-      bool isFontBold =
-          (subStyle.fontStyle == FontStyle::BOLD || subStyle.fontStyle == FontStyle::BOLD_ITALIC);
-      bool isFontItalic =
-          (subStyle.fontStyle == FontStyle::ITALIC || subStyle.fontStyle == FontStyle::BOLD_ITALIC);
-      style->Bold = isFontBold * -1;
-      style->Italic = isFontItalic * -1;
-
-      // Compute the font color, depending on the opacity
-      COLOR::Color subColor = ConvColor(subStyle.fontColor, subStyle.fontOpacity);
-      // Set default subtitles color
-      style->PrimaryColour = subColor;
-      // Set SecondaryColour may be used to prevent an onscreen collision
-      style->SecondaryColour = subColor;
-
-      // Configure the effects
-      double lineSpacing = 0.0;
-      if (subStyle.borderStyle == BorderStyle::OUTLINE ||
-          subStyle.borderStyle == BorderStyle::OUTLINE_NO_SHADOW)
+      style->BorderStyle = ASS_BORDER_STYLE_OUTLINE;
+      style->Outline = (10.00 / 100 * subStyle->fontBorderSize) * scale;
+      style->OutlineColour = ConvColor(subStyle->fontBorderColor, subStyle->fontOpacity);
+      if (subStyle->borderStyle == BorderType::OUTLINE_NO_SHADOW)
       {
-        style->BorderStyle = ASS_BORDER_STYLE_OUTLINE;
-        style->Outline = (10.00 / 100 * subStyle.fontBorderSize) * scale;
-        style->OutlineColour = ConvColor(subStyle.fontBorderColor, subStyle.fontOpacity);
-        if (subStyle.borderStyle == BorderStyle::OUTLINE_NO_SHADOW)
-        {
-          style->BackColour = ConvColor(COLOR::NONE, 0); // Set the shadow color
-          style->Shadow = 0; // Set the shadow size
-        }
-        else
-        {
-          style->BackColour =
-              ConvColor(subStyle.shadowColor, subStyle.shadowOpacity); // Set the shadow color
-          style->Shadow = (10.00 / 100 * subStyle.shadowSize) * scale; // Set the shadow size
-        }
+        style->BackColour = ConvColor(COLOR::NONE, 0); // Set the shadow color
+        style->Shadow = 0; // Set the shadow size
       }
-      else if (subStyle.borderStyle == BorderStyle::BOX)
+      else
       {
-        // This BorderStyle not support outline color/size
-        style->BorderStyle = ASS_BORDER_STYLE_BOX;
-        style->Outline = 4 * scale; // Space between the text and the box edges
-        style->OutlineColour =
-            ConvColor(subStyle.backgroundColor,
-                      subStyle.backgroundOpacity); // Set the background border color
         style->BackColour =
-            ConvColor(subStyle.shadowColor, subStyle.shadowOpacity); // Set the box shadow color
-        style->Shadow = (10.00 / 100 * subStyle.shadowSize) * scale; // Set the box shadow size
-        // By default a box overlaps the other, then we increase a bit the line spacing
-        lineSpacing = 6.0;
+            ConvColor(subStyle->shadowColor, subStyle->shadowOpacity); // Set the shadow color
+        style->Shadow = (10.00 / 100 * subStyle->shadowSize) * scale; // Set the shadow size
       }
-      else if (subStyle.borderStyle == BorderStyle::SQUARE_BOX)
-      {
-        // This BorderStyle not support shadow color/size
-        style->BorderStyle = ASS_BORDER_STYLE_SQUARE_BOX;
-        style->Outline = (10.00 / 100 * subStyle.fontBorderSize) * scale;
-        style->OutlineColour = ConvColor(subStyle.fontBorderColor, subStyle.fontOpacity);
-        style->BackColour = ConvColor(subStyle.backgroundColor, subStyle.backgroundOpacity);
-        style->Shadow = 4 * scale; // Space between the text and the box edges
-      }
+    }
+    else if (subStyle->borderStyle == BorderType::BOX)
+    {
+      // This BorderStyle not support outline color/size
+      style->BorderStyle = ASS_BORDER_STYLE_BOX;
+      style->Outline = 4 * scale; // Space between the text and the box edges
+      style->OutlineColour =
+          ConvColor(subStyle->backgroundColor,
+                    subStyle->backgroundOpacity); // Set the background border color
+      style->BackColour =
+          ConvColor(subStyle->shadowColor, subStyle->shadowOpacity); // Set the box shadow color
+      style->Shadow = (10.00 / 100 * subStyle->shadowSize) * scale; // Set the box shadow size
+    }
+    else if (subStyle->borderStyle == BorderType::SQUARE_BOX)
+    {
+      // This BorderStyle not support shadow color/size
+      style->BorderStyle = ASS_BORDER_STYLE_SQUARE_BOX;
+      style->Outline = (10.00 / 100 * subStyle->fontBorderSize) * scale;
+      style->OutlineColour = ConvColor(subStyle->fontBorderColor, subStyle->fontOpacity);
+      style->BackColour = ConvColor(subStyle->backgroundColor, subStyle->backgroundOpacity);
+      style->Shadow = 4 * scale; // Space between the text and the box edges
+    }
 
-      ass_set_line_spacing(m_renderer, lineSpacing);
+    double lineSpacing = (static_cast<double>(subStyle->lineSpacing) * (playResY / 4)) / 100;
+    if (subStyle->assOverrideFont)
+      lineSpacing *= scaleDefault;
+    else
+      lineSpacing *= scale;
+    // ass_set_line_spacing do not scale, so we have to scale to frame size
+    ass_set_line_spacing(m_renderer,
+                         lineSpacing / playResY * static_cast<double>(opts.frameHeight / 4));
 
-      style->Blur = (10.00 / 100 * subStyle.blur);
+    style->Blur = (10.00 / 100 * subStyle->blur);
 
+    // Set the margins (in pixel)
+    if (opts.marginsMode == MarginsMode::DISABLED)
+    {
+      style->MarginL = 0;
+      style->MarginR = 0;
+      style->MarginV = 0;
+    }
+    else
+    {
       double marginLR = 20;
-      if (opts.horizontalAlignment != HorizontalAlignment::DISABLED)
+      if (opts.horizontalAlignment != HorizontalAlign::DISABLED)
       {
         // If the subtitle text is aligned on the left or right
         // of the screen, we set an extra left/right margin
         marginLR += static_cast<double>(opts.frameWidth) / 10;
       }
-
-      // Set the margins (in pixel)
-      style->MarginL = static_cast<int>(marginLR * scale);
-      style->MarginR = static_cast<int>(marginLR * scale);
-      // Vertical margin (direction depends on alignment)
-      // to be set only when the video calibration position setting is not used
-      if (opts.usePosition)
-        style->MarginV = 0;
-      else
-        style->MarginV = static_cast<int>(subStyle.marginVertical * scale);
+      style->MarginL = static_cast<int>(marginLR * scaleDefault);
+      style->MarginR = static_cast<int>(marginLR * scaleDefault);
+      style->MarginV = static_cast<int>(subStyle->marginVertical * scaleDefault);
     }
 
     // Set the vertical alignment
-    if (subStyle.alignment == FontAlignment::TOP_LEFT ||
-        subStyle.alignment == FontAlignment::TOP_CENTER ||
-        subStyle.alignment == FontAlignment::TOP_RIGHT)
+    if (subStyle->alignment == FontAlign::TOP_LEFT ||
+        subStyle->alignment == FontAlign::TOP_CENTER || subStyle->alignment == FontAlign::TOP_RIGHT)
       style->Alignment = VALIGN_TOP;
-    else if (subStyle.alignment == FontAlignment::MIDDLE_LEFT ||
-             subStyle.alignment == FontAlignment::MIDDLE_CENTER ||
-             subStyle.alignment == FontAlignment::MIDDLE_RIGHT)
+    else if (subStyle->alignment == FontAlign::MIDDLE_LEFT ||
+             subStyle->alignment == FontAlign::MIDDLE_CENTER ||
+             subStyle->alignment == FontAlign::MIDDLE_RIGHT)
       style->Alignment = VALIGN_CENTER;
-    else if (subStyle.alignment == FontAlignment::SUB_LEFT ||
-             subStyle.alignment == FontAlignment::SUB_CENTER ||
-             subStyle.alignment == FontAlignment::SUB_RIGHT)
+    else if (subStyle->alignment == FontAlign::SUB_LEFT ||
+             subStyle->alignment == FontAlign::SUB_CENTER ||
+             subStyle->alignment == FontAlign::SUB_RIGHT)
       style->Alignment = VALIGN_SUB;
 
     // Set the horizontal alignment, giving priority to horizontalFontAlign property when set
-    if (opts.horizontalAlignment == HorizontalAlignment::LEFT)
+    if (opts.horizontalAlignment == HorizontalAlign::LEFT)
       style->Alignment |= HALIGN_LEFT;
-    else if (opts.horizontalAlignment == HorizontalAlignment::CENTER)
+    else if (opts.horizontalAlignment == HorizontalAlign::CENTER)
       style->Alignment |= HALIGN_CENTER;
-    else if (opts.horizontalAlignment == HorizontalAlignment::RIGHT)
+    else if (opts.horizontalAlignment == HorizontalAlign::RIGHT)
       style->Alignment |= HALIGN_RIGHT;
-    else if (subStyle.alignment == FontAlignment::TOP_LEFT ||
-             subStyle.alignment == FontAlignment::MIDDLE_LEFT ||
-             subStyle.alignment == FontAlignment::SUB_LEFT)
+    else if (subStyle->alignment == FontAlign::TOP_LEFT ||
+             subStyle->alignment == FontAlign::MIDDLE_LEFT ||
+             subStyle->alignment == FontAlign::SUB_LEFT)
       style->Alignment |= HALIGN_LEFT;
-    else if (subStyle.alignment == FontAlignment::TOP_CENTER ||
-             subStyle.alignment == FontAlignment::MIDDLE_CENTER ||
-             subStyle.alignment == FontAlignment::SUB_CENTER)
+    else if (subStyle->alignment == FontAlign::TOP_CENTER ||
+             subStyle->alignment == FontAlign::MIDDLE_CENTER ||
+             subStyle->alignment == FontAlign::SUB_CENTER)
       style->Alignment |= HALIGN_CENTER;
-    else if (subStyle.alignment == FontAlignment::TOP_RIGHT ||
-             subStyle.alignment == FontAlignment::MIDDLE_RIGHT ||
-             subStyle.alignment == FontAlignment::SUB_RIGHT)
+    else if (subStyle->alignment == FontAlign::TOP_RIGHT ||
+             subStyle->alignment == FontAlign::MIDDLE_RIGHT ||
+             subStyle->alignment == FontAlign::SUB_RIGHT)
       style->Alignment |= HALIGN_RIGHT;
   }
 
@@ -451,50 +622,57 @@ void CDVDSubtitlesLibass::ApplyStyle(style subStyle, renderOpts opts)
   }
 }
 
-void CDVDSubtitlesLibass::ConfigureAssOverride(style& subStyle, ASS_Style* style)
+int CDVDSubtitlesLibass::GetPlayResY()
 {
-  // Default behaviour, disable ASS embedded styles override (if has been changed)
-  int stylesFlags = ASS_OVERRIDE_BIT_SELECTIVE_FONT_SCALE;
+  if (!m_track)
+  {
+    CLog::Log(LOGERROR, "{} - ASS renderer/ASS track not initialized.", __FUNCTION__);
+    return VIEWPORT_HEIGHT;
+  }
+  return m_track->PlayResY;
+}
 
+void CDVDSubtitlesLibass::ConfigureAssOverride(const std::shared_ptr<struct style>& subStyle,
+                                               ASS_Style* style)
+{
+  if (!subStyle)
+  {
+    CLog::Log(LOGERROR, "{} - The subtitle overlay style is not set.", __FUNCTION__);
+    return;
+  }
+
+  // Default behaviour, disable ASS embedded styles override (if has been changed)
+  int stylesFlags{ASS_OVERRIDE_DEFAULT};
   if (style)
   {
     // Manage override cases with ASS embedded styles
-    if (subStyle.assOverrideStyles == OverrideStyles::STYLES)
+    if (subStyle->assOverrideStyles == OverrideStyles::STYLES)
     {
-      stylesFlags = ASS_OVERRIDE_BIT_FONT_SIZE_FIELDS | ASS_OVERRIDE_BIT_FONT_NAME |
-                    ASS_OVERRIDE_BIT_COLORS | ASS_OVERRIDE_BIT_ATTRIBUTES |
+      stylesFlags = ASS_OVERRIDE_BIT_COLORS | ASS_OVERRIDE_BIT_ATTRIBUTES |
                     ASS_OVERRIDE_BIT_BORDER | ASS_OVERRIDE_BIT_MARGINS;
     }
-    else if (subStyle.assOverrideStyles == OverrideStyles::STYLES_POSITIONS)
+    else if (subStyle->assOverrideStyles == OverrideStyles::STYLES_POSITIONS)
     {
-      stylesFlags = ASS_OVERRIDE_BIT_FONT_SIZE_FIELDS | ASS_OVERRIDE_BIT_FONT_NAME |
-                    ASS_OVERRIDE_BIT_COLORS | ASS_OVERRIDE_BIT_ATTRIBUTES |
+      stylesFlags = ASS_OVERRIDE_BIT_COLORS | ASS_OVERRIDE_BIT_ATTRIBUTES |
                     ASS_OVERRIDE_BIT_BORDER | ASS_OVERRIDE_BIT_MARGINS | ASS_OVERRIDE_BIT_ALIGNMENT;
     }
-    else if (subStyle.assOverrideStyles == OverrideStyles::POSITIONS)
+    else if (subStyle->assOverrideStyles == OverrideStyles::POSITIONS)
     {
-      stylesFlags = ASS_OVERRIDE_BIT_ALIGNMENT;
+      stylesFlags = ASS_OVERRIDE_BIT_ALIGNMENT | ASS_OVERRIDE_BIT_MARGINS;
+    }
+    if (subStyle->assOverrideFont)
+    {
+      stylesFlags |= ASS_OVERRIDE_BIT_FONT_SIZE_FIELDS | ASS_OVERRIDE_BIT_FONT_NAME;
     }
     ass_set_selective_style_override(m_renderer, style);
   }
-  ass_set_selective_style_override_enabled(m_renderer, stylesFlags);
-}
 
-void CDVDSubtitlesLibass::ConfigureFont(bool overrideFont, std::string fontName)
-{
-  int fontProvider = ASS_FONTPROVIDER_AUTODETECT;
-  std::string fontPath = GetDefaultFontPath(fontName);
-  if ((m_subtitleType == ADAPTED || overrideFont) && !fontPath.empty())
-    fontProvider = ASS_FONTPROVIDER_NONE;
-  // Libass take in consideration of the default font specified only
-  // as last resort so when the builtin list of fallbacks fails,
-  // the be able to use our font we have to set ASS_FONTPROVIDER_NONE
-  ass_set_fonts(m_renderer, fontPath.c_str(), fontName.c_str(), fontProvider, nullptr, 1);
+  ass_set_selective_style_override_enabled(m_renderer, stylesFlags);
 }
 
 ASS_Event* CDVDSubtitlesLibass::GetEvents()
 {
-  CSingleLock lock(m_section);
+  std::unique_lock lock(m_section);
   if (!m_track)
   {
     CLog::Log(LOGERROR, "{} -  Missing ASS structs (m_track)", __FUNCTION__);
@@ -505,7 +683,7 @@ ASS_Event* CDVDSubtitlesLibass::GetEvents()
 
 int CDVDSubtitlesLibass::GetNrOfEvents() const
 {
-  CSingleLock lock(m_section);
+  std::unique_lock lock(m_section);
   if (!m_track)
     return 0;
   return m_track->n_events;
@@ -529,7 +707,7 @@ int CDVDSubtitlesLibass::AddEvent(const char* text,
     return ASS_NO_ID;
   }
 
-  CSingleLock lock(m_section);
+  std::unique_lock lock(m_section);
   if (!m_library || !m_track)
   {
     CLog::Log(LOGERROR, "{} - Missing ASS structs (m_library or m_track)", __FUNCTION__);
@@ -560,7 +738,7 @@ int CDVDSubtitlesLibass::AddEvent(const char* text,
 
 void CDVDSubtitlesLibass::AppendTextToEvent(int eventId, const char* text)
 {
-  CSingleLock lock(m_section);
+  std::unique_lock lock(m_section);
   if (eventId == ASS_NO_ID || text == NULL || text[0] == '\0')
     return;
   if (!m_track)
@@ -592,7 +770,7 @@ void CDVDSubtitlesLibass::AppendTextToEvent(int eventId, const char* text)
 
 void CDVDSubtitlesLibass::ChangeEventStopTime(int eventId, double stopTime)
 {
-  CSingleLock lock(m_section);
+  std::unique_lock lock(m_section);
   if (eventId == ASS_NO_ID)
     return;
   if (!m_track)
@@ -616,7 +794,7 @@ void CDVDSubtitlesLibass::ChangeEventStopTime(int eventId, double stopTime)
 
 void CDVDSubtitlesLibass::FlushEvents()
 {
-  CSingleLock lock(m_section);
+  std::unique_lock lock(m_section);
   if (!m_library || !m_track)
   {
     CLog::Log(LOGERROR, "{} - Missing ASS structs (m_library or m_track)", __FUNCTION__);
@@ -628,7 +806,7 @@ void CDVDSubtitlesLibass::FlushEvents()
 
 int CDVDSubtitlesLibass::DeleteEvents(int nEvents, int threshold)
 {
-  CSingleLock lock(m_section);
+  std::unique_lock lock(m_section);
   if (!m_library || !m_track)
   {
     CLog::Log(LOGERROR, "{} - Missing ASS structs (m_library or m_track)", __FUNCTION__);

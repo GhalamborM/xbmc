@@ -9,11 +9,11 @@
 #pragma once
 
 #include "threads/CriticalSection.h"
-#include "threads/SingleLock.h"
 #include "utils/Geometry.h"
 
 #include <atomic>
 #include <cstdint>
+#include <mutex>
 #include <set>
 #include <tuple>
 
@@ -33,7 +33,9 @@ namespace WAYLAND
 class COutput
 {
 public:
-  COutput(std::uint32_t globalName, wayland::output_t const & output, std::function<void()> doneHandler);
+  COutput(std::uint32_t globalName,
+          wayland::output_t const& output,
+          std::function<void(bool)> doneHandler);
   ~COutput() noexcept;
 
   wayland::output_t const& GetWaylandOutput() const
@@ -50,7 +52,7 @@ public:
    */
   CPointInt GetPosition() const
   {
-    CSingleLock lock(m_geometryCriticalSection);
+    std::unique_lock lock(m_geometryCriticalSection);
     return m_position;
   }
   /**
@@ -59,18 +61,28 @@ public:
    */
   CSizeInt GetPhysicalSize() const
   {
-    CSingleLock lock(m_geometryCriticalSection);
+    std::unique_lock lock(m_geometryCriticalSection);
     return m_physicalSize;
   }
   std::string const& GetMake() const
   {
-    CSingleLock lock(m_geometryCriticalSection);
+    std::unique_lock lock(m_geometryCriticalSection);
     return m_make;
   }
   std::string const& GetModel() const
   {
-    CSingleLock lock(m_geometryCriticalSection);
+    std::unique_lock lock(m_geometryCriticalSection);
     return m_model;
+  }
+  std::string GetName() const
+  {
+    std::unique_lock lock(m_geometryCriticalSection);
+    return m_name;
+  }
+  std::string GetDescription() const
+  {
+    std::unique_lock lock(m_geometryCriticalSection);
+    return m_description;
   }
   std::int32_t GetScale() const
   {
@@ -129,14 +141,15 @@ private:
 
   std::uint32_t m_globalName;
   wayland::output_t m_output;
-  std::function<void()> m_doneHandler;
+  std::function<void(bool)> m_doneHandler;
 
   mutable CCriticalSection m_geometryCriticalSection;
   mutable CCriticalSection m_iteratorCriticalSection;
 
   CPointInt m_position;
   CSizeInt m_physicalSize;
-  std::string m_make, m_model;
+  std::string m_make, m_model, m_name, m_description;
+  bool m_labelChanged{false};
   std::atomic<std::int32_t> m_scale{1}; // default scale of 1 if no wl_output::scale is sent
 
   std::set<Mode> m_modes;

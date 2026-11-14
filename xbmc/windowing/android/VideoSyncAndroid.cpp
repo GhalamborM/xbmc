@@ -19,17 +19,15 @@
 
 #include "platform/android/activity/XBMCApp.h"
 
-
-bool CVideoSyncAndroid::Setup(PUPDATECLOCK func)
+bool CVideoSyncAndroid::Setup()
 {
   CLog::Log(LOGDEBUG, "CVideoSyncAndroid::{} setting up", __FUNCTION__);
 
   //init the vblank timestamp
   m_LastVBlankTime = CurrentHostCounter();
-  UpdateClock = func;
   m_abortEvent.Reset();
 
-  CXBMCApp::InitFrameCallback(this);
+  CXBMCApp::Get().InitFrameCallback(this);
   CServiceBroker::GetWinSystem()->Register(this);
 
   return true;
@@ -44,7 +42,7 @@ void CVideoSyncAndroid::Run(CEvent& stopEvent)
 void CVideoSyncAndroid::Cleanup()
 {
   CLog::Log(LOGDEBUG, "CVideoSyncAndroid::{} cleaning up", __FUNCTION__);
-  CXBMCApp::DeinitFrameCallback();
+  CXBMCApp::Get().DeinitFrameCallback();
   CServiceBroker::GetWinSystem()->Unregister(this);
 }
 
@@ -74,5 +72,5 @@ void CVideoSyncAndroid::FrameCallback(int64_t frameTimeNanos)
   m_LastVBlankTime = frameTimeNanos;
 
   //update the vblank timestamp, update the clock and send a signal that we got a vblank
-  UpdateClock(NrVBlanks, frameTimeNanos, m_refClock);
+  m_refClock->UpdateClock(NrVBlanks, frameTimeNanos);
 }

@@ -9,6 +9,7 @@
 #pragma once
 
 #include "DirtyRegionTracker.h"
+#include "GUISurroundRenderer.h"
 #include "GUIWindow.h"
 #include "IMsgTargetCallback.h"
 #include "IWindowManagerCallback.h"
@@ -16,6 +17,7 @@
 #include "messaging/IMessageTarget.h"
 
 #include <list>
+#include <memory>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -49,6 +51,7 @@ class CGUIWindowManager : public KODI::MESSAGING::IMessageTarget
 {
   friend CGUIDialog;
   friend CGUIMediaWindow;
+
 public:
   CGUIWindowManager();
   ~CGUIWindowManager() override;
@@ -56,7 +59,7 @@ public:
   bool SendMessage(int message, int senderID, int destID, int param1 = 0, int param2 = 0);
   bool SendMessage(CGUIMessage& message, int window);
   void Initialize();
-  void Add(CGUIWindow* pWindow);
+  bool Add(CGUIWindow* pWindow);
   void AddUniqueInstance(CGUIWindow *window);
   void AddCustomWindow(CGUIWindow* pWindow);
   void Remove(int id);
@@ -98,6 +101,17 @@ public:
    */
   void MarkDirty(const CRect& rect);
 
+  /*! \brief Tell the surround its settings moved, so the next frame paints the new ones.
+   */
+  void InvalidateSurround() { m_guiSurround.Invalidate(); }
+
+  /*! \brief True if Process() collected any dirty regions this frame.
+   *   Callable after Process() to decide whether the render pass needs
+   *   to run; used by the dirty-driven skip in CApplication::FrameMove
+   *   (currently gated to D2P plane and HDR GUI compositing FBO contexts).
+   */
+  bool HasDirtyRegions() const { return !m_dirtyregions.empty(); }
+
   /*! \brief Rendering of the current window and any dialogs
    Render is called every frame to draw the current window and any dialogs.
    It should only be called from the application thread.
@@ -123,6 +137,14 @@ public:
    \return true if the window manager is initialized, false otherwise.
    */
   bool Initialized() const { return m_initialized; }
+
+  /*! \brief Return whether a nested render loop is currently running.
+   A modal dialog pumps the application from its own Open() loop, leaving the GUI
+   message handlers below it suspended while still holding pointers into the control
+   tree. Destroying windows or controls has to wait until the stack has unwound.
+   \return true if called from within a nested render loop, false otherwise.
+   */
+  bool IsNested() const { return m_iNested > 0; }
 
   /*! \brief Create and initialize all windows and dialogs
    */
@@ -192,12 +214,13 @@ public:
    */
   int GetTopmostModalDialog(bool ignoreClosing = false) const;
 
-  void SendThreadMessage(CGUIMessage& message, int window = 0);
+  void SendThreadMessage(const CGUIMessage& message, int window = 0);
   void DispatchThreadMessages();
   // method to removed queued messages with message id in the requested message id list.
   // pMessageIDList: point to first integer of a 0 ends integer array.
-  int RemoveThreadMessageByMessageIds(int *pMessageIDList);
+  int RemoveThreadMessageByMessageIds(const int* pMessageIDList);
   void AddMsgTarget( IMsgTargetCallback* pMsgTarget );
+  void RemoveMsgTarget(IMsgTargetCallback* pMsgTarget);
   int GetActiveWindow() const;
   int GetActiveWindowOrDialog() const;
   bool HasModalDialog(bool ignoreClosing) const;
@@ -231,6 +254,12 @@ public:
 #endif
 private:
   void RenderPass() const;
+  /*! \brief Render in one back to front pass.
+   */
+  void RenderPassSingle() const;
+  /*! \brief Render opaque elements front to back, and transparent ones back to front
+   */
+  void RenderPassDual() const;
 
   void LoadNotOnDemandWindows();
   void UnloadNotOnDemandWindows();
@@ -263,10 +292,10 @@ private:
 
   bool HandleAction(const CAction &action) const;
 
-  std::unordered_map<int, CGUIWindow*> m_mapWindows;
-  std::vector<CGUIWindow*> m_vecCustomWindows;
-  std::vector<CGUIWindow*> m_activeDialogs;
-  std::vector<CGUIWindow*> m_deleteWindows;
+  std::unordered_map<int, std::shared_ptr<CGUIWindow>> m_mapWindows;
+  std::vector<std::shared_ptr<CGUIWindow>> m_vecCustomWindows;
+  std::vector<std::shared_ptr<CGUIWindow>> m_activeDialogs;
+  std::vector<std::shared_ptr<CGUIWindow>> m_deleteWindows;
 
   std::deque<int> m_windowHistory;
 
@@ -280,6 +309,9 @@ private:
   mutable bool m_touchGestureActive{false};
   mutable bool m_inhibitTouchGestureEvents{false};
 
+  mutable CGUISurroundRenderer m_guiSurround;
+
   CDirtyRegionList m_dirtyregions;
   CDirtyRegionTracker m_tracker;
+  bool m_presentedFrame{false};
 };

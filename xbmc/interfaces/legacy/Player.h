@@ -12,6 +12,7 @@
 #include "AddonString.h"
 #include "Alternative.h"
 #include "Exception.h"
+#include "InfoTagGame.h"
 #include "InfoTagMusic.h"
 #include "InfoTagRadioRDS.h"
 #include "InfoTagVideo.h"
@@ -89,7 +90,12 @@ namespace XBMCAddon
       /// @param listitem            [opt] listitem - used with setInfo() to set
       ///                            different infolabels.
       /// @param windowed            [opt] bool - true=play video windowed,
-      ///                            false=play users preference.(default)
+      ///                            false=play users preference.(default) \n
+      ///                            If playback is started windowed refresh rate
+      ///                            switch (resolution update) is ignored. This
+      ///                            might be useful if you are designing your own
+      ///                            player window and want to avoid other GUI
+      ///                            elements popping up on screen.
       /// @param startpos            [opt] int - starting position when playing
       ///                            a playlist. Default = -1
       ///
@@ -426,6 +432,22 @@ namespace XBMCAddon
 #ifdef DOXYGEN_SHOULD_USE_THIS
       ///
       /// \ingroup python_Player
+      /// @brief \python_func{ isPlayingGame() }
+      /// Check for playing game.
+      ///
+      /// @return                    True if kodi is playing a game
+      ///
+      ///------------------------------------------------------------------------
+      /// @python_v20 New function added.
+      ///
+      isPlayingGame();
+#else
+      bool isPlayingGame();
+#endif
+
+#ifdef DOXYGEN_SHOULD_USE_THIS
+      ///
+      /// \ingroup python_Player
       /// @brief \python_func{ isExternalPlayer() }
       /// Check for external player.
       ///
@@ -550,9 +572,12 @@ namespace XBMCAddon
       ///
       /// \ingroup python_Player
       /// @brief \python_func{ getSubtitles() }
-      /// Get subtitle stream name.
+      /// Get the language of the current subtitle stream.
       ///
-      /// @return                    Stream name
+      /// @return                    BCP 47 language tag of the stream, e.g. **en** or **en-AU**,
+      ///                            or the stream name when it declares no language
+      ///
+      /// @python_v22 Language values are BCP 47 tags; previously ISO 639-2 three letter codes.
       ///
       getSubtitles();
 #else
@@ -563,9 +588,12 @@ namespace XBMCAddon
       ///
       /// \ingroup python_Player
       /// @brief \python_func{ getAvailableSubtitleStreams() }
-      /// Get Subtitle stream names.
+      /// Get the languages of the available subtitle streams.
       ///
-      /// @return                    List of subtitle streams as name
+      /// @return                    List of BCP 47 language tags, e.g. **en** or **en-AU**; a
+      ///                            stream that declares no language is listed by its name
+      ///
+      /// @python_v22 Language values are BCP 47 tags; previously ISO 639-2 three letter codes.
       ///
       getAvailableSubtitleStreams();
 #else
@@ -623,6 +651,25 @@ namespace XBMCAddon
       void updateInfoTag(const XBMCAddon::xbmcgui::ListItem* item);
 #endif
 
+#ifdef DOXYGEN_SHOULD_USE_THIS
+      ///
+      /// \ingroup python_Player
+      /// @brief \python_func{ getGameInfoTag() }
+      /// To get game info tag.
+      ///
+      /// Returns the GameInfoTag of the current playing game.
+      ///
+      /// @return                    Game info tag
+      /// @throws Exception          If player is not playing a file or current
+      ///                            file is not a game file.
+      ///
+      ///------------------------------------------------------------------------
+      /// @python_v20 New function added.
+      ///
+      getGameInfoTag();
+#else
+      InfoTagGame* getGameInfoTag();
+#endif
 
 #ifdef DOXYGEN_SHOULD_USE_THIS
       ///
@@ -639,6 +686,39 @@ namespace XBMCAddon
       getVideoInfoTag();
 #else
       InfoTagVideo* getVideoInfoTag();
+#endif
+
+#ifdef DOXYGEN_SHOULD_USE_THIS
+      ///
+      /// \ingroup python_Player
+      /// @brief \python_func{ getContentGeometry() }
+      /// To get where the picture is inside the frame carrying it.
+      ///
+      /// Returns the content rectangle in force - what the film was shot at\, as against the
+      /// shape of the frame it is encoded in. A stored measurement\, a reading taken during
+      /// playback and a ratio the viewer declared all reach it\, and getSource() says which.
+      ///
+      /// Unlike the info tag getters this does not raise when nothing is playing\, reporting
+      /// the shape Kodi rests at with source `container` and no frame behind it.
+      ///
+      /// @return                    Content geometry snapshot
+      ///
+      ///
+      ///------------------------------------------------------------------------
+      /// @python_v23 New function added.
+      ///
+      /// **Example:**
+      /// ~~~~~~~~~~~~~{.py}
+      /// ...
+      /// geometry = xbmc.Player().getContentGeometry()
+      /// if geometry.getSource() != 'container':
+      ///     lens.select(geometry.getAspect())
+      /// ...
+      /// ~~~~~~~~~~~~~
+      ///
+      getContentGeometry();
+#else
+      ContentGeometry* getContentGeometry();
 #endif
 
       // Player_GetMusicInfoTag
@@ -698,9 +778,12 @@ namespace XBMCAddon
       ///
       /// \ingroup python_Player
       /// @brief \python_func{ getAvailableAudioStreams() }
-      /// Get Audio stream names
+      /// Get the languages of the available audio streams.
       ///
-      /// @return                    List of audio streams as name
+      /// @return                    List of BCP 47 language tags, e.g. **en** or **en-AU**; a
+      ///                            stream that declares no language is listed by its name
+      ///
+      /// @python_v22 Language values are BCP 47 tags; previously ISO 639-2 three letter codes.
       ///
       getAvailableAudioStreams();
 #else
@@ -734,9 +817,12 @@ namespace XBMCAddon
       ///
       /// \ingroup python_Player
       /// @brief \python_func{ getAvailableVideoStreams() }
-      /// Get Video stream names
+      /// Get the languages of the available video streams.
       ///
-      /// @return                    List of video streams as name
+      /// @return                    List of BCP 47 language tags, e.g. **en** or **en-AU**; a
+      ///                            stream that declares no language is listed by its name
+      ///
+      /// @python_v22 Language values are BCP 47 tags; previously ISO 639-2 three letter codes.
       ///
       getAvailableVideoStreams();
 #else

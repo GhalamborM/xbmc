@@ -10,17 +10,21 @@
 
 #include "Autorun.h"
 #include "FileItem.h"
+#include "FileItemList.h"
 #include "GUIPassword.h"
 #include "ServiceBroker.h"
 #include "Util.h"
 #include "addons/gui/GUIDialogAddonInfo.h"
 #include "dialogs/GUIDialogMediaSource.h"
+#include "filesystem/SourcesDirectory.h"
 #include "guilib/GUIComponent.h"
 #include "guilib/GUIWindowManager.h"
-#include "input/Key.h"
+#include "input/actions/ActionIDs.h"
 #include "media/MediaLockState.h"
 #include "settings/MediaSourceSettings.h"
 #include "utils/StringUtils.h"
+
+using KODI::MEDIA::MediaSection;
 
 #define CONTROL_BTNVIEWASICONS 2
 #define CONTROL_BTNSORTBY      3
@@ -55,7 +59,8 @@ bool CGUIWindowPrograms::OnMessage(CGUIMessage& message)
 
       // is this the first time accessing this window?
       if (m_vecItems->GetPath() == "?" && message.GetStringParam().empty())
-        message.SetStringParam(CMediaSourceSettings::GetInstance().GetDefaultSource("programs"));
+        message.SetStringParam(
+            CMediaSourceSettings::GetInstance().GetDefaultSource(MediaSection::PROGRAMS));
 
       return CGUIMediaWindow::OnMessage(message);
     }
@@ -92,9 +97,10 @@ void CGUIWindowPrograms::GetContextButtons(int itemNumber, CContextButtons &butt
   CFileItemPtr item = m_vecItems->Get(itemNumber);
   if (item)
   {
-    if ( m_vecItems->IsVirtualDirectoryRoot() || m_vecItems->GetPath() == "sources://programs/" )
+    if (m_vecItems->IsVirtualDirectoryRoot() ||
+        m_vecItems->GetPath() == XFILE::CSourcesDirectory::PathOf(MediaSection::PROGRAMS))
     {
-      CGUIDialogContextMenu::GetContextButtons("programs", item, buttons);
+      CGUIDialogContextMenu::GetContextButtons(MediaSection::PROGRAMS, item, buttons);
     }
   }
   CGUIMediaWindow::GetContextButtons(itemNumber, buttons);
@@ -104,7 +110,7 @@ bool CGUIWindowPrograms::OnContextButton(int itemNumber, CONTEXT_BUTTON button)
 {
   CFileItemPtr item = (itemNumber >= 0 && itemNumber < m_vecItems->Size()) ? m_vecItems->Get(itemNumber) : CFileItemPtr();
 
-  if (CGUIDialogContextMenu::OnContextButton("programs", item, button))
+  if (CGUIDialogContextMenu::OnContextButton(MediaSection::PROGRAMS, item, button))
   {
     Update("");
     return true;
@@ -114,7 +120,7 @@ bool CGUIWindowPrograms::OnContextButton(int itemNumber, CONTEXT_BUTTON button)
 
 bool CGUIWindowPrograms::OnAddMediaSource()
 {
-  return CGUIDialogMediaSource::ShowAndAddMediaSource("programs");
+  return CGUIDialogMediaSource::ShowAndAddMediaSource(MediaSection::PROGRAMS);
 }
 
 bool CGUIWindowPrograms::Update(const std::string &strDirectory, bool updateFilterPath /* = true */)
@@ -134,12 +140,13 @@ bool CGUIWindowPrograms::OnPlayMedia(int iItem, const std::string&)
   if ( iItem < 0 || iItem >= m_vecItems->Size() ) return false;
   CFileItemPtr pItem = m_vecItems->Get(iItem);
 
-#ifdef HAS_DVD_DRIVE
+#ifdef HAS_OPTICAL_DRIVE
   if (pItem->IsDVD())
     return MEDIA_DETECT::CAutorun::PlayDiscAskResume(m_vecItems->Get(iItem)->GetPath());
 #endif
 
-  if (pItem->m_bIsFolder) return false;
+  if (pItem->IsFolder())
+    return false;
 
   return false;
 }
@@ -153,16 +160,16 @@ std::string CGUIWindowPrograms::GetStartFolder(const std::string &dir)
     return "androidapp://sources/apps/";
 
   SetupShares();
-  VECSOURCES shares;
+  std::vector<CMediaSource> shares;
   m_rootDir.GetSources(shares);
   bool bIsSourceName = false;
   int iIndex = CUtil::GetMatchingSource(dir, shares, bIsSourceName);
   if (iIndex > -1)
   {
-    if (iIndex < static_cast<int>(shares.size()) && shares[iIndex].m_iHasLock == LOCK_STATE_LOCKED)
+    if (iIndex < static_cast<int>(shares.size()) && shares[iIndex].GetLockInfo().IsLocked())
     {
       CFileItem item(shares[iIndex]);
-      if (!g_passwordManager.IsItemUnlocked(&item,"programs"))
+      if (!g_passwordManager.IsItemUnlocked(&item, MediaSection::PROGRAMS))
         return "";
     }
     if (bIsSourceName)

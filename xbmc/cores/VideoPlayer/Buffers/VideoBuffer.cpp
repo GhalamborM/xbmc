@@ -8,8 +8,9 @@
 
 #include "VideoBuffer.h"
 
-#include "threads/SingleLock.h"
+#include "utils/log.h"
 
+#include <mutex>
 #include <string.h>
 #include <utility>
 
@@ -204,6 +205,16 @@ void CVideoBufferSysMem::GetStrides(int(&strides)[YuvImage::MAX_PLANES])
   strides[2] = m_image.stride[2];
 }
 
+void CVideoBufferSysMem::SetPixelFormat(const AVPixelFormat pixFormat)
+{
+  if (pixFormat == AV_PIX_FMT_NONE)
+  {
+    CLog::LogF(LOGERROR, "Pixel format not valid.");
+    return;
+  }
+  m_pixFormat = pixFormat;
+}
+
 void CVideoBufferSysMem::SetDimensions(int width, int height, const int (&strides)[YuvImage::MAX_PLANES])
 {
   m_width = width;
@@ -279,7 +290,7 @@ bool CVideoBufferSysMem::Alloc()
 
 CVideoBufferPoolSysMem::~CVideoBufferPoolSysMem()
 {
-  CSingleLock lock(m_critSection);
+  std::unique_lock lock(m_critSection);
 
   for (auto buf : m_all)
   {
@@ -289,7 +300,7 @@ CVideoBufferPoolSysMem::~CVideoBufferPoolSysMem()
 
 CVideoBuffer* CVideoBufferPoolSysMem::Get()
 {
-  CSingleLock lock(m_critSection);
+  std::unique_lock lock(m_critSection);
 
   CVideoBufferSysMem *buf = nullptr;
   if (!m_free.empty())
@@ -314,7 +325,7 @@ CVideoBuffer* CVideoBufferPoolSysMem::Get()
 
 void CVideoBufferPoolSysMem::Return(int id)
 {
-  CSingleLock lock(m_critSection);
+  std::unique_lock lock(m_critSection);
 
   auto it = m_used.begin();
   while (it != m_used.end())
@@ -358,7 +369,7 @@ bool CVideoBufferPoolSysMem::IsCompatible(AVPixelFormat format, int size)
 
 void CVideoBufferPoolSysMem::Discard(CVideoBufferManager *bm, ReadyToDispose cb)
 {
-  CSingleLock lock(m_critSection);
+  std::unique_lock lock(m_critSection);
   m_bm = bm;
   m_cbDispose = cb;
 
@@ -377,26 +388,26 @@ std::shared_ptr<IVideoBufferPool> CVideoBufferPoolSysMem::CreatePool()
 
 CVideoBufferManager::CVideoBufferManager()
 {
-  CSingleLock lock(m_critSection);
+  std::unique_lock lock(m_critSection);
   RegisterPoolFactory("SysMem", &CVideoBufferPoolSysMem::CreatePool);
 }
 
 void CVideoBufferManager::RegisterPool(const std::shared_ptr<IVideoBufferPool>& pool)
 {
-  CSingleLock lock(m_critSection);
+  std::unique_lock lock(m_critSection);
   // preferred pools are to the front
   m_pools.push_front(pool);
 }
 
 void CVideoBufferManager::RegisterPoolFactory(const std::string& id, CreatePoolFunc createFunc)
 {
-  CSingleLock lock(m_critSection);
+  std::unique_lock lock(m_critSection);
   m_poolFactories[id] = createFunc;
 }
 
 void CVideoBufferManager::ReleasePools()
 {
-  CSingleLock lock(m_critSection);
+  std::unique_lock lock(m_critSection);
   std::list<std::shared_ptr<IVideoBufferPool>> pools = m_pools;
   m_pools.clear();
 
@@ -410,7 +421,7 @@ void CVideoBufferManager::ReleasePools()
 
 void CVideoBufferManager::ReleasePool(IVideoBufferPool *pool)
 {
-  CSingleLock lock(m_critSection);
+  std::unique_lock lock(m_critSection);
 
   for (auto it = m_pools.begin(); it != m_pools.end(); ++it)
   {
@@ -426,7 +437,7 @@ void CVideoBufferManager::ReleasePool(IVideoBufferPool *pool)
 
 void CVideoBufferManager::ReadyForDisposal(IVideoBufferPool *pool)
 {
-  CSingleLock lock(m_critSection);
+  std::unique_lock lock(m_critSection);
 
   for (auto it = m_discardedPools.begin(); it != m_discardedPools.end(); ++it)
   {
@@ -441,7 +452,7 @@ void CVideoBufferManager::ReadyForDisposal(IVideoBufferPool *pool)
 
 CVideoBuffer* CVideoBufferManager::Get(AVPixelFormat format, int size, IVideoBufferPool **pPool)
 {
-  CSingleLock lock(m_critSection);
+  std::unique_lock lock(m_critSection);
   for (const auto& pool : m_pools)
   {
     if (!pool->IsConfigured())

@@ -79,10 +79,14 @@ public:
 
   /*! \brief allowed overflow handling techniques for labels, as defined by the skin
    */
-  enum OVER_FLOW { OVER_FLOW_TRUNCATE = 0,
-                   OVER_FLOW_SCROLL,
-                   OVER_FLOW_WRAP,
-                   OVER_FLOW_CLIP };
+  enum OVER_FLOW
+  {
+    OVER_FLOW_TRUNCATE = 0, // Truncated text from right (text end with ellipses)
+    OVER_FLOW_SCROLL,
+    OVER_FLOW_WRAP,
+    OVER_FLOW_CLIP,
+    OVER_FLOW_TRUNCATE_LEFT // Truncated text from left (text start with ellipses)
+  };
 
   CGUILabel(float posX, float posY, float width, float height, const CLabelInfo& labelInfo, OVER_FLOW overflow = OVER_FLOW_TRUNCATE);
   CGUILabel(const CGUILabel& label);
@@ -126,7 +130,7 @@ public:
    \param colors colors referenced in the styled text.
    \sa SetText, SetTextW
    */
-  bool SetStyledText(const vecText& text, const std::vector<UTILS::COLOR::Color>& colors);
+  bool SetStyledText(const vecText& text, const std::vector<KODI::UTILS::COLOR::Color>& colors);
 
   /*! \brief Set the color to use for the label
    Sets the color to be used for this label.  Takes effect at the next render
@@ -193,6 +197,13 @@ public:
   const CLabelInfo& GetLabelInfo() const { return m_label; }
   CLabelInfo& GetLabelInfo() { return m_label; }
 
+  /*! \brief Set the font used to render this label
+   Updates both the label info and the underlying text layout, so that the new font actually
+   takes effect on the next render.
+   \param font the new font to use
+   */
+  void SetLabelFont(CGUIFont* font);
+
   /*! \brief Check a left aligned and right aligned label for overlap and cut the labels off so that no overlap occurs
 
    If a left-aligned label occupies some of the same space on screen as a right-aligned label, then we may be able to
@@ -216,7 +227,7 @@ public:
   static bool CheckAndCorrectOverlap(CGUILabel &label1, CGUILabel &label2);
 
 protected:
-  UTILS::COLOR::Color GetColor() const;
+  KODI::UTILS::COLOR::Color GetColor() const;
 
   /*! \brief Computes the final layout of the text
    Uses the maximal position and width of the text, as well as the text length
@@ -230,11 +241,11 @@ private:
   CGUITextLayout m_textLayout;
 
   bool           m_scrolling;
-  OVER_FLOW      m_overflowType;
+  OVER_FLOW m_overflowType;
   CScrollInfo    m_scrollInfo;
   CRect          m_renderRect;   ///< actual sizing of text
   CRect          m_maxRect;      ///< maximum sizing of text
-  bool           m_invalid;      ///< if true, the label needs recomputing
-  COLOR          m_color;        ///< color to render text \sa SetColor, GetColor
+  bool m_invalid = true; ///< if true, the label needs recomputing
+  COLOR m_color = COLOR_TEXT; ///< color to render text \sa SetColor, GetColor
   unsigned int   m_maxScrollLoops = ~0U;
 };

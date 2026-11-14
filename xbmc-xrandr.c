@@ -159,12 +159,6 @@ static void warning(const char* format, ...)
   va_end(ap);
 }
 
-/* Because fmin requires C99 support */
-static inline double dmin(double x, double y)
-{
-  return x < y ? x : y;
-}
-
 static char* rotation_name(Rotation rotation)
 {
   int i;
@@ -602,8 +596,13 @@ static void set_transform(
   dest->transform = *transform;
   dest->filter = strdup(filter);
   dest->nparams = nparams;
-  dest->params = malloc(nparams * sizeof(XFixed));
-  memcpy(dest->params, params, nparams * sizeof(XFixed));
+  if (nparams)
+  {
+    dest->params = malloc(nparams * sizeof(XFixed));
+    memcpy(dest->params, params, nparams * sizeof(XFixed));
+  }
+  else
+    dest->params = NULL;
 }
 
 static void copy_transform(transform_t* dest, transform_t* src)
@@ -1646,6 +1645,7 @@ static void get_outputs(void)
     name_t output_name;
     if (!output_info)
       fatal("could not get output 0x%x information\n", res->outputs[o]);
+    init_name(&output_name);
     set_name_xid(&output_name, res->outputs[o]);
     set_name_index(&output_name, o);
     set_name_string(&output_name, output_info->name);
@@ -2479,12 +2479,15 @@ int main(int argc, char** argv)
         case 2:
           pan->left = pan->top = 0;
           /* fall through */
+          __attribute__((fallthrough));
         case 4:
           pan->track_left = pan->track_top = pan->track_width = pan->track_height = 0;
           /* fall through */
+          __attribute__((fallthrough));
         case 8:
           pan->border_left = pan->border_top = pan->border_right = pan->border_bottom = 0;
           /* fall through */
+          __attribute__((fallthrough));
         case 12:
           break;
         default:

@@ -9,12 +9,8 @@
 #pragma once
 
 #include "EventPacket.h"
-#include "ServiceBroker.h"
 #include "Socket.h"
-#include "settings/Settings.h"
-#include "settings/SettingsComponent.h"
 #include "threads/CriticalSection.h"
-#include "threads/Thread.h"
 
 #include <chrono>
 #include <list>
@@ -47,7 +43,7 @@ namespace EVENTCLIENT
   class CEventButtonState
   {
   public:
-    CEventButtonState()
+    CEventButtonState() : m_iNextRepeat{}
     {
       m_iKeyCode   = 0;
       m_fAmount    = 0.0f;
@@ -56,7 +52,6 @@ namespace EVENTCLIENT
       m_bActive    = false;
       m_bAxis      = false;
       m_iControllerNumber = 0;
-      m_iNextRepeat = {};
     }
 
     CEventButtonState(unsigned int iKeyCode,
@@ -66,7 +61,7 @@ namespace EVENTCLIENT
                       bool isAxis,
                       bool bRepeat,
                       bool bUseAmount)
-      : m_buttonName(std::move(buttonName)), m_mapName(std::move(mapName))
+      : m_buttonName(std::move(buttonName)), m_mapName(std::move(mapName)), m_iNextRepeat{}
     {
       m_iKeyCode   = iKeyCode;
       m_fAmount    = fAmount;
@@ -75,7 +70,6 @@ namespace EVENTCLIENT
       m_bActive    = true;
       m_bAxis      = isAxis;
       m_iControllerNumber = 0;
-      m_iNextRepeat = {};
       Load();
     }
 
@@ -145,14 +139,7 @@ namespace EVENTCLIENT
       return m_deviceName;
     }
 
-    void RefreshSettings()
-    {
-      const std::shared_ptr<CSettings> settings = CServiceBroker::GetSettingsComponent()->GetSettings();
-      m_iRepeatDelay =
-          std::chrono::milliseconds(settings->GetInt(CSettings::SETTING_SERVICES_ESINITIALDELAY));
-      m_iRepeatSpeed = std::chrono::milliseconds(
-          settings->GetInt(CSettings::SETTING_SERVICES_ESCONTINUOUSDELAY));
-    }
+    void RefreshSettings();
 
     SOCKETS::CAddress& Address()
     {

@@ -45,7 +45,7 @@ extern "C"
 {
 #endif /* __cplusplus */
 
-  typedef void* KODI_ADDON_AUDIODECODER_HDL;
+  typedef KODI_ADDON_INSTANCE_HDL KODI_ADDON_AUDIODECODER_HDL;
 
   //============================================================================
   /// @defgroup cpp_kodi_addon_audiodecoder_Defs_AUDIODECODER_READ_RETURN enum AUDIODECODER_READ_RETURN
@@ -130,7 +130,6 @@ extern "C"
 
   typedef struct KodiToAddonFuncTable_AudioDecoder
   {
-    KODI_HANDLE addonInstance;
     PFN_KODI_ADDON_AUDIODECODER_SUPPORTS_FILE_V1 supports_file;
     PFN_KODI_ADDON_AUDIODECODER_INIT_V1 init;
     PFN_KODI_ADDON_AUDIODECODER_READ_PCM_V1 read_pcm;

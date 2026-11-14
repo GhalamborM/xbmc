@@ -1,22 +1,51 @@
 project(ffmpeg)
 
-cmake_minimum_required(VERSION 2.8)
-
-list(APPEND CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR})
+cmake_minimum_required(VERSION 3.12)
 
 if(ENABLE_CCACHE AND CCACHE_PROGRAM)
-  set(ffmpeg_conf "--cc=${CCACHE_PROGRAM} ${CMAKE_C_COMPILER}" "--cxx=${CCACHE_PROGRAM} ${CMAKE_CXX_COMPILER}")
+  set(ffmpeg_conf "--cc=${CCACHE_PROGRAM} ${CMAKE_C_COMPILER}"
+                  "--cxx=${CCACHE_PROGRAM} ${CMAKE_CXX_COMPILER}"
+                )
 else()
-  set(ffmpeg_conf --cc=${CMAKE_C_COMPILER} --cxx=${CMAKE_CXX_COMPILER})
+  set(ffmpeg_conf --cc=${CMAKE_C_COMPILER}
+                  --cxx=${CMAKE_CXX_COMPILER}
+                )
 endif()
 
+set(env_vars ${EXTRA_ENV_VARS})
+
 if(CROSSCOMPILING)
-  set(pkgconf "PKG_CONFIG_LIBDIR=${DEPENDS_PATH}/lib/pkgconfig")
-  list(APPEND ffmpeg_conf --pkg-config=${PKG_CONFIG_EXECUTABLE} --pkg-config-flags=--static)
-  list(APPEND ffmpeg_conf --enable-cross-compile --cpu=${CPU} --arch=${CPU} --target-os=${OS})
-  list(APPEND ffmpeg_conf --ar=${CMAKE_AR} --strip=${CMAKE_STRIP})
+  list(APPEND env_vars "PKG_CONFIG_LIBDIR=${DEPENDS_PATH}/lib/pkgconfig")
+  list(APPEND ffmpeg_conf --pkg-config=${PKG_CONFIG_EXECUTABLE}
+                          --pkg-config-flags=--static
+                          --enable-cross-compile
+                          --enable-pic
+                          --ar=${CMAKE_AR}
+                          --ranlib=${CMAKE_RANLIB}
+                          --strip=${CMAKE_STRIP}
+                          --host-cc=${CC_FOR_BUILD}
+                          --host-ld=${CC_FOR_BUILD}
+                          "--host-cflags=${CFLAGS_FOR_BUILD}"
+                          "--host-ldflags=${LDFLAGS_FOR_BUILD}"
+              )
+
   message(STATUS "CROSS: ${ffmpeg_conf}")
 endif()
+
+set(CONFIGARCH --arch=${CPU})
+
+list(APPEND ffmpeg_conf --disable-doc
+                        --disable-devices
+                        --disable-programs
+                        --disable-sdl2
+                        --disable-vulkan
+                        --enable-gpl
+                        --enable-version3
+                        --enable-openssl
+                        --enable-runtime-cpudetect
+                        --enable-pthreads
+                        --extra-version="Kodi"
+            )
 
 if(CMAKE_C_FLAGS)
   list(APPEND ffmpeg_conf --extra-cflags=${CMAKE_C_FLAGS})
@@ -39,7 +68,9 @@ if(CMAKE_BUILD_TYPE STREQUAL Release)
 endif()
 
 if(CORE_SYSTEM_NAME STREQUAL linux OR CORE_SYSTEM_NAME STREQUAL freebsd)
-  list(APPEND ffmpeg_conf --enable-pic)
+  list(APPEND ffmpeg_conf --enable-pic
+                          --target-os=linux
+              )
   if(ENABLE_VAAPI)
     list(APPEND ffmpeg_conf --enable-vaapi)
   else()
@@ -51,46 +82,70 @@ if(CORE_SYSTEM_NAME STREQUAL linux OR CORE_SYSTEM_NAME STREQUAL freebsd)
     list(APPEND ffmpeg_conf --disable-vdpau)
   endif()
 elseif(CORE_SYSTEM_NAME STREQUAL android)
+  list(APPEND ffmpeg_conf --target-os=android
+                          --extra-libs=-liconv
+                          --disable-linux-perf
+              )
   if(CPU MATCHES arm64)
-    list(APPEND ffmpeg_conf --cpu=cortex-a53 --arch=aarch64)
+    set(CONFIGARCH --arch=aarch64)
+    list(APPEND ffmpeg_conf --cpu=cortex-a53)
   elseif(CPU MATCHES arm)
     list(APPEND ffmpeg_conf --cpu=cortex-a9)
   elseif(CPU MATCHES x86_64)
-    list(APPEND ffmpeg_conf --cpu=x86_64 --enable-pic)
+    list(APPEND ffmpeg_conf --cpu=x86-64)
+    list(APPEND ffmpeg_conf --extra-cflags=-mno-stackrealign)
   else()
-    list(APPEND ffmpeg_conf --cpu=i686 --disable-mmx)
+    list(APPEND ffmpeg_conf --cpu=i686 --disable-mmx --disable-asm)
+    list(APPEND ffmpeg_conf --extra-cflags=-mno-stackrealign)
   endif()
-  list(APPEND ffmpeg_conf --target-os=linux --extra-libs=-liconv --disable-linux-perf)
 elseif(CORE_SYSTEM_NAME STREQUAL darwin_embedded)
-  list(APPEND ffmpeg_conf --disable-crystalhd --enable-videotoolbox 
-                          --target-os=darwin)
-elseif(CORE_SYSTEM_NAME STREQUAL osx)
-  list(APPEND ffmpeg_conf --disable-crystalhd --enable-videotoolbox
+  list(APPEND ffmpeg_conf --enable-videotoolbox
+                          --disable-filter=yadif_videotoolbox
                           --target-os=darwin
-                          --disable-securetransport)
+              )
+elseif(CORE_SYSTEM_NAME STREQUAL osx)
+  list(APPEND ffmpeg_conf --enable-videotoolbox
+                          --target-os=darwin
+                          --disable-securetransport
+              )
+elseif(CORE_SYSTEM_NAME STREQUAL wasm)
+  list(APPEND ffmpeg_conf --target-os=none)
+  set(CONFIGARCH --arch=wasm --cpu=wasm32)
 endif()
 
 if(CPU MATCHES arm)
-  list(APPEND ffmpeg_conf --enable-pic --disable-armv5te --disable-armv6t2)
+  list(APPEND ffmpeg_conf --disable-armv5te --disable-armv6t2)
 elseif(CPU MATCHES mips)
   list(APPEND ffmpeg_conf --disable-mips32r2 --disable-mipsdsp --disable-mipsdspr2)
 endif()
 
-find_package(GnuTls)
-if(GNUTLS_FOUND)
-  list(APPEND ffmpeg_conf --enable-gnutls)
+if(CPU MATCHES x86 OR CPU MATCHES x86_64)
+  find_package(NASM REQUIRED)
+  list(APPEND ffmpeg_conf --x86asmexe=${NASM_EXECUTABLE})
+endif()
+
+if(USE_LTO)
+   list(APPEND ffmpeg_conf --enable-lto)
 endif()
 
 if(ENABLE_DAV1D)
   list(APPEND ffmpeg_conf --enable-libdav1d)
-  set(pkgconf_path "PKG_CONFIG_PATH=${PKG_CONFIG_PATH}")
+  list(APPEND env_vars "PKG_CONFIG_PATH=${PKG_CONFIG_PATH}")
 else()
   list(APPEND ffmpeg_conf --disable-libdav1d)
 endif()
 
+if(ENABLE_LIBOPUS)
+  list(APPEND ffmpeg_conf --enable-libopus)
+  list(APPEND env_vars "PKG_CONFIG_PATH=${PKG_CONFIG_PATH}")
+endif()
+
 if(EXTRA_FLAGS)
+  string(REPLACE " " ";" EXTRA_FLAGS ${EXTRA_FLAGS})
   list(APPEND ffmpeg_conf ${EXTRA_FLAGS})
 endif()
+
+list(APPEND ffmpeg_conf ${CONFIGARCH})
 
 message(STATUS "FFMPEG_CONF: ${ffmpeg_conf}")
 
@@ -104,19 +159,20 @@ if(CMAKE_GENERATOR STREQUAL Ninja)
   endif()
 endif()
 
+if(NOT DISABLE_FFMPEG_SOURCE_PLUGINS)
+  set(sourceplugin_patch PATCH_COMMAND /bin/sh -c "patch -p1 -i <SOURCE_DIR>/001-ffmpeg-all-libpostproc-plugin.patch && patch -p1 -i <SOURCE_DIR>/002-ffmpeg-libavutil-common-h-cpp11-constant-macros.patch")
+else()
+  set(sourceplugin_patch PATCH_COMMAND patch -p1 -i <SOURCE_DIR>/002-ffmpeg-libavutil-common-h-cpp11-constant-macros.patch)
+endif()
+list(APPEND sourceplugin_patch COMMAND patch -p1 -i <SOURCE_DIR>/008-ffmpeg-all-pgssubdec-use-caller-colorspace.patch)
+
 include(ExternalProject)
 externalproject_add(ffmpeg
                     SOURCE_DIR ${CMAKE_SOURCE_DIR}
-                    CONFIGURE_COMMAND ${pkgconf} ${pkgconf_path} <SOURCE_DIR>/configure
+                    ${sourceplugin_patch}
+                    CONFIGURE_COMMAND ${env_vars} <SOURCE_DIR>/configure
                       --prefix=${CMAKE_INSTALL_PREFIX}
                       --extra-version="kodi-${FFMPEG_VER}"
-                      --disable-devices
-                      --disable-doc
-                      --disable-programs
-                      --enable-gpl
-                      --enable-runtime-cpudetect
-                      --enable-postproc
-                      --enable-pthreads
                       ${ffmpeg_conf}
                     BUILD_COMMAND ${MAKE_COMMAND})
 

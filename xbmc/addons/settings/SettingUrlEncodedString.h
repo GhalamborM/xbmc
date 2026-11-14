@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2017-2018 Team Kodi
+ *  Copyright (C) 2017-2018, 2026 Team Kodi
  *  This file is part of Kodi - https://kodi.tv
  *
  *  SPDX-License-Identifier: GPL-2.0-or-later
@@ -10,17 +10,26 @@
 
 #include "settings/lib/Setting.h"
 
+class CSettingsManager;
+
 namespace ADDON
 {
   class CSettingUrlEncodedString : public CSettingString
   {
   public:
-    CSettingUrlEncodedString(const std::string &id, CSettingsManager *settingsManager = NULL);
-    CSettingUrlEncodedString(const std::string &id, int label, const std::string &value, CSettingsManager *settingsManager = NULL);
-    CSettingUrlEncodedString(const std::string &id, const CSettingUrlEncodedString &setting);
+    explicit CSettingUrlEncodedString(std::string_view id,
+                                      CSettingsManager* settingsManager = nullptr);
+    CSettingUrlEncodedString(std::string_view id,
+                             int label,
+                             const std::string& value,
+                             CSettingsManager* settingsManager = nullptr);
+    CSettingUrlEncodedString(std::string_view id, const CSettingUrlEncodedString& setting);
     ~CSettingUrlEncodedString() override = default;
 
-    SettingPtr Clone(const std::string &id) const override { return std::make_shared<CSettingUrlEncodedString>(id, *this); }
+    SettingPtr Clone(std::string_view id) const override
+    {
+      return std::make_shared<CSettingUrlEncodedString>(id, *this);
+    }
 
     std::string GetDecodedValue() const;
     bool SetDecodedValue(const std::string& decodedValue);

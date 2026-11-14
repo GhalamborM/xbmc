@@ -12,6 +12,8 @@
 #include "windowing/VideoSync.h"
 
 #include <cstdint>
+#include <ctime>
+#include <optional>
 
 namespace KODI
 {
@@ -25,10 +27,10 @@ class CWinSystemWayland;
 class CVideoSyncWpPresentation : public CVideoSync
 {
 public:
-  explicit CVideoSyncWpPresentation(void* clock, CWinSystemWayland& winSystem);
+  explicit CVideoSyncWpPresentation(CVideoReferenceClock* clock, CWinSystemWayland& winSystem);
 
   float GetFps() override;
-  bool Setup(PUPDATECLOCK func) override;
+  bool Setup() override;
   void Run(CEvent& stop) override;
   void Cleanup() override;
 
@@ -38,6 +40,7 @@ private:
   CEvent m_stopEvent;
   CSignalRegistration m_presentationHandler;
   std::uint64_t m_lastMsc{};
+  std::optional<timespec> m_lastPresentationTime;
   std::uint32_t m_syncOutputID{};
   CWinSystemWayland &m_winSystem;
 };

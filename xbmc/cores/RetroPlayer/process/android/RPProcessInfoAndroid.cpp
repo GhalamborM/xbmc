@@ -11,13 +11,13 @@
 using namespace KODI;
 using namespace RETRO;
 
-CRPProcessInfoAndroid::CRPProcessInfoAndroid() : CRPProcessInfo("Android")
+CRPProcessInfoAndroid::CRPProcessInfoAndroid() : CRPProcessInfoEGL("Android")
 {
 }
 
-CRPProcessInfo* CRPProcessInfoAndroid::Create()
+std::unique_ptr<CRPProcessInfo> CRPProcessInfoAndroid::Create()
 {
-  return new CRPProcessInfoAndroid();
+  return std::make_unique<CRPProcessInfoAndroid>();
 }
 
 void CRPProcessInfoAndroid::Register()

@@ -14,81 +14,82 @@
 #include "log.h"
 #include "settings/AdvancedSettings.h"
 #include "settings/SettingsComponent.h"
+#include "utils/Geometry.h"
+#include "utils/Map.h"
 
-#include <map>
+#include <string_view>
 
+#include <EGL/egl.h>
 #include <EGL/eglext.h>
+#include <EGL/eglplatform.h>
 
 namespace
 {
 
 #define X(VAL) std::make_pair(VAL, #VAL)
-std::map<EGLint, const char*> eglAttributes =
-{
-  // please keep attributes in accordance to:
-  // https://www.khronos.org/registry/EGL/sdk/docs/man/html/eglGetConfigAttrib.xhtml
-  X(EGL_ALPHA_SIZE),
-  X(EGL_ALPHA_MASK_SIZE),
-  X(EGL_BIND_TO_TEXTURE_RGB),
-  X(EGL_BIND_TO_TEXTURE_RGBA),
-  X(EGL_BLUE_SIZE),
-  X(EGL_BUFFER_SIZE),
-  X(EGL_COLOR_BUFFER_TYPE),
-  X(EGL_CONFIG_CAVEAT),
-  X(EGL_CONFIG_ID),
-  X(EGL_CONFORMANT),
-  X(EGL_DEPTH_SIZE),
-  X(EGL_GREEN_SIZE),
-  X(EGL_LEVEL),
-  X(EGL_LUMINANCE_SIZE),
-  X(EGL_MAX_PBUFFER_WIDTH),
-  X(EGL_MAX_PBUFFER_HEIGHT),
-  X(EGL_MAX_PBUFFER_PIXELS),
-  X(EGL_MAX_SWAP_INTERVAL),
-  X(EGL_MIN_SWAP_INTERVAL),
-  X(EGL_NATIVE_RENDERABLE),
-  X(EGL_NATIVE_VISUAL_ID),
-  X(EGL_NATIVE_VISUAL_TYPE),
-  X(EGL_RED_SIZE),
-  X(EGL_RENDERABLE_TYPE),
-  X(EGL_SAMPLE_BUFFERS),
-  X(EGL_SAMPLES),
-  X(EGL_STENCIL_SIZE),
-  X(EGL_SURFACE_TYPE),
-  X(EGL_TRANSPARENT_TYPE),
-  X(EGL_TRANSPARENT_RED_VALUE),
-  X(EGL_TRANSPARENT_GREEN_VALUE),
-  X(EGL_TRANSPARENT_BLUE_VALUE)
-};
+constexpr auto eglAttributes = make_map<EGLint, std::string_view>({
+    // please keep attributes in accordance to:
+    // https://www.khronos.org/registry/EGL/sdk/docs/man/html/eglGetConfigAttrib.xhtml
+    X(EGL_ALPHA_SIZE),
+    X(EGL_ALPHA_MASK_SIZE),
+    X(EGL_BIND_TO_TEXTURE_RGB),
+    X(EGL_BIND_TO_TEXTURE_RGBA),
+    X(EGL_BLUE_SIZE),
+    X(EGL_BUFFER_SIZE),
+    X(EGL_COLOR_BUFFER_TYPE),
+    X(EGL_CONFIG_CAVEAT),
+    X(EGL_CONFIG_ID),
+    X(EGL_CONFORMANT),
+    X(EGL_DEPTH_SIZE),
+    X(EGL_GREEN_SIZE),
+    X(EGL_LEVEL),
+    X(EGL_LUMINANCE_SIZE),
+    X(EGL_MAX_PBUFFER_WIDTH),
+    X(EGL_MAX_PBUFFER_HEIGHT),
+    X(EGL_MAX_PBUFFER_PIXELS),
+    X(EGL_MAX_SWAP_INTERVAL),
+    X(EGL_MIN_SWAP_INTERVAL),
+    X(EGL_NATIVE_RENDERABLE),
+    X(EGL_NATIVE_VISUAL_ID),
+    X(EGL_NATIVE_VISUAL_TYPE),
+    X(EGL_RED_SIZE),
+    X(EGL_RENDERABLE_TYPE),
+    X(EGL_SAMPLE_BUFFERS),
+    X(EGL_SAMPLES),
+    X(EGL_STENCIL_SIZE),
+    X(EGL_SURFACE_TYPE),
+    X(EGL_TRANSPARENT_TYPE),
+    X(EGL_TRANSPARENT_RED_VALUE),
+    X(EGL_TRANSPARENT_GREEN_VALUE),
+    X(EGL_TRANSPARENT_BLUE_VALUE),
+});
 
-std::map<EGLenum, const char*> eglErrors =
-{
-  // please keep errors in accordance to:
-  // https://www.khronos.org/registry/EGL/sdk/docs/man/html/eglGetError.xhtml
-  X(EGL_SUCCESS),
-  X(EGL_NOT_INITIALIZED),
-  X(EGL_BAD_ACCESS),
-  X(EGL_BAD_ALLOC),
-  X(EGL_BAD_ATTRIBUTE),
-  X(EGL_BAD_CONFIG),
-  X(EGL_BAD_CONTEXT),
-  X(EGL_BAD_CURRENT_SURFACE),
-  X(EGL_BAD_DISPLAY),
-  X(EGL_BAD_MATCH),
-  X(EGL_BAD_NATIVE_PIXMAP),
-  X(EGL_BAD_NATIVE_WINDOW),
-  X(EGL_BAD_PARAMETER),
-  X(EGL_BAD_SURFACE),
-  X(EGL_CONTEXT_LOST),
-};
+constexpr auto eglErrors = make_map<EGLenum, std::string_view>({
+    // please keep errors in accordance to:
+    // https://www.khronos.org/registry/EGL/sdk/docs/man/html/eglGetError.xhtml
+    X(EGL_SUCCESS),
+    X(EGL_NOT_INITIALIZED),
+    X(EGL_BAD_ACCESS),
+    X(EGL_BAD_ALLOC),
+    X(EGL_BAD_ATTRIBUTE),
+    X(EGL_BAD_CONFIG),
+    X(EGL_BAD_CONTEXT),
+    X(EGL_BAD_CURRENT_SURFACE),
+    X(EGL_BAD_DISPLAY),
+    X(EGL_BAD_MATCH),
+    X(EGL_BAD_NATIVE_PIXMAP),
+    X(EGL_BAD_NATIVE_WINDOW),
+    X(EGL_BAD_PARAMETER),
+    X(EGL_BAD_SURFACE),
+    X(EGL_CONTEXT_LOST),
+});
 
-std::map<EGLint, const char*> eglErrorType =
-{
-  X(EGL_DEBUG_MSG_CRITICAL_KHR),
-  X(EGL_DEBUG_MSG_ERROR_KHR),
-  X(EGL_DEBUG_MSG_WARN_KHR),
-  X(EGL_DEBUG_MSG_INFO_KHR),
-};
+constexpr auto eglErrorType = make_map<EGLint, std::string_view>({
+    X(EGL_DEBUG_MSG_CRITICAL_KHR),
+    X(EGL_DEBUG_MSG_ERROR_KHR),
+    X(EGL_DEBUG_MSG_WARN_KHR),
+    X(EGL_DEBUG_MSG_INFO_KHR),
+});
 #undef X
 
 } // namespace
@@ -100,22 +101,11 @@ void EglErrorCallback(EGLenum error,
                       EGLLabelKHR objectLabel,
                       const char* message)
 {
-  std::string errorStr;
-  std::string typeStr;
+  const std::string_view errorStr = eglErrors.get(error).value_or("");
+  const std::string_view typeStr = eglErrorType.get(messageType).value_or("");
 
-  auto eglError = eglErrors.find(error);
-  if (eglError != eglErrors.end())
-  {
-    errorStr = eglError->second;
-  }
-
-  auto eglType = eglErrorType.find(messageType);
-  if (eglType != eglErrorType.end())
-  {
-    typeStr = eglType->second;
-  }
-
-  CLog::Log(LOGDEBUG, "EGL Debugging:\nError: {}\nCommand: {}\nType: {}\nMessage: {}", errorStr, command, typeStr, message);
+  CLog::Log(LOGDEBUG, "EGL Debugging:\nError: {}\nCommand: {}\nType: {}\nMessage: {}", errorStr,
+            command, typeStr, message ? message : "");
 }
 
 std::set<std::string> CEGLUtils::GetClientExtensions()
@@ -145,13 +135,13 @@ std::set<std::string> CEGLUtils::GetExtensions(EGLDisplay eglDisplay)
 bool CEGLUtils::HasExtension(EGLDisplay eglDisplay, const std::string& name)
 {
   auto exts = GetExtensions(eglDisplay);
-  return (exts.find(name) != exts.end());
+  return (exts.contains(name));
 }
 
 bool CEGLUtils::HasClientExtension(const std::string& name)
 {
   auto exts = GetClientExtensions();
-  return (exts.find(name) != exts.end());
+  return (exts.contains(name));
 }
 
 void CEGLUtils::Log(int logLevel, const std::string& what)
@@ -184,7 +174,8 @@ CEGLContextUtils::CEGLContextUtils(EGLenum platform, std::string const& platform
     eglDebugMessageControl(EglErrorCallback, eglDebugAttribs);
   }
 
-  m_platformSupported = CEGLUtils::HasClientExtension("EGL_EXT_platform_base") && CEGLUtils::HasClientExtension(platformExtension);
+  m_platformSupported = CEGLUtils::HasClientExtension("EGL_EXT_platform_base") &&
+                        CEGLUtils::HasClientExtension(platformExtension);
 }
 
 bool CEGLContextUtils::IsPlatformSupported() const
@@ -280,29 +271,21 @@ bool CEGLContextUtils::InitializeDisplay(EGLint renderingApi)
   return true;
 }
 
-bool CEGLContextUtils::ChooseConfig(EGLint renderableType, EGLint visualId, bool hdr)
+bool CEGLContextUtils::ChooseConfig(EGLint renderableType, EGLint visualId, bool hdr, int alpha)
 {
-  EGLint numMatched{0};
-
   if (m_eglDisplay == EGL_NO_DISPLAY)
   {
     throw std::logic_error("Choosing an EGLConfig requires an EGL display");
   }
 
   EGLint surfaceType = EGL_WINDOW_BIT;
-  // for the non-trivial dirty region modes, we need the EGL buffer to be preserved across updates
-  int guiAlgorithmDirtyRegions = CServiceBroker::GetSettingsComponent()->GetAdvancedSettings()->m_guiAlgorithmDirtyRegions;
-  if (guiAlgorithmDirtyRegions == DIRTYREGION_SOLVER_COST_REDUCTION ||
-      guiAlgorithmDirtyRegions == DIRTYREGION_SOLVER_UNION)
-    surfaceType |= EGL_SWAP_BEHAVIOR_PRESERVED_BIT;
 
   CEGLAttributesVec attribs;
   attribs.Add({{EGL_RED_SIZE, 8},
                {EGL_GREEN_SIZE, 8},
                {EGL_BLUE_SIZE, 8},
-               {EGL_ALPHA_SIZE, 2},
+               {EGL_ALPHA_SIZE, alpha},
                {EGL_DEPTH_SIZE, 16},
-               {EGL_STENCIL_SIZE, 0},
                {EGL_SAMPLE_BUFFERS, 0},
                {EGL_SAMPLES, 0},
                {EGL_SURFACE_TYPE, surfaceType},
@@ -318,44 +301,66 @@ bool CEGLContextUtils::ChooseConfig(EGLint renderableType, EGLint visualId, bool
 #endif
 
   const char* errorMsg = nullptr;
-
-  if (eglChooseConfig(m_eglDisplay, attribs.Get(), nullptr, 0, &numMatched) != EGL_TRUE)
-    errorMsg = "failed to query number of EGL configs";
-
-  std::vector<EGLConfig> eglConfigs(numMatched);
-  if (eglChooseConfig(m_eglDisplay, attribs.Get(), eglConfigs.data(), numMatched, &numMatched) != EGL_TRUE)
-    errorMsg = "failed to find EGL configs with appropriate attributes";
-
-  if (errorMsg)
+  const auto chooseConfig = [&](EGLint stencilSize)
   {
-    if (!hdr)
+    errorMsg = nullptr;
+    auto requestedAttribs = attribs;
+    requestedAttribs.Add({{EGL_STENCIL_SIZE, stencilSize}});
+    EGLint numMatched{0};
+    if (eglChooseConfig(m_eglDisplay, requestedAttribs.Get(), nullptr, 0, &numMatched) != EGL_TRUE)
+    {
+      errorMsg = "failed to query number of EGL configs";
+      return false;
+    }
+
+    std::vector<EGLConfig> eglConfigs(numMatched);
+    if (eglChooseConfig(m_eglDisplay, requestedAttribs.Get(), eglConfigs.data(), numMatched,
+                        &numMatched) != EGL_TRUE ||
+        numMatched == 0)
+    {
+      errorMsg = "failed to find EGL configs with appropriate attributes";
+      return false;
+    }
+
+    for (const auto& eglConfig : eglConfigs)
+    {
+      EGLint id{0};
+      if (visualId != 0)
+      {
+        if (eglGetConfigAttrib(m_eglDisplay, eglConfig, EGL_NATIVE_VISUAL_ID, &id) != EGL_TRUE)
+        {
+          CEGLUtils::Log(LOGERROR, "failed to query EGL attribute EGL_NATIVE_VISUAL_ID");
+          continue;
+        }
+        if (visualId != id)
+          continue;
+      }
+      *currentConfig = eglConfig;
+      return true;
+    }
+
+    CLog::Log(LOGDEBUG, "failed to find EGL config with EGL_NATIVE_VISUAL_ID={}", visualId);
+    return false;
+  };
+
+  bool selected = chooseConfig(8);
+  if (!selected && !(renderableType & EGL_OPENGL_BIT))
+  {
+    selected = chooseConfig(0);
+    if (selected)
+      CLog::Log(LOGWARNING, "EGL: no config with eight stencil bits; rotated GUI masks will be "
+                            "hidden on framebuffers without stencil support");
+  }
+
+  if (!selected)
+  {
+    if (errorMsg && !hdr)
     {
       CEGLUtils::Log(LOGERROR, errorMsg);
       Destroy();
     }
-    else
+    else if (errorMsg)
       CEGLUtils::Log(LOGINFO, errorMsg);
-    return false;
-  }
-
-  EGLint id{0};
-  for (const auto &eglConfig: eglConfigs)
-  {
-    *currentConfig = eglConfig;
-
-    if (visualId == 0)
-      break;
-
-    if (eglGetConfigAttrib(m_eglDisplay, *currentConfig, EGL_NATIVE_VISUAL_ID, &id) != EGL_TRUE)
-      CEGLUtils::Log(LOGERROR, "failed to query EGL attribute EGL_NATIVE_VISUAL_ID");
-
-    if (visualId == id)
-      break;
-  }
-
-  if (visualId != 0 && visualId != id)
-  {
-    CLog::Log(LOGDEBUG, "failed to find EGL config with EGL_NATIVE_VISUAL_ID={}", visualId);
     return false;
   }
 
@@ -377,10 +382,11 @@ bool CEGLContextUtils::ChooseConfig(EGLint renderableType, EGLint visualId, bool
   return true;
 }
 
-EGLint CEGLContextUtils::GetConfigAttrib(EGLint attribute) const
+EGLint CEGLContextUtils::GetConfigAttrib(EGLint attribute, bool hdr) const
 {
   EGLint value{0};
-  if (eglGetConfigAttrib(m_eglDisplay, m_eglConfig, attribute, &value) != EGL_TRUE)
+  if (eglGetConfigAttrib(m_eglDisplay, hdr ? m_eglHDRConfig : m_eglConfig, attribute, &value) !=
+      EGL_TRUE)
     CEGLUtils::Log(LOGERROR, "failed to query EGL attribute");
   return value;
 }
@@ -427,6 +433,21 @@ bool CEGLContextUtils::CreateContext(CEGLAttributesVec contextAttribs)
     return false;
   }
 
+  m_eglUploadContext =
+      eglCreateContext(m_eglDisplay, m_eglConfig, m_eglContext, contextAttribs.Get());
+
+  if (m_eglUploadContext == EGL_NO_CONTEXT)
+    CLog::Log(LOGWARNING, "Failed to create EGL upload context");
+
+  m_bufferAgeSupport = CEGLUtils::HasExtension(m_eglDisplay, "EGL_EXT_buffer_age");
+
+  if (CEGLUtils::HasExtension(m_eglDisplay, "EGL_KHR_partial_update"))
+  {
+    m_partialUpdateSupport = true;
+    m_eglSetDamageRegionKHR =
+        reinterpret_cast<PFNEGLSETDAMAGEREGIONKHRPROC>(eglGetProcAddress("eglSetDamageRegionKHR"));
+  }
+
   return true;
 }
 
@@ -452,17 +473,6 @@ void CEGLContextUtils::SurfaceAttrib()
   if (m_eglDisplay == EGL_NO_DISPLAY || m_eglSurface == EGL_NO_SURFACE)
   {
     throw std::logic_error("Setting surface attributes requires a surface");
-  }
-
-  // for the non-trivial dirty region modes, we need the EGL buffer to be preserved across updates
-  int guiAlgorithmDirtyRegions = CServiceBroker::GetSettingsComponent()->GetAdvancedSettings()->m_guiAlgorithmDirtyRegions;
-  if (guiAlgorithmDirtyRegions == DIRTYREGION_SOLVER_COST_REDUCTION ||
-      guiAlgorithmDirtyRegions == DIRTYREGION_SOLVER_UNION)
-  {
-    if (eglSurfaceAttrib(m_eglDisplay, m_eglSurface, EGL_SWAP_BEHAVIOR, EGL_BUFFER_PRESERVED) != EGL_TRUE)
-    {
-      CEGLUtils::Log(LOGERROR, "failed to set EGL_BUFFER_PRESERVED swap behavior");
-    }
   }
 }
 
@@ -564,6 +574,12 @@ void CEGLContextUtils::DestroyContext()
     eglDestroyContext(m_eglDisplay, m_eglContext);
     m_eglContext = EGL_NO_CONTEXT;
   }
+
+  if (m_eglUploadContext)
+  {
+    eglDestroyContext(m_eglDisplay, m_eglUploadContext);
+    m_eglUploadContext = EGL_NO_CONTEXT;
+  }
 }
 
 void CEGLContextUtils::DestroySurface()
@@ -595,4 +611,114 @@ bool CEGLContextUtils::TrySwapBuffers()
   }
 
   return (eglSwapBuffers(m_eglDisplay, m_eglSurface) == EGL_TRUE);
+}
+
+bool CEGLContextUtils::BindTextureUploadContext()
+{
+  if (m_eglDisplay == EGL_NO_DISPLAY || m_eglUploadContext == EGL_NO_CONTEXT)
+  {
+    CLog::LogF(LOGERROR, "No texture upload context found.");
+    return false;
+  }
+
+  m_textureUploadLock.lock();
+
+  if (!eglMakeCurrent(m_eglDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, m_eglUploadContext))
+  {
+    m_textureUploadLock.unlock();
+    CLog::LogF(LOGERROR, "Couldn't bind texture upload context.");
+    return false;
+  }
+
+  return true;
+}
+
+bool CEGLContextUtils::UnbindTextureUploadContext()
+{
+  if (m_eglDisplay == EGL_NO_DISPLAY || m_eglUploadContext == EGL_NO_CONTEXT)
+  {
+    CLog::LogF(LOGERROR, "No texture upload context found.");
+    m_textureUploadLock.unlock();
+    return false;
+  }
+
+  if (!eglMakeCurrent(m_eglDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT))
+  {
+    CLog::LogF(LOGERROR, "Couldn't release texture upload context");
+    m_textureUploadLock.unlock();
+    return false;
+  }
+
+  m_textureUploadLock.unlock();
+
+  return true;
+}
+
+bool CEGLContextUtils::HasContext()
+{
+  return eglGetCurrentContext() != EGL_NO_CONTEXT;
+}
+
+void CEGLContextUtils::SetDamagedRegions(const CDirtyRegionList& dirtyRegions)
+{
+  if (!m_partialUpdateSupport)
+    return;
+
+  using Rect = std::array<EGLint, 4>;
+  EGLBoolean damageRegionsResult = EGL_FALSE;
+  if (dirtyRegions.empty())
+  {
+    // add a single (empty) entry, otherwise the whole frame gets rendered
+    static Rect zeroRect{};
+    damageRegionsResult = m_eglSetDamageRegionKHR(m_eglDisplay, m_eglSurface, zeroRect.data(), 1);
+  }
+  else
+  {
+    EGLint height = 1080;
+    if (eglQuerySurface(m_eglDisplay, m_eglSurface, EGL_HEIGHT, &height) != EGL_TRUE &&
+        !m_damageRegionError)
+    {
+      CLog::LogF(LOGERROR, "eglQuerySurface failed ({:#x})", eglGetError());
+      m_damageRegionError = true;
+    }
+
+    std::vector<Rect> rects;
+    rects.reserve(dirtyRegions.size());
+    for (const auto& region : dirtyRegions)
+    {
+      rects.push_back({static_cast<EGLint>(std::round(region.x1)),
+                       static_cast<EGLint>(std::round(height - region.y2)),
+                       static_cast<EGLint>(std::round(region.Width())),
+                       static_cast<EGLint>(std::round(region.Height()))});
+    }
+    damageRegionsResult = m_eglSetDamageRegionKHR(
+        m_eglDisplay, m_eglSurface, reinterpret_cast<EGLint*>(rects.data()), rects.size());
+  }
+
+  if (damageRegionsResult != EGL_TRUE && !m_damageRegionError)
+  {
+    CLog::LogF(LOGERROR, "Setting damaged region failed ({:#x})", eglGetError());
+    m_damageRegionError = true;
+  }
+}
+
+int CEGLContextUtils::GetBufferAge()
+{
+#ifdef EGL_BUFFER_AGE_KHR
+  if (m_partialUpdateSupport)
+  {
+    EGLint age;
+    eglQuerySurface(m_eglDisplay, m_eglSurface, EGL_BUFFER_AGE_KHR, &age);
+    return static_cast<int>(age);
+  }
+#endif
+#ifdef EGL_BUFFER_AGE_EXT
+  if (m_bufferAgeSupport)
+  {
+    EGLint age;
+    eglQuerySurface(m_eglDisplay, m_eglSurface, EGL_BUFFER_AGE_EXT, &age);
+    return static_cast<int>(age);
+  }
+#endif
+  return 2;
 }

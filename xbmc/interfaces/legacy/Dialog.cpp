@@ -7,6 +7,7 @@
  */
 #include "Dialog.h"
 
+#include "FileItemList.h"
 #include "LanguageHook.h"
 #include "ListItem.h"
 #include "ModuleXbmcgui.h"
@@ -32,6 +33,8 @@
 #include "utils/XTimeUtils.h"
 #include "utils/log.h"
 #include "video/dialogs/GUIDialogVideoInfo.h"
+
+#include <memory>
 
  using namespace KODI::MESSAGING;
 
@@ -171,7 +174,7 @@ namespace XBMCAddon
       pDialog->Open();
 
       if (pDialog->IsConfirmed())
-        return std::unique_ptr<std::vector<int>>(new std::vector<int>(pDialog->GetSelectedItems()));
+        return std::make_unique<std::vector<int>>(pDialog->GetSelectedItems());
       else
         return std::unique_ptr<std::vector<int>>();
     }
@@ -219,10 +222,11 @@ namespace XBMCAddon
       DelayedCallGuard dcguard(languageHook);
       std::string value;
       std::string mask = maskparam;
-      VECSOURCES *shares = CMediaSourceSettings::GetInstance().GetSources(s_shares);
+      const std::optional<KODI::MEDIA::MediaSection> section{
+          KODI::MEDIA::MediaSectionFromName(s_shares)};
 
-      VECSOURCES localShares;
-      if (!shares)
+      std::vector<CMediaSource> localShares;
+      if (!section)
       {
         CServiceBroker::GetMediaManager().GetLocalDrives(localShares);
         if (StringUtils::CompareNoCase(s_shares, "local") != 0)
@@ -230,7 +234,7 @@ namespace XBMCAddon
       }
       else // always append local drives
       {
-        localShares = *shares;
+        localShares = CMediaSourceSettings::GetInstance().GetSources(*section);
         CServiceBroker::GetMediaManager().GetLocalDrives(localShares);
       }
 
@@ -252,12 +256,13 @@ namespace XBMCAddon
                           bool useFileDirectories, const String& defaultt )
     {
       DelayedCallGuard dcguard(languageHook);
-      VECSOURCES *shares = CMediaSourceSettings::GetInstance().GetSources(s_shares);
+      const std::optional<KODI::MEDIA::MediaSection> section{
+          KODI::MEDIA::MediaSectionFromName(s_shares)};
       std::vector<String> valuelist;
       String lmask = mask;
 
-      VECSOURCES localShares;
-      if (!shares)
+      std::vector<CMediaSource> localShares;
+      if (!section)
       {
         CServiceBroker::GetMediaManager().GetLocalDrives(localShares);
         if (StringUtils::CompareNoCase(s_shares, "local") != 0)
@@ -265,7 +270,7 @@ namespace XBMCAddon
       }
       else // always append local drives
       {
-        localShares = *shares;
+        localShares = CMediaSourceSettings::GetInstance().GetSources(*section);
         CServiceBroker::GetMediaManager().GetLocalDrives(localShares);
       }
 

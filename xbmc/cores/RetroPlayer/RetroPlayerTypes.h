@@ -8,6 +8,9 @@
 
 #pragma once
 
+#include "utils/Geometry.h"
+
+#include <array>
 #include <memory>
 #include <vector>
 
@@ -18,5 +21,35 @@ namespace RETRO
 class IRenderBufferPool;
 using RenderBufferPoolPtr = std::shared_ptr<IRenderBufferPool>;
 using RenderBufferPoolVector = std::vector<RenderBufferPoolPtr>;
+
+/*!
+ * \brief Coordinates of the 4 corners of the output viewport/window
+ */
+using ViewportCoordinates = std::array<CPoint, 4>;
+
+enum class DataAccess
+{
+  READ_ONLY,
+  WRITE_ONLY,
+  READ_WRITE
+};
+
+enum class DataAlignment
+{
+  DATA_UNALIGNED,
+  DATA_ALIGNED,
+};
+
+/*!
+ * \brief A function pointer representing a hardware procedure
+ *
+ * This type alias is used to dynamically load and invoke hardware-specific
+ * procedures, such as OpenGL or OpenGL ES functions, at runtime. The function
+ * pointer can be retrieved using the `GetHwProcedureAddress` method in
+ * \ref CRPProcessInfo.
+ *
+ * \note The function must be cast to the appropriate signature before use
+ */
+using HwProcedureAddress = void (*)();
 } // namespace RETRO
 } // namespace KODI

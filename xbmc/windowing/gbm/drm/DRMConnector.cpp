@@ -8,11 +8,15 @@
 
 #include "DRMConnector.h"
 
+#include "utils/XTimeUtils.h"
 #include "utils/log.h"
 
+#include <algorithm>
 #include <map>
 
 using namespace KODI::WINDOWING::GBM;
+
+using namespace std::chrono_literals;
 
 namespace
 {
@@ -62,9 +66,9 @@ bool CDRMConnector::CheckConnector()
   unsigned retryCnt = 7;
   while (!IsConnected() && retryCnt > 0)
   {
-    CLog::Log(LOGDEBUG, "CDRMConnector::{} - connector is disconnected", __FUNCTION__);
+    CLog::LogF(LOGDEBUG, "connector is disconnected");
     retryCnt--;
-    KODI::TIME::Sleep(1000);
+    KODI::TIME::Sleep(1s);
 
     m_connector.reset(drmModeGetConnector(m_fd, m_connector->connector_id));
   }
@@ -93,4 +97,28 @@ std::string CDRMConnector::GetStatus()
 std::string CDRMConnector::GetName()
 {
   return GetType() + "-" + std::to_string(m_connector->connector_type_id);
+}
+
+std::vector<uint8_t> CDRMConnector::GetEDID() const
+{
+
+  uint64_t blob_id = GetPropertyValue("EDID").value_or(0);
+
+  if (blob_id == 0)
+  {
+    CLog::LogF(LOGDEBUG, "failed to find EDID property for connector: {}",
+               m_connector->connector_id);
+    return {};
+  }
+
+  drmModePropertyBlobPtr blob = drmModeGetPropertyBlob(m_fd, blob_id);
+  if (!blob)
+    return {};
+
+  auto data = static_cast<uint8_t*>(blob->data);
+  auto edid = std::vector<uint8_t>(data, data + blob->length);
+
+  drmModeFreePropertyBlob(blob);
+
+  return edid;
 }

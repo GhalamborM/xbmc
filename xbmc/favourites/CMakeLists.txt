@@ -1,9 +1,15 @@
 set(SOURCES ContextMenus.cpp
-            GUIDialogFavourites.cpp
-            FavouritesService.cpp)
+            GUIViewStateFavourites.cpp
+            GUIWindowFavourites.cpp
+            FavouritesService.cpp
+            FavouritesURL.cpp
+            FavouritesUtils.cpp)
 
 set(HEADERS ContextMenus.h
-            GUIDialogFavourites.h
-            FavouritesService.h)
+            GUIViewStateFavourites.h
+            GUIWindowFavourites.h
+            FavouritesService.h
+            FavouritesURL.h
+            FavouritesUtils.h)
 
 core_add_library(favourites)

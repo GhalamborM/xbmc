@@ -25,6 +25,7 @@ class CHTTPWebinterfaceHandler;
 class CHTTPWebinterfaceAddonsHandler;
 #endif // HAS_WEB_INTERFACE
 #endif // HAS_WEB_SERVER
+class TiXmlNode;
 
 class CNetworkServices : public ISettingCallback
 {
@@ -100,7 +101,7 @@ public:
 
   bool StartWSDiscovery();
   bool IsWSDiscoveryRunning();
-  bool StopWSDiscovery();
+  bool StopWSDiscovery(bool bWait);
 
 private:
   CNetworkServices(const CNetworkServices&);

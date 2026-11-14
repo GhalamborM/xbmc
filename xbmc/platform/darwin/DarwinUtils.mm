@@ -6,12 +6,13 @@
  *  See LICENSES/README.md for more information.
  */
 
-#include "Application.h"
+#include "CompileInfo.h"
 #include "DllPaths.h"
 #include "GUIUserMessages.h"
-#include "utils/log.h"
+#include "application/Application.h"
+#include "utils/StringUtils.h"
 #include "utils/URIUtils.h"
-#include "CompileInfo.h"
+#include "utils/log.h"
 
 #if defined(TARGET_DARWIN_EMBEDDED)
   #import <Foundation/Foundation.h>
@@ -28,6 +29,7 @@
 
 #include <mutex>
 
+#include "PlatformDefs.h"
 
 // platform strings are based on http://theiphonewiki.com/wiki/Models
 const char* CDarwinUtils::getIosPlatformString(void)
@@ -98,7 +100,7 @@ std::string CDarwinUtils::GetFrameworkPath(bool forPython)
   {
     auto mainBundle = NSBundle.mainBundle;
 #if defined(TARGET_DARWIN_EMBEDDED)
-    return std::string{mainBundle.privateFrameworksPath.UTF8String};
+    return forPython ? std::string{} : std::string{mainBundle.privateFrameworksPath.UTF8String};
 #else
     if ([mainBundle.executablePath containsString:@"Contents"])
     {
@@ -119,6 +121,25 @@ std::string CDarwinUtils::GetFrameworkPath(bool forPython)
     return std::string{PREFIX_USR_PATH"/lib"};
   return std::string{};
 #endif
+}
+
+std::string CDarwinUtils::GetJavaCPPath()
+{
+  @autoreleasepool
+  {
+    auto mainBundle = NSBundle.mainBundle;
+
+    if ([mainBundle.executablePath containsString:@"Contents"])
+    {
+      // ExecutablePath is <product>.app/Contents/MacOS/<executable>
+      // we should have <product>.app/Contents/Libraries
+      return std::string{[[mainBundle.bundlePath stringByAppendingPathComponent:@"Contents"]
+                             stringByAppendingPathComponent:@"Java"]
+                             .UTF8String};
+    }
+  }
+
+  return std::string{};
 }
 
 namespace

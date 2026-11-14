@@ -13,14 +13,18 @@
 #include "Util.h"
 #include "guilib/GUIComponent.h"
 #include "guilib/GUIWindowManager.h"
-#include "threads/SingleLock.h"
+#include "video/geometry/ContentGeometryScanner.h"
 #include "video/jobs/VideoLibraryCleaningJob.h"
 #include "video/jobs/VideoLibraryJob.h"
 #include "video/jobs/VideoLibraryMarkWatchedJob.h"
 #include "video/jobs/VideoLibraryRefreshingJob.h"
+#include "video/jobs/VideoLibraryRefreshingSourceJob.h"
 #include "video/jobs/VideoLibraryResetResumePointJob.h"
 #include "video/jobs/VideoLibraryScanningJob.h"
 
+#include <algorithm>
+#include <mutex>
+#include <ranges>
 #include <utility>
 
 CVideoLibraryQueue::CVideoLibraryQueue()
@@ -30,7 +34,7 @@ CVideoLibraryQueue::CVideoLibraryQueue()
 
 CVideoLibraryQueue::~CVideoLibraryQueue()
 {
-  CSingleLock lock(m_critical);
+  std::unique_lock lock(m_critical);
   m_jobs.clear();
 }
 
@@ -52,7 +56,7 @@ bool CVideoLibraryQueue::IsScanningLibrary() const
     return true;
 
   // check if the library is being scanned asynchronously
-  VideoLibraryJobMap::const_iterator scanningJobs = m_jobs.find("VideoLibraryScanningJob");
+  VideoLibraryJobMap::const_iterator scanningJobs = m_jobs.find(CVideoLibraryScanningJob::TYPE);
   if (scanningJobs != m_jobs.end() && !scanningJobs->second.empty())
     return true;
 
@@ -61,26 +65,65 @@ bool CVideoLibraryQueue::IsScanningLibrary() const
   if (cleaningJobs != m_jobs.end() && !cleaningJobs->second.empty())
     return true;
 
+  const auto refreshingJobs = m_jobs.find(CVideoLibraryRefreshingSourceJob::TYPE);
+  if (refreshingJobs != m_jobs.end() && !refreshingJobs->second.empty())
+    return true;
+
   return false;
 }
 
 void CVideoLibraryQueue::StopLibraryScanning()
 {
-  CSingleLock lock(m_critical);
-  VideoLibraryJobMap::const_iterator scanningJobs = m_jobs.find("VideoLibraryScanningJob");
-  if (scanningJobs == m_jobs.end())
-    return;
+  std::unique_lock lock(m_critical);
+  for (const char* jobType :
+       {CVideoLibraryScanningJob::TYPE, CVideoLibraryRefreshingSourceJob::TYPE})
+  {
+    const auto jobsIt = m_jobs.find(jobType);
+    if (jobsIt == m_jobs.end())
+      continue;
 
-  // get a copy of the scanning jobs because CancelJob() will modify m_scanningJobs
-  VideoLibraryJobs tmpScanningJobs(scanningJobs->second.begin(), scanningJobs->second.end());
-
-  // cancel all scanning jobs
-  for (VideoLibraryJobs::const_iterator job = tmpScanningJobs.begin(); job != tmpScanningJobs.end(); ++job)
-    CancelJob(*job);
+    // Copy the jobs because CancelJob() modifies m_jobs.
+    VideoLibraryJobs jobs{jobsIt->second};
+    for (auto* job : jobs)
+      CancelJob(job);
+  }
   Refresh();
 }
 
-void CVideoLibraryQueue::CleanLibrary(const std::set<int>& paths /* = std::set<int>() */, bool asynchronous /* = true */, CGUIDialogProgressBarHandle* progressBar /* = NULL */)
+bool CVideoLibraryQueue::IsRefreshingSource(const std::string& sourcePath)
+{
+  std::unique_lock lock(m_critical);
+  const auto jobsIt = m_jobs.find(CVideoLibraryRefreshingSourceJob::TYPE);
+  return jobsIt != m_jobs.end() &&
+         std::ranges::any_of(
+             jobsIt->second,
+             [&sourcePath](const CVideoLibraryJob* job)
+             {
+               return static_cast<const CVideoLibraryRefreshingSourceJob*>(job)->GetSourcePath() ==
+                      sourcePath;
+             });
+}
+
+void CVideoLibraryQueue::StopRefreshingSource(const std::string& sourcePath)
+{
+  std::unique_lock lock(m_critical);
+  const auto jobsIt = m_jobs.find(CVideoLibraryRefreshingSourceJob::TYPE);
+  if (jobsIt == m_jobs.end())
+    return;
+
+  // Copy the jobs because CancelJob() modifies m_jobs.
+  const VideoLibraryJobs jobs{jobsIt->second};
+  for (auto* job : jobs)
+  {
+    if (static_cast<const CVideoLibraryRefreshingSourceJob*>(job)->GetSourcePath() == sourcePath)
+      CancelJob(job);
+  }
+  Refresh();
+}
+
+bool CVideoLibraryQueue::CleanLibrary(const std::set<int>& paths /* = std::set<int>() */,
+                                      bool asynchronous /* = true */,
+                                      CGUIDialogProgressBarHandle* progressBar /* = NULL */)
 {
   CVideoLibraryCleaningJob* cleaningJob = new CVideoLibraryCleaningJob(paths, progressBar);
 
@@ -88,6 +131,10 @@ void CVideoLibraryQueue::CleanLibrary(const std::set<int>& paths /* = std::set<i
     AddJob(cleaningJob);
   else
   {
+    // we can't perform a modal library cleaning if other jobs are running
+    if (IsRunning())
+      return false;
+
     m_modal = true;
     m_cleaning = true;
     cleaningJob->DoWork();
@@ -97,13 +144,15 @@ void CVideoLibraryQueue::CleanLibrary(const std::set<int>& paths /* = std::set<i
     m_modal = false;
     Refresh();
   }
+
+  return true;
 }
 
-void CVideoLibraryQueue::CleanLibraryModal(const std::set<int>& paths /* = std::set<int>() */)
+bool CVideoLibraryQueue::CleanLibraryModal(const std::set<int>& paths /* = std::set<int>() */)
 {
   // we can't perform a modal library cleaning if other jobs are running
   if (IsRunning())
-    return;
+    return false;
 
   m_modal = true;
   m_cleaning = true;
@@ -112,17 +161,25 @@ void CVideoLibraryQueue::CleanLibraryModal(const std::set<int>& paths /* = std::
   m_cleaning = false;
   m_modal = false;
   Refresh();
+
+  return true;
 }
 
-void CVideoLibraryQueue::RefreshItem(CFileItemPtr item, bool ignoreNfo /* = false */, bool forceRefresh /* = true */, bool refreshAll /* = false */, const std::string& searchTitle /* = "" */)
+void CVideoLibraryQueue::RefreshItem(std::shared_ptr<CFileItem> item,
+                                     bool ignoreNfo /* = false */,
+                                     bool forceRefresh /* = true */,
+                                     bool refreshAll /* = false */,
+                                     const std::string& searchTitle /* = "" */)
 {
   AddJob(new CVideoLibraryRefreshingJob(std::move(item), forceRefresh, refreshAll, ignoreNfo,
                                         searchTitle));
 }
 
-bool CVideoLibraryQueue::RefreshItemModal(CFileItemPtr item, bool forceRefresh /* = true */, bool refreshAll /* = false */)
+bool CVideoLibraryQueue::RefreshItemModal(std::shared_ptr<CFileItem> item,
+                                          bool forceRefresh /* = true */,
+                                          bool refreshAll /* = false */)
 {
-  // we can't perform a modal library cleaning if other jobs are running
+  // we can't perform a modal item refresh if other jobs are running
   if (IsRunning())
     return false;
 
@@ -135,7 +192,7 @@ bool CVideoLibraryQueue::RefreshItemModal(CFileItemPtr item, bool forceRefresh /
   return result;
 }
 
-void CVideoLibraryQueue::MarkAsWatched(const CFileItemPtr &item, bool watched)
+void CVideoLibraryQueue::MarkAsWatched(const std::shared_ptr<CFileItem>& item, bool watched)
 {
   if (item == NULL)
     return;
@@ -143,7 +200,7 @@ void CVideoLibraryQueue::MarkAsWatched(const CFileItemPtr &item, bool watched)
   AddJob(new CVideoLibraryMarkWatchedJob(item, watched));
 }
 
-void CVideoLibraryQueue::ResetResumePoint(const CFileItemPtr& item)
+void CVideoLibraryQueue::ResetResumePoint(const std::shared_ptr<CFileItem>& item)
 {
   if (item == nullptr)
     return;
@@ -156,7 +213,7 @@ void CVideoLibraryQueue::AddJob(CVideoLibraryJob *job)
   if (job == NULL)
     return;
 
-  CSingleLock lock(m_critical);
+  std::unique_lock lock(m_critical);
   if (!CJobQueue::AddJob(job))
     return;
 
@@ -178,7 +235,7 @@ void CVideoLibraryQueue::CancelJob(CVideoLibraryJob *job)
   if (job == NULL)
     return;
 
-  CSingleLock lock(m_critical);
+  std::unique_lock lock(m_critical);
   // remember the job type needed later because the job might be deleted
   // in the call to CJobQueue::CancelJob()
   std::string jobType;
@@ -188,6 +245,14 @@ void CVideoLibraryQueue::CancelJob(CVideoLibraryJob *job)
   // check if the job supports cancellation and cancel it
   if (job->CanBeCancelled())
     job->Cancel();
+
+  // A running scan or source refresh finishes its current item before releasing the queue slot.
+  // One that hasn't started is removed now, as it returns at once if it starts after Cancel().
+  if ((jobType == CVideoLibraryRefreshingSourceJob::TYPE &&
+       static_cast<CVideoLibraryRefreshingSourceJob*>(job)->HasStarted()) ||
+      (jobType == CVideoLibraryScanningJob::TYPE &&
+       static_cast<CVideoLibraryScanningJob*>(job)->HasStarted()))
+    return;
 
   // remove the job from the job queue
   CJobQueue::CancelJob(job);
@@ -200,7 +265,18 @@ void CVideoLibraryQueue::CancelJob(CVideoLibraryJob *job)
 
 void CVideoLibraryQueue::CancelAllJobs()
 {
-  CSingleLock lock(m_critical);
+  std::unique_lock lock(m_critical);
+
+  // Ask any job that is already being processed to stop to prevent slow shutdown
+  for (const auto& jobs : m_jobs | std::views::values)
+  {
+    for (const auto& job : jobs)
+    {
+      if (job->CanBeCancelled())
+        job->Cancel();
+    }
+  }
+
   CJobQueue::CancelJobs();
 
   // remove all scanning jobs
@@ -225,10 +301,13 @@ void CVideoLibraryQueue::OnJobComplete(unsigned int jobID, bool success, CJob *j
   {
     if (QueueEmpty())
       Refresh();
+
+    if (std::strcmp(job->GetType(), CVideoLibraryScanningJob::TYPE) == 0)
+      KODI::VIDEO::GEOMETRY::CContentGeometryScanner::GetInstance().Sweep();
   }
 
   {
-    CSingleLock lock(m_critical);
+    std::unique_lock lock(m_critical);
     // remove the job from our list of queued/running jobs
     VideoLibraryJobMap::iterator jobsIt = m_jobs.find(job->GetType());
     if (jobsIt != m_jobs.end())

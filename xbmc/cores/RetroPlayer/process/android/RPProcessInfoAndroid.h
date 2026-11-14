@@ -8,18 +8,18 @@
 
 #pragma once
 
-#include "cores/RetroPlayer/process/RPProcessInfo.h"
+#include "cores/RetroPlayer/process/egl/RPProcessInfoEGL.h"
 
 namespace KODI
 {
 namespace RETRO
 {
-class CRPProcessInfoAndroid : public CRPProcessInfo
+class CRPProcessInfoAndroid : public CRPProcessInfoEGL
 {
 public:
   CRPProcessInfoAndroid();
 
-  static CRPProcessInfo* Create();
+  static std::unique_ptr<CRPProcessInfo> Create();
   static void Register();
 };
 } // namespace RETRO

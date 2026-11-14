@@ -3,42 +3,33 @@
 # -----------
 # Finds the SQLite3 library
 #
-# This will define the following variables::
+# This will define the following target:
 #
-# SQLITE3_FOUND - system has SQLite3
-# SQLITE3_INCLUDE_DIRS - the SQLite3 include directory
-# SQLITE3_LIBRARIES - the SQLite3 libraries
+#   ${APP_NAME_LC}::Sqlite3 - The SQLite3 library
 #
-# and the following imported targets::
-#
-#   SQLite3::SQLite3 - The SQLite3 library
 
-if(PKG_CONFIG_FOUND)
-  pkg_check_modules(PC_SQLITE3 sqlite3 QUIET)
-endif()
+if(NOT TARGET ${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME})
+  include(cmake/scripts/common/ModuleHelpers.cmake)
 
-find_path(SQLITE3_INCLUDE_DIR NAMES sqlite3.h
-                              PATHS ${PC_SQLITE3_INCLUDEDIR})
-find_library(SQLITE3_LIBRARY NAMES sqlite3
-                             PATHS ${PC_SQLITE3_LIBDIR})
+  set(${CMAKE_FIND_PACKAGE_NAME}_MODULE_LC sqlite3)
 
-set(SQLITE3_VERSION ${PC_SQLITE3_VERSION})
+  set(${${CMAKE_FIND_PACKAGE_NAME}_MODULE_LC}_DISABLE_VERSION ON)
 
-include(FindPackageHandleStandardArgs)
-find_package_handle_standard_args(Sqlite3
-                                  REQUIRED_VARS SQLITE3_LIBRARY SQLITE3_INCLUDE_DIR
-                                  VERSION_VAR SQLITE3_VERSION)
+  SETUP_BUILD_VARS()
 
-if(SQLITE3_FOUND)
-  set(SQLITE3_INCLUDE_DIRS ${SQLITE3_INCLUDE_DIR})
-  set(SQLITE3_LIBRARIES ${SQLITE3_LIBRARY})
+  SETUP_FIND_SPECS()
 
-  if(NOT TARGET SQLite3::SQLite3)
-    add_library(SQLite3::SQLite3 UNKNOWN IMPORTED)
-    set_target_properties(SQLite3::SQLite3 PROPERTIES
-                                           IMPORTED_LOCATION "${SQLITE3_LIBRARY}"
-                                           INTERFACE_INCLUDE_DIRECTORIES "${SQLITE3_INCLUDE_DIR}")
+  SEARCH_EXISTING_PACKAGES()
+
+  if(${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME}_FOUND)
+    if(TARGET sqlite3::sqlite3)
+      add_library(${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME} ALIAS sqlite3::sqlite3)
+    elseif(TARGET PkgConfig::${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME})
+      add_library(${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME} ALIAS PkgConfig::${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME})
+    endif()
+  else()
+    if(Sqlite3_FIND_REQUIRED)
+      message(FATAL_ERROR "SQLite3 library not found.")
+    endif()
   endif()
 endif()
-
-mark_as_advanced(SQLITE3_INCLUDE_DIR SQLITE3_LIBRARY)

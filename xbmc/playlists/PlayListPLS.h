@@ -13,32 +13,14 @@
 #include <string>
 #include <vector>
 
-namespace PLAYLIST
+namespace KODI::PLAYLIST
 {
-class CPlayListPLS :
-      public CPlayList
+class CPlayListPLS : public CPlayList
 {
 public:
   CPlayListPLS(void);
   ~CPlayListPLS(void) override;
   bool Load(const std::string& strFileName) override;
   void Save(const std::string& strFileName) const override;
-  virtual bool Resize(std::vector<int>::size_type newSize);
 };
-
-class CPlayListASX : public CPlayList
-{
-public:
-  bool LoadData(std::istream &stream) override;
-protected:
-  bool LoadAsxIniInfo(std::istream &stream);
-};
-
-class CPlayListRAM : public CPlayList
-{
-public:
-  bool LoadData(std::istream &stream) override;
-};
-
-
 }

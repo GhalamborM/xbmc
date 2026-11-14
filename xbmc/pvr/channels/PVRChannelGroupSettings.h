@@ -8,7 +8,6 @@
 
 #pragma once
 
-#include "pvr/settings/PVRSettings.h"
 #include "settings/lib/ISettingCallback.h"
 
 #include <memory>
@@ -17,12 +16,13 @@
 namespace PVR
 {
 
+class CPVRSettings;
+
 class IChannelGroupSettingsCallback
 {
 public:
   virtual ~IChannelGroupSettingsCallback() = default;
 
-  virtual void SyncChannelGroupsChanged() {}
   virtual void UseBackendChannelOrderChanged() {}
   virtual void UseBackendChannelNumbersChanged() {}
   virtual void StartGroupChannelNumbersFromOneChanged() {}
@@ -32,30 +32,27 @@ class CPVRChannelGroupSettings : public ISettingCallback
 {
 public:
   CPVRChannelGroupSettings();
-  virtual ~CPVRChannelGroupSettings();
+  ~CPVRChannelGroupSettings() override;
 
   void OnSettingChanged(const std::shared_ptr<const CSetting>& setting) override;
 
   void RegisterCallback(IChannelGroupSettingsCallback* callback);
   void UnregisterCallback(IChannelGroupSettingsCallback* callback);
 
-  bool SyncChannelGroups() const { return m_bSyncChannelGroups; }
   bool UseBackendChannelOrder() const { return m_bUseBackendChannelOrder; }
   bool UseBackendChannelNumbers() const { return m_bUseBackendChannelNumbers; }
   bool StartGroupChannelNumbersFromOne() const { return m_bStartGroupChannelNumbersFromOne; }
 
 private:
-  bool UpdateSyncChannelGroups();
   bool UpdateUseBackendChannelOrder();
   bool UpdateUseBackendChannelNumbers();
   bool UpdateStartGroupChannelNumbersFromOne();
 
-  bool m_bSyncChannelGroups = false;
   bool m_bUseBackendChannelOrder = false;
   bool m_bUseBackendChannelNumbers = false;
   bool m_bStartGroupChannelNumbersFromOne = false;
 
-  CPVRSettings m_settings;
+  std::unique_ptr<CPVRSettings> m_settings;
   std::set<IChannelGroupSettingsCallback*> m_callbacks;
 };
 

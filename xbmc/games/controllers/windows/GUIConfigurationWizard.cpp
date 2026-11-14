@@ -13,15 +13,19 @@
 #include "games/controllers/dialogs/GUIDialogAxisDetection.h"
 #include "games/controllers/guicontrols/GUIFeatureButton.h"
 #include "games/controllers/input/PhysicalFeature.h"
-#include "input/IKeymap.h"
 #include "input/InputManager.h"
+#include "input/actions/ActionIDs.h"
 #include "input/joysticks/JoystickUtils.h"
 #include "input/joysticks/interfaces/IButtonMap.h"
 #include "input/joysticks/interfaces/IButtonMapCallback.h"
-#include "input/keyboard/KeymapActionMap.h"
+#include "input/keyboard/KeyboardTranslator.h"
+#include "input/keymaps/interfaces/IKeymap.h"
+#include "input/keymaps/keyboard/KeyboardActionMap.h"
 #include "peripherals/Peripherals.h"
 #include "threads/SingleLock.h"
 #include "utils/log.h"
+
+#include <mutex>
 
 using namespace KODI;
 using namespace GAME;
@@ -39,7 +43,8 @@ constexpr auto POST_MAPPING_WAIT_TIME_MS = 5000ms;
 } // namespace
 
 CGUIConfigurationWizard::CGUIConfigurationWizard()
-  : CThread("GUIConfigurationWizard"), m_actionMap(new KEYBOARD::CKeymapActionMap)
+  : CThread("GUIConfigurationWizard"),
+    m_actionMap(std::make_unique<KEYMAP::CKeyboardActionMap>())
 {
   InitializeState();
 }
@@ -63,7 +68,7 @@ void CGUIConfigurationWizard::Run(const std::string& strControllerId,
   Abort();
 
   {
-    CSingleLock lock(m_stateMutex);
+    std::unique_lock lock(m_stateMutex);
 
     // Set Run() parameters
     m_strControllerId = strControllerId;
@@ -83,7 +88,7 @@ void CGUIConfigurationWizard::Run(const std::string& strControllerId,
 
 void CGUIConfigurationWizard::OnUnfocus(IFeatureButton* button)
 {
-  CSingleLock lock(m_stateMutex);
+  std::unique_lock lock(m_stateMutex);
 
   if (button == m_currentButton)
     Abort(false);
@@ -107,7 +112,7 @@ bool CGUIConfigurationWizard::Abort(bool bWait /* = true */)
 void CGUIConfigurationWizard::RegisterKey(const CPhysicalFeature& key)
 {
   if (key.Keycode() != XBMCK_UNKNOWN)
-    m_keyMap[key.Keycode()] = key;
+    m_keyMap[KEYBOARD::CKeyboardTranslator::TranslateKeycode(key.Keycode())] = key;
 }
 
 void CGUIConfigurationWizard::UnregisterKeys()
@@ -124,7 +129,7 @@ void CGUIConfigurationWizard::Process(void)
   bool bLateAxisDetected = false;
 
   {
-    CSingleLock lock(m_stateMutex);
+    std::unique_lock lock(m_stateMutex);
     for (IFeatureButton* button : m_buttons)
     {
       // Allow other threads to access the button we're using
@@ -184,7 +189,7 @@ void CGUIConfigurationWizard::Process(void)
     bool bInMotion;
 
     {
-      CSingleLock lock(m_motionMutex);
+      std::unique_lock lock(m_motionMutex);
       bInMotion = !m_bInMotion.empty();
     }
 
@@ -202,7 +207,7 @@ void CGUIConfigurationWizard::Process(void)
 }
 
 bool CGUIConfigurationWizard::MapPrimitive(JOYSTICK::IButtonMap* buttonMap,
-                                           IKeymap* keymap,
+                                           KEYMAP::IKeymap* keymap,
                                            const JOYSTICK::CDriverPrimitive& primitive)
 {
   using namespace INPUT;
@@ -232,7 +237,7 @@ bool CGUIConfigurationWizard::MapPrimitive(JOYSTICK::IButtonMap* buttonMap,
     // Discard input
     bHandled = true;
   }
-  else if (m_history.find(primitive) != m_history.end())
+  else if (m_history.contains(primitive))
   {
     // Primitive has already been mapped this round, ignore it
     bHandled = true;
@@ -249,7 +254,7 @@ bool CGUIConfigurationWizard::MapPrimitive(JOYSTICK::IButtonMap* buttonMap,
     WHEEL_DIRECTION wheelDirection;
     THROTTLE_DIRECTION throttleDirection;
     {
-      CSingleLock lock(m_stateMutex);
+      std::unique_lock lock(m_stateMutex);
       currentButton = m_currentButton;
       cardinalDirection = m_cardinalDirection;
       wheelDirection = m_wheelDirection;
@@ -263,7 +268,8 @@ bool CGUIConfigurationWizard::MapPrimitive(JOYSTICK::IButtonMap* buttonMap,
       {
         if (primitive.Type() == PRIMITIVE_TYPE::KEY)
         {
-          auto it = m_keyMap.find(primitive.Keycode());
+          auto it =
+              m_keyMap.find(KEYBOARD::CKeyboardTranslator::TranslateKeycode(primitive.Keycode()));
           if (it != m_keyMap.end())
           {
             const CPhysicalFeature& key = it->second;
@@ -288,8 +294,8 @@ bool CGUIConfigurationWizard::MapPrimitive(JOYSTICK::IButtonMap* buttonMap,
         }
         else
         {
-          CLog::Log(LOGDEBUG, "{}: mapping feature \"{}\" for device {}", m_strControllerId,
-                    feature.Name(), buttonMap->Location());
+          CLog::Log(LOGDEBUG, "{}: mapping feature \"{}\" for device {} to \"{}\"",
+                    m_strControllerId, feature.Name(), buttonMap->Location(), primitive.ToString());
 
           switch (feature.Type())
           {
@@ -359,16 +365,16 @@ bool CGUIConfigurationWizard::MapPrimitive(JOYSTICK::IButtonMap* buttonMap,
 
 void CGUIConfigurationWizard::OnEventFrame(const JOYSTICK::IButtonMap* buttonMap, bool bMotion)
 {
-  CSingleLock lock(m_motionMutex);
+  std::unique_lock lock(m_motionMutex);
 
-  if (m_bInMotion.find(buttonMap) != m_bInMotion.end() && !bMotion)
+  if (m_bInMotion.contains(buttonMap) && !bMotion)
     OnMotionless(buttonMap);
 }
 
 void CGUIConfigurationWizard::OnLateAxis(const JOYSTICK::IButtonMap* buttonMap,
                                          unsigned int axisIndex)
 {
-  CSingleLock lock(m_stateMutex);
+  std::unique_lock lock(m_stateMutex);
 
   m_lateAxisDetected = true;
   Abort(false);
@@ -376,7 +382,7 @@ void CGUIConfigurationWizard::OnLateAxis(const JOYSTICK::IButtonMap* buttonMap,
 
 void CGUIConfigurationWizard::OnMotion(const JOYSTICK::IButtonMap* buttonMap)
 {
-  CSingleLock lock(m_motionMutex);
+  std::unique_lock lock(m_motionMutex);
 
   m_motionlessEvent.Reset();
   m_bInMotion.insert(buttonMap);

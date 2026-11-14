@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2005-2018 Team Kodi
+ *  Copyright (C) 2005-2026 Team Kodi
  *  This file is part of Kodi - https://kodi.tv
  *
  *  SPDX-License-Identifier: GPL-2.0-or-later
@@ -12,9 +12,16 @@
 #include "utils/MemUtils.h"
 #include "utils/log.h"
 
-extern "C" {
+extern "C"
+{
 #include <libavcodec/avcodec.h>
+#include <libavformat/avformat.h>
 }
+
+#include <algorithm>
+#include <cmath>
+#include <locale>
+#include <sstream>
 
 void CDVDDemuxUtils::FreeDemuxPacket(DemuxPacket* pPacket)
 {
@@ -108,4 +115,124 @@ void CDVDDemuxUtils::StoreSideData(DemuxPacket *pkt, AVPacket *src)
   // and storing our own AVPacket. This will require some extensive changes.
   av_buffer_unref(&avPkt->buf);
   av_free(avPkt);
+}
+
+std::vector<ChapterFFmpeg> CDVDDemuxUtils::LoadChapters(std::span<AVChapter*> chapters)
+{
+  using namespace std::chrono_literals;
+
+  std::vector<ChapterFFmpeg> result;
+
+  if (chapters.empty() || chapters.data() == nullptr)
+    return result;
+
+  result.reserve(chapters.size());
+
+  std::ranges::transform(
+      chapters, std::back_inserter(result),
+      [](const AVChapter* chapter)
+      {
+        ChapterFFmpeg newChapter{};
+
+        std::chrono::duration<double> dsec(chapter->start * av_q2d(chapter->time_base));
+        newChapter.m_startPts = std::chrono::duration_cast<std::chrono::milliseconds>(dsec);
+        dsec = std::chrono::duration<double>(chapter->end * av_q2d(chapter->time_base));
+        newChapter.m_endPts = std::chrono::duration_cast<std::chrono::milliseconds>(dsec);
+
+        const AVDictionaryEntry* titleTag = av_dict_get(chapter->metadata, "title", nullptr, 0);
+
+        if (titleTag)
+          newChapter.m_name = titleTag->value;
+
+        return newChapter;
+      });
+
+  std::ranges::sort(result, std::less(), &ChapterFFmpeg::m_startPts);
+
+  // Videoplayer expects the first chapter to start at 00:00:00.
+  // The timestamp of the first chapter may be a key frame a few ms in, allow a bit of leeway
+  // before the creation of a virtual additional chapter.
+  ChapterFFmpeg& first = result.front();
+  if (first.m_startPts != 0ms)
+  {
+    if (first.m_startPts < KEYFRAME_OFFSET_LIMIT)
+    {
+      // A chapter marker (start == end) stays one once snapped.
+      if (first.m_endPts == first.m_startPts)
+        first.m_endPts = 0ms;
+      first.m_startPts = 0ms;
+    }
+    else
+      result.insert(result.begin(), ChapterFFmpeg{0ms, 0ms, ""});
+  }
+
+  return result;
+}
+
+bool CDVDDemuxUtils::SnapMsQuantisedFrameRate(int& fpsRate, int& fpsScale, double hintFps)
+{
+  if (fpsRate <= 0 || fpsScale <= 0 || !std::isfinite(hintFps) || hintFps <= 0.0)
+    return false;
+
+  // A rate derived from a whole-millisecond frame duration reduces to
+  // exactly 1000/N (e.g. 42ms -> 500/21). Anything else is not the
+  // whole-millisecond case and is left alone.
+  const int64_t num = 1000LL * fpsScale;
+  if (num % fpsRate != 0)
+    return false;
+  const int64_t durationMs = num / fpsRate;
+
+  static constexpr AVRational standardRates[] = {
+      {24000, 1001}, {24, 1}, {25, 1}, {30000, 1001}, {30, 1}, {50, 1}, {60000, 1001}, {60, 1}};
+
+  const AVRational* chosen = nullptr;
+  // Keep the acceptance ranges for integer and fractional rates disjoint.
+  constexpr double maxHintDiff = 0.0002;
+
+  for (const AVRational& rate : standardRates)
+  {
+    if (std::lround(1000.0 * rate.den / rate.num) != durationMs)
+      continue;
+    if (static_cast<int64_t>(rate.num) * fpsScale == static_cast<int64_t>(rate.den) * fpsRate)
+      return false; // declared rate already is the standard one (PAL 25 = exactly 40ms)
+
+    const double diff = std::fabs(hintFps - av_q2d(rate)) / av_q2d(rate);
+    if (diff <= maxHintDiff)
+    {
+      if (chosen)
+        return false;
+      chosen = &rate;
+    }
+  }
+
+  if (!chosen)
+    return false;
+
+  fpsRate = chosen->num;
+  fpsScale = chosen->den;
+  return true;
+}
+
+double CDVDDemuxUtils::FrameRateFromStatistics(const std::string& frames,
+                                               const std::string& duration)
+{
+  std::istringstream frameStream{frames};
+  std::istringstream durationStream{duration};
+  frameStream.imbue(std::locale::classic());
+  durationStream.imbue(std::locale::classic());
+  int64_t frameCount = 0;
+  int64_t hours = 0;
+  int minutes = 0;
+  double seconds = 0.0;
+  char firstSeparator = 0;
+  char secondSeparator = 0;
+  if (!(frameStream >> frameCount) || !(frameStream >> std::ws).eof() || frameCount <= 0 ||
+      !(durationStream >> hours >> firstSeparator >> minutes >> secondSeparator >> seconds) ||
+      !(durationStream >> std::ws).eof() || firstSeparator != ':' || secondSeparator != ':' ||
+      hours < 0 || minutes < 0 || minutes >= 60 || !std::isfinite(seconds) || seconds < 0.0 ||
+      seconds >= 60.0)
+    return 0.0;
+
+  const double totalSeconds = hours * 3600.0 + minutes * 60.0 + seconds;
+  return totalSeconds > 0.0 ? frameCount / totalSeconds : 0.0;
 }

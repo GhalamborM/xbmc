@@ -11,11 +11,11 @@
 #include "EventClient.h"
 #include "Socket.h"
 #include "threads/CriticalSection.h"
-#include "threads/SingleLock.h"
 #include "threads/Thread.h"
 
 #include <atomic>
 #include <map>
+#include <mutex>
 #include <queue>
 #include <vector>
 
@@ -44,7 +44,7 @@ namespace EVENTSERVER
 
     void RefreshSettings()
     {
-      CSingleLock lock(m_critSection);
+      std::unique_lock lock(m_critSection);
       m_bRefreshSettings = true;
     }
 
@@ -72,7 +72,7 @@ namespace EVENTSERVER
     int              m_iListenTimeout;
     int              m_iMaxClients;
     std::vector<uint8_t> m_pPacketBuffer;
-    std::atomic<bool>  m_bRunning;
+    std::atomic<bool> m_bRunning = false;
     CCriticalSection m_critSection;
     bool             m_bRefreshSettings;
   };

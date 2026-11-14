@@ -8,14 +8,17 @@
 
 #include "BinaryAddonCache.h"
 
-#include "AddonManager.h"
 #include "ServiceBroker.h"
-#include "threads/SingleLock.h"
+#include "addons/AddonEvents.h"
+#include "addons/AddonManager.h"
+#include "addons/addoninfo/AddonType.h"
+
+#include <mutex>
 
 namespace ADDON
 {
 
-const std::vector<TYPE> ADDONS_TO_CACHE = {ADDON_GAMEDLL};
+const std::vector<AddonType> ADDONS_TO_CACHE = {AddonType::GAMEDLL, AddonType::SHADERDLL};
 
 CBinaryAddonCache::~CBinaryAddonCache()
 {
@@ -24,7 +27,29 @@ CBinaryAddonCache::~CBinaryAddonCache()
 
 void CBinaryAddonCache::Init()
 {
-  CServiceBroker::GetAddonMgr().Events().Subscribe(this, &CBinaryAddonCache::OnEvent);
+  CServiceBroker::GetAddonMgr().Events().Subscribe(
+      this,
+      [this](const AddonEvent& event)
+      {
+        if (typeid(event) == typeid(AddonEvents::Enabled) ||
+            typeid(event) == typeid(AddonEvents::Disabled) ||
+            typeid(event) == typeid(AddonEvents::ReInstalled))
+        {
+          for (auto& type : ADDONS_TO_CACHE)
+          {
+            if (CServiceBroker::GetAddonMgr().HasType(event.addonId, type))
+            {
+              Update();
+              break;
+            }
+          }
+        }
+        else if (typeid(event) == typeid(AddonEvents::UnInstalled))
+        {
+          Update();
+        }
+      });
+
   Update();
 }
 
@@ -33,7 +58,7 @@ void CBinaryAddonCache::Deinit()
   CServiceBroker::GetAddonMgr().Events().Unsubscribe(this);
 }
 
-void CBinaryAddonCache::GetAddons(VECADDONS& addons, const TYPE& type)
+void CBinaryAddonCache::GetAddons(VECADDONS& addons, AddonType type)
 {
   VECADDONS myAddons;
   GetInstalledAddons(myAddons, type);
@@ -45,7 +70,7 @@ void CBinaryAddonCache::GetAddons(VECADDONS& addons, const TYPE& type)
   }
 }
 
-void CBinaryAddonCache::GetDisabledAddons(VECADDONS& addons, const TYPE& type)
+void CBinaryAddonCache::GetDisabledAddons(VECADDONS& addons, AddonType type)
 {
   VECADDONS myAddons;
   GetInstalledAddons(myAddons, type);
@@ -57,29 +82,26 @@ void CBinaryAddonCache::GetDisabledAddons(VECADDONS& addons, const TYPE& type)
   }
 }
 
-void CBinaryAddonCache::GetInstalledAddons(VECADDONS& addons, const TYPE& type)
+void CBinaryAddonCache::GetInstalledAddons(VECADDONS& addons, AddonType type)
 {
-  CSingleLock lock(m_critSection);
+  std::unique_lock lock(m_critSection);
   auto it = m_addons.find(type);
   if (it != m_addons.end())
     addons = it->second;
 }
 
-AddonPtr CBinaryAddonCache::GetAddonInstance(const std::string& strId, TYPE type)
+AddonPtr CBinaryAddonCache::GetAddonInstance(const std::string& strId, AddonType type)
 {
   AddonPtr addon;
 
-  CSingleLock lock(m_critSection);
+  std::unique_lock lock(m_critSection);
 
   auto it = m_addons.find(type);
   if (it != m_addons.end())
   {
-    VECADDONS& addons = it->second;
-    auto itAddon = std::find_if(addons.begin(), addons.end(),
-      [&strId](const AddonPtr& addon)
-      {
-        return addon->ID() == strId;
-      });
+    const VECADDONS& addons = it->second;
+    const auto itAddon =
+        std::ranges::find_if(addons, [&strId](const AddonPtr& a) { return a->ID() == strId; });
 
     if (itAddon != addons.end())
       addon = *itAddon;
@@ -88,30 +110,9 @@ AddonPtr CBinaryAddonCache::GetAddonInstance(const std::string& strId, TYPE type
   return addon;
 }
 
-void CBinaryAddonCache::OnEvent(const AddonEvent& event)
-{
-  if (typeid(event) == typeid(AddonEvents::Enabled) ||
-      typeid(event) == typeid(AddonEvents::Disabled) ||
-      typeid(event) == typeid(AddonEvents::ReInstalled))
-  {
-    for (auto &type : ADDONS_TO_CACHE)
-    {
-      if (CServiceBroker::GetAddonMgr().HasType(event.id, type))
-      {
-        Update();
-        break;
-      }
-    }
-  }
-  else if (typeid(event) == typeid(AddonEvents::UnInstalled))
-  {
-    Update();
-  }
-}
-
 void CBinaryAddonCache::Update()
 {
-  using AddonMap = std::multimap<TYPE, VECADDONS>;
+  using AddonMap = std::multimap<AddonType, VECADDONS>;
   AddonMap addonmap;
 
   for (auto &addonType : ADDONS_TO_CACHE)
@@ -122,7 +123,7 @@ void CBinaryAddonCache::Update()
   }
 
   {
-    CSingleLock lock(m_critSection);
+    std::unique_lock lock(m_critSection);
     m_addons = std::move(addonmap);
   }
 }

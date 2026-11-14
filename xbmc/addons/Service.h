@@ -8,8 +8,8 @@
 
 #pragma once
 
-#include "Addon.h"
-#include "AddonEvents.h"
+#include "addons/Addon.h"
+#include "addons/AddonEvents.h"
 #include "threads/CriticalSection.h"
 
 namespace ADDON
@@ -17,7 +17,7 @@ namespace ADDON
   class CService: public CAddon
   {
   public:
-    explicit CService(const AddonInfoPtr& addonInfo) : CAddon(addonInfo, ADDON_SERVICE) {}
+    explicit CService(const AddonInfoPtr& addonInfo);
   };
 
   class CServiceAddonManager
@@ -50,11 +50,11 @@ namespace ADDON
   private:
     void OnEvent(const AddonEvent& event);
 
-    void Stop(const std::map<std::string, int>::value_type& service);
+    void Stop(const std::map<std::string, int, std::less<>>::value_type& service) const;
 
     CAddonMgr& m_addonMgr;
     CCriticalSection m_criticalSection;
     /** add-on id -> script id */
-    std::map<std::string, int> m_services;
+    std::map<std::string, int, std::less<>> m_services;
   };
 }

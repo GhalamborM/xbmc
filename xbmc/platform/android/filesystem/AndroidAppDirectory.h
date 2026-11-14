@@ -8,8 +8,10 @@
 
 #pragma once
 
-#include "FileItem.h"
 #include "filesystem/IDirectory.h"
+
+class CFileItemList;
+
 namespace XFILE
 {
 
@@ -22,6 +24,6 @@ public:
   bool GetDirectory(const CURL& url, CFileItemList& items) override;
   bool Exists(const CURL& url) override { return true; }
   bool AllowAll() const override { return true; }
-  DIR_CACHE_TYPE GetCacheType(const CURL& url) const override { return DIR_CACHE_NEVER; }
+  CacheType GetCacheType(const CURL& url) const override { return CacheType::NEVER; }
 };
 }

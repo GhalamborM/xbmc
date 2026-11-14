@@ -9,40 +9,50 @@
 #include "GUIViewStateWindowGames.h"
 
 #include "FileItem.h"
+#include "FileItemList.h"
+#include "ServiceBroker.h"
 #include "games/GameUtils.h"
-#include "guilib/LocalizeStrings.h"
 #include "guilib/WindowIDs.h"
 #include "settings/MediaSourceSettings.h"
+#include "settings/Settings.h"
+#include "settings/SettingsComponent.h"
 #include "utils/StringUtils.h"
 #include "view/ViewState.h"
+#include "view/ViewStateNames.h"
 #include "view/ViewStateSettings.h"
-#include "windowing/GraphicContext.h" // include before ViewState.h
 
 #include <assert.h>
 #include <set>
 
 using namespace KODI;
 using namespace GAME;
+using KODI::MEDIA::MediaSection;
 
 CGUIViewStateWindowGames::CGUIViewStateWindowGames(const CFileItemList& items)
   : CGUIViewState(items)
 {
   if (items.IsVirtualDirectoryRoot())
   {
-    AddSortMethod(SortByLabel, 551, LABEL_MASKS());
-    AddSortMethod(SortByDriveType, 564, LABEL_MASKS());
-    SetSortMethod(SortByLabel);
-    SetSortOrder(SortOrderAscending);
+    AddSortMethod(SortBy::LABEL, 551, LABEL_MASKS());
+    AddSortMethod(SortBy::DRIVE_TYPE, 564, LABEL_MASKS());
+    SetSortMethod(SortBy::LABEL);
+    SetSortOrder(SortOrder::ASCENDING);
     SetViewAsControl(DEFAULT_VIEW_LIST);
   }
   else
   {
-    AddSortMethod(SortByFile, 561,
-                  LABEL_MASKS("%F", "%I", "%L", "")); // Filename, Size | Label, empty
-    AddSortMethod(SortBySize, 553,
+    const auto settings = CServiceBroker::GetSettingsComponent()->GetSettings();
+    AddSortMethod(SortBy::LABEL,
+                  settings->GetBool(CSettings::SETTING_FILELISTS_IGNORETHEWHENSORTING)
+                      ? SortAttributeIgnoreArticle
+                      : SortAttributeNone,
+                  551, LABEL_MASKS("%L", "%I", "%L", "")); // Label, Size | Label, empty
+    AddSortMethod(SortBy::FILE, 561,
+                  LABEL_MASKS("%L", "%I", "%L", "")); // Label, Size | Label, empty
+    AddSortMethod(SortBy::SIZE, 553,
                   LABEL_MASKS("%L", "%I", "%L", "%I")); // Filename, Size | Label, Size
 
-    const CViewState* viewState = CViewStateSettings::GetInstance().Get("games");
+    const CViewState* viewState = CViewStateSettings::GetInstance().Get(VIEW::STATE::GAMES);
     if (viewState)
     {
       SetSortMethod(viewState->m_sortDescription);
@@ -54,45 +64,31 @@ CGUIViewStateWindowGames::CGUIViewStateWindowGames(const CFileItemList& items)
   LoadViewState(items.GetPath(), WINDOW_GAMES);
 }
 
-std::string CGUIViewStateWindowGames::GetLockType()
+std::optional<KODI::MEDIA::MediaSection> CGUIViewStateWindowGames::GetLockType()
 {
-  return "games";
+  return KODI::MEDIA::MediaSection::GAMES;
 }
 
 std::string CGUIViewStateWindowGames::GetExtensions()
 {
-  using namespace ADDON;
-
   std::set<std::string> exts = CGameUtils::GetGameExtensions();
 
   // Ensure .zip appears
-  if (exts.find(".zip") == exts.end())
-    exts.insert(".zip");
+  exts.insert(".zip");
 
   return StringUtils::Join(exts, "|");
 }
 
-VECSOURCES& CGUIViewStateWindowGames::GetSources()
+std::vector<CMediaSource>& CGUIViewStateWindowGames::GetSources()
 {
-  VECSOURCES* pGameSources = CMediaSourceSettings::GetInstance().GetSources("games");
-
-  // Guard against source type not existing
-  if (pGameSources == nullptr)
-  {
-    static VECSOURCES empty;
-    return empty;
-  }
-
-  // Game add-ons
-  AddAddonsSource("game", g_localizeStrings.Get(35049), "DefaultAddonGame.png");
-
-  // Global sources
-  AddOrReplace(*pGameSources, CGUIViewState::GetSources());
-
-  return *pGameSources;
+  return CMediaSourceSettings::GetInstance().GetSources(MediaSection::GAMES);
 }
 
 void CGUIViewStateWindowGames::SaveViewState()
 {
-  SaveViewToDb(m_items.GetPath(), WINDOW_GAMES, CViewStateSettings::GetInstance().Get("games"));
+  // The root lists sources by name, so its state isn't the default for game folders
+  SaveViewToDb(m_items.GetPath(), WINDOW_GAMES,
+               m_items.IsVirtualDirectoryRoot()
+                   ? nullptr
+                   : CViewStateSettings::GetInstance().Get(VIEW::STATE::GAMES));
 }

@@ -35,12 +35,31 @@ struct YuvImage
   unsigned int bpp; // bytes per pixel
 };
 
+namespace KODI::VIDEO::GEOMETRY
+{
+struct ReducedFrame;
+}
+
+//! \brief What ReduceForAnalysis() managed for one picture.
+enum class ReductionResult
+{
+  //! \brief No reduction: this buffer cannot produce one, or the device refused.
+  Unsupported,
+
+  //! \brief Nothing to read yet, and not a failure.
+  Pending,
+
+  Produced,
+};
+
 //-----------------------------------------------------------------------------
 //
 //-----------------------------------------------------------------------------
 
 #define BUFFER_STATE_DECODER 0x01;
 #define BUFFER_STATE_RENDER  0x02;
+
+struct AVDRMFrameDescriptor;
 
 class CVideoBuffer;
 class IVideoBufferPool;
@@ -96,12 +115,53 @@ public:
   virtual uint8_t* GetMemPtr() { return nullptr; }
   virtual void GetPlanes(uint8_t* (&planes)[YuvImage::MAX_PLANES]) {}
   virtual void GetStrides(int (&strides)[YuvImage::MAX_PLANES]) {}
+  virtual void SetPixelFormat(const AVPixelFormat pixFormat) {}
   virtual void SetDimensions(int width, int height, const int (&strides)[YuvImage::MAX_PLANES]) {}
   virtual void SetDimensions(int width,
                              int height,
                              const int (&strides)[YuvImage::MAX_PLANES],
                              const int (&planeOffsets)[YuvImage::MAX_PLANES])
   {
+  }
+
+  /*!
+   * \brief Begin CPU access to the buffer memory.
+   *
+   * Default no-op. Overridden by buffer subclasses (e.g. CVideoBufferDMA)
+   * that need to coordinate CPU-side reads/writes with GPU/DMA access.
+   * Callers can invoke unconditionally without knowing the concrete buffer
+   * type.
+   */
+  virtual void SyncStart() {}
+
+  /*!
+   * \brief End CPU access to the buffer memory. Counterpart to SyncStart().
+   */
+  virtual void SyncEnd() {}
+
+  /*!
+   * \brief Return an AVDRMFrameDescriptor for platform-buffer-aware callers.
+   *
+   * Default no-op returning nullptr. Overridden by DRM PRIME buffer types
+   * (e.g. CVideoBufferDMA) that carry a DMA-BUF descriptor. Lets cross-
+   * platform callers query for a platform handle without needing to know
+   * the concrete buffer type.
+   */
+  virtual AVDRMFrameDescriptor* GetDescriptor() const { return nullptr; }
+
+  /*!
+   * \brief Produce a small CPU-readable copy of the picture, for analysis that survives
+   * downscaling, when GetPlanes() exposes nothing. Not supported by default.
+   *
+   * \p reduction is written only on Produced, and its plane vectors are reused across calls.
+   * The height follows the source shape, and a source already smaller is copied at its size.
+   */
+  virtual ReductionResult ReduceForAnalysis(KODI::VIDEO::GEOMETRY::ReducedFrame& reduction,
+                                            unsigned int sourceWidth,
+                                            unsigned int sourceHeight,
+                                            unsigned int targetWidth)
+  {
+    return ReductionResult::Unsupported;
   }
 
   static bool CopyPicture(YuvImage* pDst, YuvImage *pSrc);
@@ -124,6 +184,7 @@ public:
   uint8_t* GetMemPtr() override;
   void GetPlanes(uint8_t*(&planes)[YuvImage::MAX_PLANES]) override;
   void GetStrides(int(&strides)[YuvImage::MAX_PLANES]) override;
+  void SetPixelFormat(const AVPixelFormat pixFormat) override;
   void SetDimensions(int width, int height, const int (&strides)[YuvImage::MAX_PLANES]) override;
   void SetDimensions(int width, int height, const int (&strides)[YuvImage::MAX_PLANES], const int (&planeOffsets)[YuvImage::MAX_PLANES]) override;
   bool Alloc();

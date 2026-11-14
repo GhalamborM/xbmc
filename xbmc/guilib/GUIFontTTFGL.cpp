@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2005-2018 Team Kodi
+ *  Copyright (C) 2005-2024 Team Kodi
  *  This file is part of Kodi - https://kodi.tv
  *
  *  SPDX-License-Identifier: GPL-2.0-or-later
@@ -14,15 +14,15 @@
 #include "Texture.h"
 #include "TextureManager.h"
 #include "gui3d.h"
+#include "rendering/GLExtensions.h"
+#include "rendering/MatrixGL.h"
+#include "rendering/gl/RenderSystemGL.h"
+#include "settings/AdvancedSettings.h"
+#include "settings/SettingsComponent.h"
 #include "utils/GLUtils.h"
 #include "utils/log.h"
 #include "windowing/GraphicContext.h"
-#ifdef HAS_GL
-#include "rendering/gl/RenderSystemGL.h"
-#elif HAS_GLES
-#include "rendering/gles/RenderSystemGLES.h"
-#endif
-#include "rendering/MatrixGL.h"
+#include "windowing/WinSystem.h"
 
 #include <cassert>
 #include <memory>
@@ -58,20 +58,29 @@ CGUIFontTTFGL::~CGUIFontTTFGL(void)
 
 bool CGUIFontTTFGL::FirstBegin()
 {
-#if defined(HAS_GL)
-  GLenum pixformat = GL_RED;
-  GLenum internalFormat;
-  unsigned int major, minor;
+  GLenum pixformat = GL_RGBA;
+  GLenum internalFormat = GL_RGBA8;
   CRenderSystemGL* renderSystem = dynamic_cast<CRenderSystemGL*>(CServiceBroker::GetRenderSystem());
-  renderSystem->GetRenderVersion(major, minor);
-  if (major >= 3)
-    internalFormat = GL_R8;
+  if (!m_colorTexture)
+  {
+    unsigned int major, minor;
+    renderSystem->GetRenderVersion(major, minor);
+    pixformat = GL_RED;
+    internalFormat = major >= 3 ? GL_R8 : GL_LUMINANCE;
+  }
+
+  renderSystem->EnableShader(m_colorTexture ? ShaderMethodGL::SM_FONTS_RGBA
+                                            : ShaderMethodGL::SM_FONTS);
+  if (renderSystem->ScissorsCanEffectClipping())
+  {
+    m_scissorClip = true;
+  }
   else
-    internalFormat = GL_LUMINANCE;
-#else
-  GLenum pixformat = GL_ALPHA; // deprecated
-  GLenum internalFormat = GL_ALPHA;
-#endif
+  {
+    m_scissorClip = false;
+    renderSystem->EnableShader(m_colorTexture ? ShaderMethodGL::SM_FONTS_RGBA_SHADER_CLIP
+                                              : ShaderMethodGL::SM_FONTS_SHADER_CLIP);
+  }
 
   if (m_textureStatus == TEXTURE_REALLOCATED)
   {
@@ -96,12 +105,25 @@ bool CGUIFontTTFGL::FirstBegin()
     glTexImage2D(GL_TEXTURE_2D, 0, internalFormat, m_texture->GetWidth(), m_texture->GetHeight(), 0,
                  pixformat, GL_UNSIGNED_BYTE, 0);
 
+#ifdef GL_TEXTURE_MAX_ANISOTROPY_EXT
+    if (CGLExtensions::IsExtensionSupported(CGLExtensions::EXT_texture_filter_anisotropic))
+    {
+      int32_t aniso =
+          CServiceBroker::GetSettingsComponent()->GetAdvancedSettings()->m_guiAnisotropicFiltering;
+      if (aniso > 1)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT, aniso);
+    }
+#endif
+
     VerifyGLState();
     m_textureStatus = TEXTURE_UPDATED;
   }
 
   if (m_textureStatus == TEXTURE_UPDATED)
   {
+    // Copies one more line in case we have to sample from there
+    m_updateY2 = std::min(m_updateY2 + 1, m_texture->GetHeight());
+
     glBindTexture(GL_TEXTURE_2D, m_nTexture);
     glTexSubImage2D(GL_TEXTURE_2D, 0, 0, m_updateY1, m_texture->GetWidth(), m_updateY2 - m_updateY1,
                     pixformat, GL_UNSIGNED_BYTE,
@@ -111,7 +133,7 @@ bool CGUIFontTTFGL::FirstBegin()
     m_textureStatus = TEXTURE_READY;
   }
 
-  // Turn Blending On
+  // Accumulate coverage; the HDR composite shader squares it to compensate for blending in PQ.
   glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE_MINUS_DST_ALPHA, GL_ONE);
   glEnable(GL_BLEND);
   glActiveTexture(GL_TEXTURE0);
@@ -122,18 +144,34 @@ bool CGUIFontTTFGL::FirstBegin()
 
 void CGUIFontTTFGL::LastEnd()
 {
+  // static vertex arrays are not supported anymore
+  assert(m_vertex.empty());
+
   CWinSystemBase* const winSystem = CServiceBroker::GetWinSystem();
   if (!winSystem)
     return;
 
-#ifdef HAS_GL
+  const STENCIL_LAYER stencilLayer =
+      CServiceBroker::GetWinSystem()->GetGfxContext().GetStencilLayer();
+
+  if (stencilLayer == STENCIL_LAYER::INVALID)
+    return;
+
+  if (stencilLayer != STENCIL_LAYER::NONE)
+  {
+    glEnable(GL_STENCIL_TEST);
+    glStencilFunc(GL_EQUAL, 0xFF, 0x1 << (int)stencilLayer);
+  }
+
   CRenderSystemGL* renderSystem = dynamic_cast<CRenderSystemGL*>(CServiceBroker::GetRenderSystem());
-  renderSystem->EnableShader(ShaderMethodGL::SM_FONTS);
 
   GLint posLoc = renderSystem->ShaderGetPos();
   GLint colLoc = renderSystem->ShaderGetCol();
   GLint tex0Loc = renderSystem->ShaderGetCoord0();
-  GLint modelLoc = renderSystem->ShaderGetModel();
+  GLint clipUniformLoc = renderSystem->ShaderGetClip();
+  GLint coordStepUniformLoc = renderSystem->ShaderGetCoordStep();
+  GLint matrixUniformLoc = renderSystem->ShaderGetMatrix();
+  GLint depthLoc = renderSystem->ShaderGetDepth();
 
   CreateStaticVertexBuffers();
 
@@ -141,93 +179,6 @@ void CGUIFontTTFGL::LastEnd()
   glEnableVertexAttribArray(posLoc);
   glEnableVertexAttribArray(colLoc);
   glEnableVertexAttribArray(tex0Loc);
-
-  if (!m_vertex.empty())
-  {
-
-    // Deal with vertices that had to use software clipping
-    std::vector<SVertex> vecVertices(6 * (m_vertex.size() / 4));
-    SVertex* vertices = &vecVertices[0];
-    for (size_t i = 0; i < m_vertex.size(); i += 4)
-    {
-      *vertices++ = m_vertex[i];
-      *vertices++ = m_vertex[i + 1];
-      *vertices++ = m_vertex[i + 2];
-
-      *vertices++ = m_vertex[i + 1];
-      *vertices++ = m_vertex[i + 3];
-      *vertices++ = m_vertex[i + 2];
-    }
-    vertices = &vecVertices[0];
-
-    GLuint VertexVBO;
-
-    glGenBuffers(1, &VertexVBO);
-    glBindBuffer(GL_ARRAY_BUFFER, VertexVBO);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(SVertex) * vecVertices.size(), &vecVertices[0],
-                 GL_STATIC_DRAW);
-
-    glVertexAttribPointer(posLoc, 3, GL_FLOAT, GL_FALSE, sizeof(SVertex),
-                          reinterpret_cast<const GLvoid*>(offsetof(SVertex, x)));
-    glVertexAttribPointer(colLoc, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(SVertex),
-                          reinterpret_cast<const GLvoid*>(offsetof(SVertex, r)));
-    glVertexAttribPointer(tex0Loc, 2, GL_FLOAT, GL_FALSE, sizeof(SVertex),
-                          reinterpret_cast<const GLvoid*>(offsetof(SVertex, u)));
-
-    glDrawArrays(GL_TRIANGLES, 0, vecVertices.size());
-
-    glBindBuffer(GL_ARRAY_BUFFER, 0);
-    glDeleteBuffers(1, &VertexVBO);
-  }
-
-#else
-  // GLES 2.0 version.
-  CRenderSystemGLES* renderSystem =
-      dynamic_cast<CRenderSystemGLES*>(CServiceBroker::GetRenderSystem());
-  renderSystem->EnableGUIShader(ShaderMethodGLES::SM_FONTS);
-
-  GLint posLoc = renderSystem->GUIShaderGetPos();
-  GLint colLoc = renderSystem->GUIShaderGetCol();
-  GLint tex0Loc = renderSystem->GUIShaderGetCoord0();
-  GLint modelLoc = renderSystem->GUIShaderGetModel();
-
-
-  CreateStaticVertexBuffers();
-
-  // Enable the attributes used by this shader
-  glEnableVertexAttribArray(posLoc);
-  glEnableVertexAttribArray(colLoc);
-  glEnableVertexAttribArray(tex0Loc);
-
-  if (!m_vertex.empty())
-  {
-    // Deal with vertices that had to use software clipping
-    std::vector<SVertex> vecVertices(6 * (m_vertex.size() / 4));
-    SVertex* vertices = &vecVertices[0];
-
-    for (size_t i = 0; i < m_vertex.size(); i += 4)
-    {
-      *vertices++ = m_vertex[i];
-      *vertices++ = m_vertex[i + 1];
-      *vertices++ = m_vertex[i + 2];
-
-      *vertices++ = m_vertex[i + 1];
-      *vertices++ = m_vertex[i + 3];
-      *vertices++ = m_vertex[i + 2];
-    }
-
-    vertices = &vecVertices[0];
-
-    glVertexAttribPointer(posLoc, 3, GL_FLOAT, GL_FALSE, sizeof(SVertex),
-                          reinterpret_cast<char*>(vertices) + offsetof(SVertex, x));
-    glVertexAttribPointer(colLoc, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(SVertex),
-                          reinterpret_cast<char*>(vertices) + offsetof(SVertex, r));
-    glVertexAttribPointer(tex0Loc, 2, GL_FLOAT, GL_FALSE, sizeof(SVertex),
-                          reinterpret_cast<char*>(vertices) + offsetof(SVertex, u));
-
-    glDrawArrays(GL_TRIANGLES, 0, vecVertices.size());
-  }
-#endif
 
   if (!m_vertexTrans.empty())
   {
@@ -237,7 +188,7 @@ void CGUIFontTTFGL::LastEnd()
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_elementArrayHandle);
     // Store current scissor
     CGraphicContext& context = winSystem->GetGfxContext();
-    CRect scissor = context.StereoCorrection(context.GetScissors());
+    const CRect scissor = context.StereoCorrection(context.GetScissors());
 
     for (size_t i = 0; i < m_vertexTrans.size(); i++)
     {
@@ -255,14 +206,62 @@ void CGUIFontTTFGL::LastEnd()
         // skip empty clip
         if (clip.IsEmpty())
           continue;
-        renderSystem->SetScissors(clip);
       }
 
-      // Apply the translation to the currently active (top-of-stack) model view matrix
-      glMatrixModview.Push();
-      glMatrixModview.Get().Translatef(m_vertexTrans[i].m_translateX, m_vertexTrans[i].m_translateY,
-                                       m_vertexTrans[i].m_translateZ);
-      glUniformMatrix4fv(modelLoc, 1, GL_FALSE, glMatrixModview.Get());
+      if (m_scissorClip)
+      {
+        // clip using scissors
+        renderSystem->SetScissors(clip);
+      }
+      else
+      {
+        // clip using vertex shader
+        const float clipBoundaries[4] = {
+            (m_vertexTrans[i].m_clip.x1 - m_vertexTrans[i].m_translateX -
+             m_vertexTrans[i].m_offsetX) /
+                context.GetGUIScaleX(),
+            (m_vertexTrans[i].m_clip.y1 - m_vertexTrans[i].m_translateY -
+             m_vertexTrans[i].m_offsetY) /
+                context.GetGUIScaleY(),
+            (m_vertexTrans[i].m_clip.x2 - m_vertexTrans[i].m_translateX -
+             m_vertexTrans[i].m_offsetX) /
+                context.GetGUIScaleX(),
+            (m_vertexTrans[i].m_clip.y2 - m_vertexTrans[i].m_translateY -
+             m_vertexTrans[i].m_offsetY) /
+                context.GetGUIScaleY()};
+
+        glUniform4fv(clipUniformLoc, 1, clipBoundaries);
+
+        const float textureSteps[4] = {1.f / static_cast<float>(m_textureWidth),
+                                       1.f / static_cast<float>(m_textureHeight), 1.f, 1.f};
+
+        glUniform4fv(coordStepUniformLoc, 1, textureSteps);
+      }
+
+      // calculate the fractional offset to the ideal position
+      float fractX =
+          context.ScaleFinalXCoord(m_vertexTrans[i].m_translateX, m_vertexTrans[i].m_translateY);
+      float fractY =
+          context.ScaleFinalYCoord(m_vertexTrans[i].m_translateX, m_vertexTrans[i].m_translateY);
+      fractX = -fractX + std::round(fractX);
+      fractY = -fractY + std::round(fractY);
+
+      // proj * model * gui * scroll * translation * scaling * correction factor
+      CMatrixGL matrix = glMatrixProject.Get();
+      matrix.MultMatrixf(glMatrixModview.Get());
+      matrix.MultMatrixf(CMatrixGL(context.GetGUIMatrix()));
+      matrix.Translatef(m_vertexTrans[i].m_offsetX, m_vertexTrans[i].m_offsetY, 0.0f);
+      matrix.Translatef(m_vertexTrans[i].m_translateX, m_vertexTrans[i].m_translateY, 0.0f);
+      // the gui matrix messes with the scale. correct it here for now.
+      matrix.Scalef(context.GetGUIScaleX(), context.GetGUIScaleY(), 1.0f);
+      // the gui matrix doesn't align to exact pixel coords atm. correct it here for now.
+      matrix.Translatef(fractX, fractY, 0.0f);
+
+      glUniformMatrix4fv(matrixUniformLoc, 1, GL_FALSE, matrix);
+
+      // Apply the depth value of the layer
+      float depth = CServiceBroker::GetWinSystem()->GetGfxContext().GetTransformDepth();
+      glUniform1f(depthLoc, depth);
 
       // Bind the buffer to the OpenGL context's GL_ARRAY_BUFFER binding point
       glBindBuffer(GL_ARRAY_BUFFER, m_vertexTrans[i].m_vertexBuffer->bufferHandle);
@@ -288,14 +287,14 @@ void CGUIFontTTFGL::LastEnd()
             reinterpret_cast<GLvoid*>(character * sizeof(SVertex) * 4 + offsetof(SVertex, u)));
 
         glDrawElements(GL_TRIANGLES, 6 * count, GL_UNSIGNED_SHORT, 0);
+        CRenderSystemBase::m_GUIElementCount++;
       }
-
-      glMatrixModview.Pop();
     }
+
     // Restore the original scissor rectangle
-    renderSystem->SetScissors(scissor);
-    // Restore the original model view matrix
-    glUniformMatrix4fv(modelLoc, 1, GL_FALSE, glMatrixModview.Get());
+    if (m_scissorClip)
+      renderSystem->SetScissors(scissor);
+
     // Unbind GL_ARRAY_BUFFER and GL_ELEMENT_ARRAY_BUFFER
     glBindBuffer(GL_ARRAY_BUFFER, 0);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
@@ -306,11 +305,10 @@ void CGUIFontTTFGL::LastEnd()
   glDisableVertexAttribArray(colLoc);
   glDisableVertexAttribArray(tex0Loc);
 
-#ifdef HAS_GL
   renderSystem->DisableShader();
-#else
-  renderSystem->DisableGUIShader();
-#endif
+
+  glStencilFunc(GL_ALWAYS, 0x0, 0xFF);
+  glDisable(GL_STENCIL_TEST);
 }
 
 CVertexBuffer CGUIFontTTFGL::CreateVertexBuffer(const std::vector<SVertex>& vertices) const
@@ -352,12 +350,11 @@ std::unique_ptr<CTexture> CGUIFontTTFGL::ReallocTexture(unsigned int& newHeight)
   newHeight = CTexture::PadPow2(newHeight);
 
   std::unique_ptr<CTexture> newTexture =
-      CTexture::CreateTexture(m_textureWidth, newHeight, XB_FMT_A8);
+      CTexture::CreateTexture(m_textureWidth, newHeight, m_colorTexture ? XB_FMT_RGBA8 : XB_FMT_A8);
 
   if (!newTexture || !newTexture->GetPixels())
   {
-    CLog::Log(LOGERROR, "GUIFontTTFGL::{}: Error creating new cache texture for size {:f}",
-              __func__, m_height);
+    CLog::LogF(LOGERROR, "Error creating new cache texture for size {:f}", m_height);
     return nullptr;
   }
 
@@ -366,25 +363,16 @@ std::unique_ptr<CTexture> CGUIFontTTFGL::ReallocTexture(unsigned int& newHeight)
   m_textureWidth = newTexture->GetWidth();
   m_textureScaleX = 1.0f / m_textureWidth;
   if (m_textureHeight < newHeight)
-    CLog::Log(LOGWARNING, "GUIFontTTFGL::{}: allocated new texture with height of {}, requested {}",
-              __func__, m_textureHeight, newHeight);
+    CLog::LogF(LOGWARNING, "allocated new texture with height of {}, requested {}", m_textureHeight,
+               newHeight);
   m_staticCache.Flush();
   m_dynamicCache.Flush();
 
-  memset(newTexture->GetPixels(), 0, m_textureHeight * newTexture->GetPitch());
+  FillNewTexture(*newTexture);
   if (m_texture)
   {
     m_updateY1 = 0;
     m_updateY2 = m_texture->GetHeight();
-
-    unsigned char* src = m_texture->GetPixels();
-    unsigned char* dst = newTexture->GetPixels();
-    for (unsigned int y = 0; y < m_texture->GetHeight(); y++)
-    {
-      memcpy(dst, src, m_texture->GetPitch());
-      src += m_texture->GetPitch();
-      dst += newTexture->GetPitch();
-    }
   }
 
   m_textureStatus = TEXTURE_REALLOCATED;
@@ -392,20 +380,14 @@ std::unique_ptr<CTexture> CGUIFontTTFGL::ReallocTexture(unsigned int& newHeight)
   return newTexture;
 }
 
-bool CGUIFontTTFGL::CopyCharToTexture(
-    FT_BitmapGlyph bitGlyph, unsigned int x1, unsigned int y1, unsigned int x2, unsigned int y2)
+bool CGUIFontTTFGL::CopyCharToTexture(const uint8_t* pixels,
+                                      unsigned int pitch,
+                                      unsigned int x1,
+                                      unsigned int y1,
+                                      unsigned int x2,
+                                      unsigned int y2)
 {
-  FT_Bitmap bitmap = bitGlyph->bitmap;
-
-  unsigned char* source = bitmap.buffer;
-  unsigned char* target = m_texture->GetPixels() + y1 * m_texture->GetPitch() + x1;
-
-  for (unsigned int y = y1; y < y2; y++)
-  {
-    memcpy(target, source, x2 - x1);
-    source += bitmap.width;
-    target += m_texture->GetPitch();
-  }
+  WriteCharPixels(pixels, pitch, x1, y1, x2, y2);
 
   switch (m_textureStatus)
   {

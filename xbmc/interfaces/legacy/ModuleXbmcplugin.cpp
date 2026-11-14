@@ -9,6 +9,8 @@
 #include "ModuleXbmcplugin.h"
 
 #include "FileItem.h"
+#include "FileItemList.h"
+#include "SortFileItem.h"
 #include "filesystem/PluginDirectory.h"
 
 namespace XBMCAddon
@@ -23,7 +25,7 @@ namespace XBMCAddon
         throw new XBMCAddon::WrongTypeException("None not allowed as argument for listitem");
       AddonClass::Ref<xbmcgui::ListItem> pListItem(listItem);
       pListItem->item->SetPath(url);
-      pListItem->item->m_bIsFolder = isFolder;
+      pListItem->item->SetFolder(isFolder);
 
       // call the directory class to add our item
       return XFILE::CPluginDirectory::AddItem(handle, pListItem->item.get(), totalItems);
@@ -40,7 +42,7 @@ namespace XBMCAddon
         const XBMCAddon::xbmcgui::ListItem* pListItem = item.second();
         bool bIsFolder = item.GetNumValuesSet() > 2 ? item.third() : false;
         pListItem->item->SetPath(url);
-        pListItem->item->m_bIsFolder = bIsFolder;
+        pListItem->item->SetFolder(bIsFolder);
         fitems.Add(pListItem->item);
       }
 
@@ -66,9 +68,10 @@ namespace XBMCAddon
     void addSortMethod(int handle, int sortMethod, const String& clabelMask, const String& clabel2Mask)
     {
       String labelMask;
-      if (sortMethod == SORT_METHOD_TRACKNUM)
+      if (sortMethod == static_cast<int>(SortMethod::TRACKNUM))
         labelMask = (clabelMask.empty() ? "[%N. ]%T" : clabelMask.c_str());
-      else if (sortMethod == SORT_METHOD_EPISODE || sortMethod == SORT_METHOD_PRODUCTIONCODE)
+      else if (sortMethod == static_cast<int>(SortMethod::EPISODE) ||
+               sortMethod == static_cast<int>(SortMethod::PRODUCTIONCODE))
         labelMask = (clabelMask.empty() ? "%H. %T" : clabelMask.c_str());
       else
         labelMask = (clabelMask.empty() ? "%T" : clabelMask.c_str());
@@ -77,8 +80,10 @@ namespace XBMCAddon
       label2Mask = (clabel2Mask.empty() ? "%D" : clabel2Mask.c_str());
 
       // call the directory class to add the sort method.
-      if (sortMethod >= SORT_METHOD_NONE && sortMethod < SORT_METHOD_MAX)
-        XFILE::CPluginDirectory::AddSortMethod(handle, (SORT_METHOD)sortMethod, labelMask, label2Mask);
+      if (sortMethod >= static_cast<int>(SortMethod::NONE) &&
+          sortMethod < static_cast<int>(SortMethod::SM_MAX))
+        XFILE::CPluginDirectory::AddSortMethod(handle, static_cast<SortMethod>(sortMethod),
+                                               labelMask, label2Mask);
     }
 
     String getSetting(int handle, const char* id)

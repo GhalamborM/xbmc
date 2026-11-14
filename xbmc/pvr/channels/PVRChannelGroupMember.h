@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "pvr/PVRConstants.h" // PVR_CLIENT_INVALID_UID
 #include "pvr/channels/PVRChannelNumber.h"
 #include "utils/ISerializable.h"
 #include "utils/ISortable.h"
@@ -25,10 +26,16 @@ class CPVRChannelGroupMember : public ISerializable, public ISortable
   friend class CPVRDatabase;
 
 public:
-  CPVRChannelGroupMember() : m_bChanged(false) {}
+  CPVRChannelGroupMember() : m_bNeedsSave(false) {}
+
+  CPVRChannelGroupMember(const std::string& groupName,
+                         int groupClientID,
+                         int order,
+                         const std::shared_ptr<CPVRChannel>& channel);
 
   CPVRChannelGroupMember(int iGroupID,
                          const std::string& groupName,
+                         int groupClientID,
                          const std::shared_ptr<CPVRChannel>& channel);
 
   virtual ~CPVRChannelGroupMember() = default;
@@ -46,6 +53,8 @@ public:
   void SetGroupID(int iGroupID);
 
   const std::string& Path() const { return m_path; }
+
+  const std::string& GroupName() const { return m_groupName; }
   void SetGroupName(const std::string& groupName);
 
   const CPVRChannelNumber& ChannelNumber() const { return m_channelNumber; }
@@ -60,10 +69,10 @@ public:
   int Order() const { return m_iOrder; }
   void SetOrder(int iOrder);
 
-  bool NeedsSave() const { return m_bChanged; }
-  void SetSaved() { m_bChanged = false; }
+  bool NeedsSave() const { return m_bNeedsSave; }
+  void SetSaved() { m_bNeedsSave = false; }
 
-  int ClientID() const { return m_iClientID; }
+  int ChannelClientID() const { return m_iChannelClientID; }
 
   int ChannelUID() const { return m_iChannelUID; }
 
@@ -71,15 +80,11 @@ public:
 
   bool IsRadio() const { return m_bIsRadio; }
 
-  /*!
-   * @brief Delete this group member from the database.
-   * @return True if it was deleted successfully, false otherwise.
-   */
-  bool QueueDelete();
-
 private:
   int m_iGroupID = -1;
-  int m_iClientID = -1;
+  std::string m_groupName;
+  int m_iGroupClientID = PVR_CLIENT_INVALID_UID;
+  int m_iChannelClientID = PVR_CLIENT_INVALID_UID;
   int m_iChannelUID = -1;
   int m_iChannelDatabaseID = -1;
   bool m_bIsRadio = false;
@@ -91,7 +96,7 @@ private:
   int m_iClientPriority = 0;
   int m_iOrder = 0; // The value denoting the order of this member in the group
 
-  bool m_bChanged = true;
+  bool m_bNeedsSave = true;
 };
 
 } // namespace PVR

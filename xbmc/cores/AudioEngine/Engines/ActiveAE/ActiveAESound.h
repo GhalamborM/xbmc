@@ -10,9 +10,13 @@
 
 #include "cores/AudioEngine/Engines/ActiveAE/ActiveAEBuffer.h"
 #include "cores/AudioEngine/Interfaces/AESound.h"
-#include "filesystem/File.h"
 
 class DllAvUtil;
+
+namespace XFILE
+{
+class CFile;
+}
 
 namespace ActiveAE
 {
@@ -56,8 +60,8 @@ protected:
   XFILE::CFile *m_pFile;
   bool m_isSeekPossible;
   int m_fileSize;
-  float m_volume;
-  AEChannel m_channel;
+  float m_volume = 1.0f;
+  AEChannel m_channel = AE_CH_NULL;
 
   CSoundPacket *m_orig_sound;
   CSoundPacket *m_dst_sound;

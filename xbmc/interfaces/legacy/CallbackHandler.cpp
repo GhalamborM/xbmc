@@ -10,9 +10,9 @@
 
 #include "AddonUtils.h"
 #include "commons/Exception.h"
-#include "threads/SingleLock.h"
 #include "utils/log.h"
 
+#include <mutex>
 #include <vector>
 
 namespace XBMCAddon
@@ -34,18 +34,25 @@ namespace XBMCAddon
 
   static CCriticalSection critSection;
   static CallbackQueue g_callQueue;
+  static bool g_callQueueClosed = false;
 
   void RetardedAsyncCallbackHandler::invokeCallback(Callback* cb)
   {
     XBMC_TRACE;
-    CSingleLock lock(critSection);
+    std::unique_lock lock(critSection);
+    if (g_callQueueClosed)
+    {
+      // Nothing runs callbacks any more, so let the callback go
+      AddonClass::Ref<Callback> discard(cb);
+      return;
+    }
     g_callQueue.push_back(new AsyncCallbackMessage(cb,this));
   }
 
   RetardedAsyncCallbackHandler::~RetardedAsyncCallbackHandler()
   {
     XBMC_TRACE;
-    CSingleLock lock(critSection);
+    std::unique_lock lock(critSection);
 
     // find any messages that might be there because of me ... and remove them
     CallbackQueue::iterator iter = g_callQueue.begin();
@@ -64,7 +71,7 @@ namespace XBMCAddon
   void RetardedAsyncCallbackHandler::makePendingCalls()
   {
     XBMC_TRACE;
-    CSingleLock lock(critSection);
+    std::unique_lock lock(critSection);
     CallbackQueue::iterator iter = g_callQueue.begin();
     while (iter != g_callQueue.end())
     {
@@ -94,7 +101,7 @@ namespace XBMCAddon
 #endif
           AddonClass* obj = (p->cb->getObject());
           AddonClass::Ref<AddonClass> ref(obj);
-          CSingleLock lock2(*obj);
+          std::unique_lock lock2(*obj);
           if (!p->cb->getObject()->isDeallocating())
           {
             try
@@ -113,7 +120,7 @@ namespace XBMCAddon
 
         // since the state of the iterator may have been corrupted by
         //  the changing state of the list from another thread during
-        //  the releasing fo the lock in the immediately preceeding
+        //  the releasing of the lock in the immediately preceding
         //  codeblock, we need to reset it before continuing the loop
         iter = g_callQueue.begin();
       }
@@ -122,10 +129,23 @@ namespace XBMCAddon
     }
   }
 
+  void RetardedAsyncCallbackHandler::clearAllPendingCalls()
+  {
+    XBMC_TRACE;
+    CallbackQueue pending;
+    {
+      std::unique_lock lock(critSection);
+      g_callQueueClosed = true;
+      pending.swap(g_callQueue);
+    }
+    // Released here, outside the lock and the queue: releasing a message can
+    // release its handler, which then removes its messages from the queue.
+  }
+
   void RetardedAsyncCallbackHandler::clearPendingCalls(void* userData)
   {
     XBMC_TRACE;
-    CSingleLock lock(critSection);
+    std::unique_lock lock(critSection);
     CallbackQueue::iterator iter = g_callQueue.begin();
     while (iter != g_callQueue.end())
     {

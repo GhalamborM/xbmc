@@ -15,7 +15,6 @@ set(SOURCES GUIDialogBoxBase.cpp
             GUIDialogMediaSource.cpp
             GUIDialogNumeric.cpp
             GUIDialogOK.cpp
-            GUIDialogPlayEject.cpp
             GUIDialogPlayerControls.cpp
             GUIDialogPlayerProcessInfo.cpp
             GUIDialogProgress.cpp
@@ -46,8 +45,8 @@ set(HEADERS GUIDialogBoxBase.h
             GUIDialogMediaFilter.h
             GUIDialogMediaSource.h
             GUIDialogNumeric.h
+            NumericInputMode.h
             GUIDialogOK.h
-            GUIDialogPlayEject.h
             GUIDialogPlayerControls.h
             GUIDialogPlayerProcessInfo.h
             GUIDialogProgress.h
@@ -61,6 +60,12 @@ set(HEADERS GUIDialogBoxBase.h
             GUIDialogTextViewer.h
             GUIDialogVolumeBar.h
             GUIDialogYesNo.h
-            IGUIVolumeBarCallback.h)
+            IGUIVolumeBarCallback.h
+            ImageChoices.h)
+
+if(ENABLE_OPTICAL)
+  list(APPEND SOURCES GUIDialogPlayEject.cpp)
+  list(APPEND HEADERS GUIDialogPlayEject.h)
+endif()
 
 core_add_library(dialogs)

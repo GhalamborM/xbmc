@@ -2,11 +2,11 @@ set(SOURCES ActorProtocol.cpp
             AlarmClock.cpp
             AliasShortcutUtils.cpp
             Archive.cpp
+            ArtUtils.cpp
+            AspectRatioVocabulary.cpp
             Base64.cpp
             BitstreamConverter.cpp
-            BitstreamReader.cpp
             BitstreamStats.cpp
-            BitstreamWriter.cpp
             BooleanLogic.cpp
             CharArrayParser.cpp
             CharsetConverter.cpp
@@ -18,20 +18,27 @@ set(SOURCES ActorProtocol.cpp
             CSSUtils.cpp
             DatabaseUtils.cpp
             Digest.cpp
+            DiscsUtils.cpp
+            DolbyVisionRpu.cpp
             EndianSwap.cpp
             EmbeddedArt.cpp
+            EpisodeUtils.cpp
+            ExecString.cpp
             FileExtensionProvider.cpp
             Fanart.cpp
             FileOperationJob.cpp
             FileUtils.cpp
+            FontUtils.cpp
+            GpuInfo.cpp
             GroupUtils.cpp
+            HDRUtils.cpp
+            HevcSei.cpp
             HTMLUtil.cpp
             HttpHeader.cpp
             HttpParser.cpp
             HttpRangeUtils.cpp
             HttpResponse.cpp
             InfoLoader.cpp
-            JobManager.cpp
             JSONVariantParser.cpp
             JSONVariantWriter.cpp
             LabelFormatter.cpp
@@ -40,11 +47,13 @@ set(SOURCES ActorProtocol.cpp
             Locale.cpp
             log.cpp
             Mime.cpp
+            MovingSpeed.cpp
+            Mp4ChplReader.cpp
             Observer.cpp
             POUtils.cpp
+            PlayerUtils.cpp
             RecentlyAddedJob.cpp
             RegExp.cpp
-            rfft.cpp
             RingBuffer.cpp
             RssManager.cpp
             RssReader.cpp
@@ -63,46 +72,65 @@ set(SOURCES ActorProtocol.cpp
             Temperature.cpp
             TextSearch.cpp
             TimeUtils.cpp
+            URI.cpp
+            URIParser.cpp
+            URIPolicy.cpp
+            URIRedactor.cpp
             URIUtils.cpp
             UrlOptions.cpp
             Utf8Utils.cpp
             Variant.cpp
-            VC1BitstreamParser.cpp
             Vector.cpp
             XBMCTinyXML.cpp
+            XBMCTinyXML2.cpp
             XMLUtils.cpp)
 
 set(HEADERS ActorProtocol.h
             AlarmClock.h
             AliasShortcutUtils.h
             Archive.h
+            ArtTypes.h
+            ArtUtils.h
+            Artwork.h
+            AspectRatioVocabulary.h
             Base64.h
+            BitReader.h
             BitstreamConverter.h
-            BitstreamReader.h
             BitstreamStats.h
-            BitstreamWriter.h
             BooleanLogic.h
             CharArrayParser.h
             CharsetConverter.h
             CharsetDetection.h
             CPUInfo.h
             ColorUtils.h
+            ComponentContainer.h
+            ContentNames.h
             ContentUtils.h
             Crc32.h
             CSSUtils.h
             DatabaseUtils.h
+            DefaultArt.h
             Digest.h
+            DiscsUtils.h
+            DolbyVisionRpu.h
+            EmojiUtils.h
             EndianSwap.h
+            EpisodeUtils.h
             EventStream.h
             EventStreamDetail.h
+            ExecString.h
             FileExtensionProvider.h
             Fanart.h
             FileOperationJob.h
             FileUtils.h
+            FontUtils.h
             Geometry.h
             GlobalsHandling.h
+            GpuInfo.h
             GroupUtils.h
             HDRCapabilities.h
+            HDRUtils.h
+            HevcSei.h
             HTMLUtil.h
             HttpHeader.h
             HttpParser.h
@@ -118,26 +146,30 @@ set(HEADERS ActorProtocol.h
             ISerializable.h
             ISortable.h
             IXmlDeserializable.h
-            Job.h
-            JobManager.h
+            ItemProperties.h
             JSONVariantParser.h
             JSONVariantWriter.h
             LabelFormatter.h
             LangCodeExpander.h
             LegacyPathTranslation.h
             Locale.h
+            LockInfo.h
             log.h
             logtypes.h
+            Map.h
             MathUtils.h
             MemUtils.h
             Mime.h
+            MovingSpeed.h
+            Mp4ChplReader.h
             Observer.h
             params_check_macros.h
             POUtils.h
+            PlaceholderPaths.h
+            PlayerUtils.h
             ProgressJob.h
             RecentlyAddedJob.h
             RegExp.h
-            rfft.h
             RingBuffer.h
             RssManager.h
             RssReader.h
@@ -146,6 +178,7 @@ set(HEADERS ActorProtocol.h
             ScraperParser.h
             ScraperUrl.h
             Screenshot.h
+            Set.h
             SortUtils.h
             Speed.h
             Stopwatch.h
@@ -156,37 +189,41 @@ set(HEADERS ActorProtocol.h
             SystemInfo.h
             Temperature.h
             TextSearch.h
+            TimeFormat.h
             TimeUtils.h
             TransformMatrix.h
+            URI.h
+            URIParser.h
+            URIPolicy.h
+            URIRedactor.h
             URIUtils.h
             UrlOptions.h
             Utf8Utils.h
             Variant.h
-            VC1BitstreamParser.h
             Vector.h
             XBMCTinyXML.h
+            XBMCTinyXML2.h
             XMLUtils.h
             XTimeUtils.h)
 
-if(XSLT_FOUND)
+if(TARGET ${APP_NAME_LC}::XSLT)
   list(APPEND SOURCES XSLTUtils.cpp)
   list(APPEND HEADERS XSLTUtils.h)
 endif()
-if(EGL_FOUND)
+if(TARGET ${APP_NAME_LC}::EGL)
   list(APPEND SOURCES EGLUtils.cpp
                       EGLFence.cpp)
   list(APPEND HEADERS EGLUtils.h
                       EGLFence.h)
 endif()
 
-# The large map trips the clang optimizer
-if(CMAKE_CXX_COMPILER_ID STREQUAL Clang)
-  set_source_files_properties(Mime.cpp PROPERTIES COMPILE_FLAGS -O0)
-endif()
-
-if(OPENGL_FOUND OR OPENGLES_FOUND)
-  list(APPEND SOURCES GLUtils.cpp)
-  list(APPEND HEADERS GLUtils.h)
+if(TARGET ${APP_NAME_LC}::OpenGl OR TARGET ${APP_NAME_LC}::OpenGLES)
+  list(APPEND SOURCES GLBufferArena.cpp
+                      GLBufferObject.cpp
+                      GLUtils.cpp)
+  list(APPEND HEADERS GLBufferArena.h
+                      GLBufferObject.h
+                      GLUtils.h)
 endif()
 
 if("gbm" IN_LIST CORE_PLATFORM_NAME_LC OR "wayland" IN_LIST CORE_PLATFORM_NAME_LC)
@@ -215,14 +252,19 @@ if("gbm" IN_LIST CORE_PLATFORM_NAME_LC OR "wayland" IN_LIST CORE_PLATFORM_NAME_L
     list(APPEND HEADERS GBMBufferObject.h)
   endif()
 
-  if(EGL_FOUND)
+  if(TARGET ${APP_NAME_LC}::EGL)
     list(APPEND SOURCES EGLImage.cpp)
     list(APPEND HEADERS EGLImage.h)
   endif()
 
-  if(LIBDRM_FOUND)
+  if(TARGET ${APP_NAME_LC}::LibDRM)
     list(APPEND SOURCES DRMHelpers.cpp)
     list(APPEND HEADERS DRMHelpers.h)
+  endif()
+
+  if(TARGET ${APP_NAME_LC}::LibDisplayInfo)
+    list(APPEND SOURCES DisplayInfo.cpp)
+    list(APPEND HEADERS DisplayInfo.h)
   endif()
 endif()
 

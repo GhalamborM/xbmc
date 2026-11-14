@@ -51,7 +51,7 @@ public:
   // IWSDiscovery interface methods
   ~CWSDiscoveryPosix() override;
   bool StartServices() override;
-  bool StopServices() override;
+  bool StopServices(bool bWait) override;
   bool IsRunning() override;
 
   /*
@@ -61,7 +61,7 @@ public:
   */
   bool GetServerList(CFileItemList& items);
 
-  const long long GetInstanceID() { return wsd_instance_id; }
+  long long GetInstanceID() const { return wsd_instance_id; }
 
   /*
    * Set List of WSD info request
@@ -78,7 +78,7 @@ public:
   */
   bool GetCached(const std::string& strHostName, std::string& strIpAddress);
 
-  static const bool IsInitialized() { return m_isInitialized; }
+  static bool IsInitialized() { return m_isInitialized; }
 
 private:
   CCriticalSection m_critWSD;
@@ -93,7 +93,7 @@ private:
    * January 1, 1970 
    *
    * Our implementation will only set this on creation of the class
-   * We arent providing services to clients, so this should be ok.
+   * We aren't providing services to clients, so this should be ok.
    */
   long long wsd_instance_id;
 

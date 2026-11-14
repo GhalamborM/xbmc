@@ -1,38 +1,35 @@
-include ../../Makefile.include
-DEPS= ../../Makefile.include Makefile
-
-# lib name, version
-LIBNAME=libpng
-VERSION=1.6.37
-SOURCE=$(LIBNAME)-$(VERSION)
-ARCHIVE=$(SOURCE).tar.gz
+include ../../Makefile.include LIBPNG-VERSION ../../download-files.include
+DEPS = ../../Makefile.include Makefile LIBPNG-VERSION ../../download-files.include
 
 # configuration settings
-CONFIGURE=cp -f $(CONFIG_SUB) $(CONFIG_GUESS) .; \
-          ./configure --prefix=$(PREFIX) --disable-shared
+CMAKE_OPTIONS=-DPNG_SHARED=OFF \
+              -DPNG_STATIC=ON \
+              -DPNG_TESTS=OFF \
+              -DPNG_TOOLS=OFF \
+              -DPNG_HARDWARE_OPTIMIZATIONS=ON
 
-LIBDYLIB=$(PLATFORM)/.libs/$(LIBNAME)16.a
+# provide ZLIB_ROOT if platform is building zlib
+ifneq ($(HAS_ZLIB),1)
+  CMAKE_OPTIONS+= -DZLIB_ROOT=$(PREFIX)
+endif
+
+LIBDYLIB=$(PLATFORM)/build/$(BYPRODUCT)
 
 all: .installed-$(PLATFORM)
 
-$(TARBALLS_LOCATION)/$(ARCHIVE):
-	cd $(TARBALLS_LOCATION); $(RETRIEVE_TOOL) $(RETRIEVE_TOOL_FLAGS) $(BASE_URL)/$(ARCHIVE)
-
-$(PLATFORM): $(TARBALLS_LOCATION)/$(ARCHIVE) $(DEPS)
-	rm -rf $(PLATFORM)/*; mkdir -p $(PLATFORM)
+.configured-$(PLATFORM): $(DEPS) | $(TARBALLS_LOCATION)/$(ARCHIVE).$(HASH_TYPE)
+	rm -rf $(PLATFORM); mkdir -p $(PLATFORM)/build
 	cd $(PLATFORM); $(ARCHIVE_TOOL) $(ARCHIVE_TOOL_FLAGS) $(TARBALLS_LOCATION)/$(ARCHIVE)
-	cd $(PLATFORM); $(CONFIGURE)
+	cd $(PLATFORM)/build; $(CMAKE) $(CMAKE_OPTIONS) ..
+	touch $@
 
-$(LIBDYLIB): $(PLATFORM)
-	$(MAKE) -C $(PLATFORM)
-
-.installed-$(PLATFORM): $(LIBDYLIB)
-	$(MAKE) -C $(PLATFORM) install
+.installed-$(PLATFORM): .configured-$(PLATFORM)
+	$(MAKE) -C $(PLATFORM)/build install
 	touch $@
 
 clean:
-	$(MAKE) -C $(PLATFORM) clean
-	rm -f .installed-$(PLATFORM)
+	$(MAKE) -C $(PLATFORM)/build clean
+	rm -f .installed-$(PLATFORM) .configured-$(PLATFORM)
 
 distclean::
-	rm -rf $(PLATFORM) .installed-$(PLATFORM)
+	rm -rf $(PLATFORM) .installed-$(PLATFORM) .configured-$(PLATFORM)

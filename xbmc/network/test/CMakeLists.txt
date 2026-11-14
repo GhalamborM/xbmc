@@ -1,5 +1,10 @@
-if(MICROHTTPD_FOUND)
-  set(SOURCES TestWebServer.cpp)
+set(SOURCES TestDNSNameCache.cpp
+            TestNetwork.cpp
+            TestNetworkFileItemClassify.cpp
+            TestTCPServer.cpp)
 
-  core_add_test_library(network_test)
+if(TARGET ${APP_NAME_LC}::MicroHttpd)
+  list(APPEND SOURCES TestWebServer.cpp)
 endif()
+
+core_add_test_library(network_test)

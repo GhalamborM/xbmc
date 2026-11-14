@@ -43,7 +43,7 @@ bool CRenderBufferGuiTexture::Allocate(AVPixelFormat format,
 size_t CRenderBufferGuiTexture::GetFrameSize() const
 {
   if (m_texture)
-    return m_texture->GetPitch() * m_texture->GetRows();
+    return static_cast<size_t>(m_texture->GetPitch()) * m_texture->GetRows();
 
   return 0;
 }
@@ -75,7 +75,7 @@ void CRenderBufferGuiTexture::BindToUnit(unsigned int unit)
     m_texture->BindToUnit(unit);
 }
 
-AVPixelFormat CRenderBufferGuiTexture::TranslateFormat(unsigned int textureFormat)
+AVPixelFormat CRenderBufferGuiTexture::TranslateFormat(XB_FMT textureFormat)
 {
   switch (textureFormat)
   {

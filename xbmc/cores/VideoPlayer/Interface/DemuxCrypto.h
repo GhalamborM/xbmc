@@ -20,6 +20,7 @@ enum CryptoSessionSystem : uint8_t
   CRYPTO_SESSION_SYSTEM_WIDEVINE,
   CRYPTO_SESSION_SYSTEM_PLAYREADY,
   CRYPTO_SESSION_SYSTEM_WISEPLAY,
+  CRYPTO_SESSION_SYSTEM_CLEARKEY,
 };
 
 struct DemuxCryptoSession
@@ -34,7 +35,7 @@ struct DemuxCryptoSession
     return keySystem == other.keySystem && sessionId == other.sessionId;
   };
 
-  // encryped stream infos
+  // encrypted stream infos
   std::string sessionId;
   CryptoSessionSystem keySystem;
 

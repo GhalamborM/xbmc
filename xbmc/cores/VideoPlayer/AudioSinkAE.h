@@ -14,6 +14,7 @@
 #include "threads/CriticalSection.h"
 
 #include <atomic>
+#include <mutex>
 
 #include "PlatformDefs.h"
 
@@ -23,7 +24,6 @@ extern "C" {
 
 typedef struct stDVDAudioFrame DVDAudioFrame;
 
-class CSingleLock;
 class CDVDClock;
 
 class CAudioSinkAE : IAEClockCallback
@@ -35,9 +35,13 @@ public:
   void SetVolume(float fVolume);
   void SetDynamicRangeCompression(long drc);
   void Pause();
+  void Hold();
   void Resume();
   bool Create(const DVDAudioFrame &audioframe, AVCodecID codec, bool needresampler);
   bool IsValidFormat(const DVDAudioFrame &audioframe);
+  //! \brief Whether the engine reconfigured the sink for this stream, ie. the format on
+  //!        the wire changed and a downstream device has to acquire it again.
+  bool HasSinkFormatChanged();
   void Destroy(bool finish);
   unsigned int AddPackets(const DVDAudioFrame &audioframe);
   double GetPlayingPts();

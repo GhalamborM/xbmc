@@ -8,15 +8,16 @@
 
 #include "RendererMediaCodecSurface.h"
 
-#include "../RenderCapture.h"
 #include "../RenderFactory.h"
 #include "../RenderFlags.h"
 #include "DVDCodecs/Video/DVDVideoCodecAndroidMediaCodec.h"
+#include "ServiceBroker.h"
 #include "rendering/RenderSystem.h"
 #include "settings/MediaSettings.h"
 #include "utils/TimeUtils.h"
 #include "utils/log.h"
 #include "windowing/GraphicContext.h"
+#include "windowing/WinSystem.h"
 
 #include "platform/android/activity/XBMCApp.h"
 
@@ -63,21 +64,26 @@ bool CRendererMediaCodecSurface::Configure(const VideoPicture &picture, float fp
   CalculateFrameAspectRatio(picture.iDisplayWidth, picture.iDisplayHeight);
   SetViewMode(m_videoSettings.m_ViewMode);
 
+  // Configure GUI/OSD for HDR PQ when display is in HDR PQ mode
+  if (picture.color_transfer == AVCOL_TRC_SMPTE2084)
+  {
+    if (CServiceBroker::GetWinSystem()->IsHDRDisplay())
+      CServiceBroker::GetWinSystem()->GetGfxContext().SetTransferPQ(true);
+  }
+  else if (picture.hdrType == StreamHdrType::HDR_TYPE_DOLBYVISION)
+  {
+    if (CServiceBroker::GetWinSystem()->GetDisplayHDRCapabilities().SupportsDolbyVision())
+      CServiceBroker::GetWinSystem()->GetGfxContext().SetTransferPQ(true);
+  }
+
   return true;
 }
 
 CRenderInfo CRendererMediaCodecSurface::GetRenderInfo()
 {
   CRenderInfo info;
-  info.max_buffer_size = info.optimal_buffer_size = 4;
+  info.max_buffer_size = 4;
   return info;
-}
-
-bool CRendererMediaCodecSurface::RenderCapture(CRenderCapture* capture)
-{
-  capture->BeginRender();
-  capture->EndRender();
-  return true;
 }
 
 void CRendererMediaCodecSurface::AddVideoPicture(const VideoPicture &picture, int index)
@@ -101,7 +107,7 @@ void CRendererMediaCodecSurface::ReleaseVideoBuffer(int idx, bool render)
     if (mcvb)
     {
       if (render && m_bConfigured)
-        mcvb->RenderUpdate(m_surfDestRect, CXBMCApp::GetNextFrameTime());
+        mcvb->RenderUpdate(m_surfDestRect, CXBMCApp::Get().GetNextFrameTime());
       else
         mcvb->ReleaseOutputBuffer(render, 0);
     }
@@ -115,7 +121,7 @@ void CRendererMediaCodecSurface::ReleaseBuffer(int idx)
   ReleaseVideoBuffer(idx, false);
 }
 
-bool CRendererMediaCodecSurface::Supports(ERENDERFEATURE feature)
+bool CRendererMediaCodecSurface::Supports(ERENDERFEATURE feature) const
 {
   if (feature == RENDERFEATURE_ZOOM || feature == RENDERFEATURE_STRETCH ||
       feature == RENDERFEATURE_PIXEL_RATIO || feature == RENDERFEATURE_VERTICAL_SHIFT ||
@@ -130,6 +136,8 @@ void CRendererMediaCodecSurface::Reset()
   for (int i = 0 ; i < 4 ; ++i)
     ReleaseVideoBuffer(i, false);
   m_lastIndex = -1;
+
+  CServiceBroker::GetWinSystem()->GetGfxContext().SetTransferPQ(false);
 }
 
 void CRendererMediaCodecSurface::RenderUpdate(int index, int index2, bool clear, unsigned int flags, unsigned int alpha)
@@ -137,25 +145,25 @@ void CRendererMediaCodecSurface::RenderUpdate(int index, int index2, bool clear,
   m_bConfigured = true;
 
   // this hack is needed to get the 2D mode of a 3D movie going
-  RENDER_STEREO_MODE stereo_mode = CServiceBroker::GetWinSystem()->GetGfxContext().GetStereoMode();
-  if (stereo_mode)
-    CServiceBroker::GetWinSystem()->GetGfxContext().SetStereoView(RENDER_STEREO_VIEW_LEFT);
+  RenderStereoMode stereo_mode = CServiceBroker::GetWinSystem()->GetGfxContext().GetStereoMode();
+  if (stereo_mode != RenderStereoMode::OFF)
+    CServiceBroker::GetWinSystem()->GetGfxContext().SetStereoView(RenderStereoView::LEFT);
 
   ManageRenderArea();
 
-  if (stereo_mode)
-    CServiceBroker::GetWinSystem()->GetGfxContext().SetStereoView(RENDER_STEREO_VIEW_OFF);
+  if (stereo_mode != RenderStereoMode::OFF)
+    CServiceBroker::GetWinSystem()->GetGfxContext().SetStereoView(RenderStereoView::OFF);
 
   m_surfDestRect = m_destRect;
   switch (stereo_mode)
   {
-    case RENDER_STEREO_MODE_SPLIT_HORIZONTAL:
+    case RenderStereoMode::SPLIT_HORIZONTAL:
       m_surfDestRect.y2 *= 2.0;
       break;
-    case RENDER_STEREO_MODE_SPLIT_VERTICAL:
+    case RenderStereoMode::SPLIT_VERTICAL:
       m_surfDestRect.x2 *= 2.0;
       break;
-    case RENDER_STEREO_MODE_MONO:
+    case RenderStereoMode::MONO:
       if (CONF_FLAGS_STEREO_MODE_MASK(m_iFlags) == CONF_FLAGS_STEREO_MODE_TAB)
         m_surfDestRect.y2 = m_surfDestRect.y2 * 2.0f;
       else

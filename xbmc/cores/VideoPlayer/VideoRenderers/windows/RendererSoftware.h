@@ -22,19 +22,21 @@ public:
   ~CRendererSoftware();
 
   bool Configure(const VideoPicture& picture, float fps, unsigned orientation) override;
-  bool Supports(ESCALINGMETHOD method) override;
+  bool Supports(ESCALINGMETHOD method) const override;
 
   static CRendererBase* Create(CVideoSettings& videoSettings);
   static void GetWeight(std::map<RenderMethod, int>& weights, const VideoPicture& picture);
 
 protected:
-  explicit CRendererSoftware(CVideoSettings& videoSettings) : CRendererBase(videoSettings) {}
+  explicit CRendererSoftware(CVideoSettings& videoSettings);
   CRenderBuffer* CreateBuffer() override;
   void RenderImpl(CD3DTexture& target, CRect& sourceRect, CPoint(&destPoints)[4], uint32_t flags) override;
   void FinalOutput(CD3DTexture& source, CD3DTexture& target, const CRect& src, const CPoint(&destPoints)[4]) override;
 
 private:
   SwsContext* m_sw_scale_ctx = nullptr;
+  SwsFilter* m_srcFilter = nullptr;
+  bool m_restoreMultithreadProtectedOff = false;
 };
 
 class CRendererSoftware::CRenderBufferImpl : public CRenderBuffer

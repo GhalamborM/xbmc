@@ -8,9 +8,9 @@
 
 #include "WinEventsX11.h"
 
-#include "AppInboundProtocol.h"
-#include "Application.h"
 #include "ServiceBroker.h"
+#include "application/AppInboundProtocol.h"
+#include "application/Application.h"
 #include "cores/AudioEngine/Interfaces/AE.h"
 #include "guilib/GUIComponent.h"
 #include "guilib/GUIWindowManager.h"
@@ -22,14 +22,16 @@
 #include "windowing/WinEvents.h"
 #include "windowing/X11/WinSystemX11.h"
 
+#include <stdexcept>
+
 #include <X11/XF86keysym.h>
 #include <X11/Xlib.h>
 #include <X11/extensions/Xrandr.h>
 #include <X11/keysymdef.h>
 
-using namespace KODI::MESSAGING;
 using namespace KODI::WINDOWING::X11;
 
+// clang-format off
 static uint32_t SymMappingsX11[][2] =
 {
   {XK_BackSpace, XBMCK_BACKSPACE}
@@ -55,7 +57,7 @@ static uint32_t SymMappingsX11[][2] =
 , {XF86XK_AudioStop, XBMCK_MEDIA_STOP}
 , {XF86XK_AudioPause, XBMCK_MEDIA_PLAY_PAUSE}
 , {XF86XK_Mail, XBMCK_LAUNCH_MAIL}
-, {XF86XK_Select, XBMCK_LAUNCH_MEDIA_SELECT}
+, {XF86XK_Select, XBMCK_SELECT}
 , {XF86XK_Launch0, XBMCK_LAUNCH_APP1}
 , {XF86XK_Launch1, XBMCK_LAUNCH_APP2}
 , {XF86XK_WWW, XBMCK_LAUNCH_FILE_BROWSER}
@@ -140,6 +142,7 @@ static uint32_t SymMappingsX11[][2] =
 , {XF86XK_AudioRandomPlay, XBMCK_SHUFFLE}
 , {XF86XK_AudioForward, XBMCK_FASTFORWARD}
 };
+// clang-format on
 
 CWinEventsX11::CWinEventsX11(CWinSystemX11& winSystem) : m_winSystem(winSystem)
 {
@@ -269,12 +272,12 @@ bool CWinEventsX11::HasStructureChanged()
   return ret;
 }
 
-void CWinEventsX11::SetXRRFailSafeTimer(int millis)
+void CWinEventsX11::SetXRRFailSafeTimer(std::chrono::milliseconds duration)
 {
   if (!m_display)
     return;
 
-  m_xrrFailSafeTimer.Set(millis);
+  m_xrrFailSafeTimer.Set(duration);
   m_xrrEventPending = true;
 }
 
@@ -328,7 +331,7 @@ bool CWinEventsX11::MessagePump()
       continue;
     }
 
-    if (XFilterEvent(&xevent, m_window))
+    if (XFilterEvent(&xevent, None))
       continue;
 
     switch (xevent.type)
@@ -383,8 +386,9 @@ bool CWinEventsX11::MessagePump()
         m_structureChanged = true;
         XBMC_Event newEvent = {};
         newEvent.type = XBMC_VIDEORESIZE;
-        newEvent.resize.w = xevent.xconfigure.width;
-        newEvent.resize.h = xevent.xconfigure.height;
+        newEvent.resize.width = xevent.xconfigure.width;
+        newEvent.resize.height = xevent.xconfigure.height;
+        newEvent.resize.scale = 1.0;
         if (appPort)
           ret |= appPort->OnEvent(newEvent);
         CServiceBroker::GetGUI()->GetWindowManager().MarkDirty();
@@ -394,7 +398,8 @@ bool CWinEventsX11::MessagePump()
       case ClientMessage:
       {
         if ((unsigned int)xevent.xclient.data.l[0] == m_wmDeleteMessage)
-          if (!g_application.m_bStop) CApplicationMessenger::GetInstance().PostMsg(TMSG_QUIT);
+          if (!g_application.m_bStop)
+            CServiceBroker::GetAppMessenger()->PostMsg(TMSG_QUIT);
         break;
       }
 
@@ -429,6 +434,8 @@ bool CWinEventsX11::MessagePump()
         {
           m_keybuf_len = len;
           m_keybuf = (char*)realloc(m_keybuf, m_keybuf_len);
+          if (m_keybuf == nullptr)
+            throw std::runtime_error("Failed to realloc memory, insufficient memory available");
           len = Xutf8LookupString(m_xic, &xevent.xkey,
                                   m_keybuf, m_keybuf_len,
                                   &xkeysym, &status);
@@ -444,7 +451,7 @@ bool CWinEventsX11::MessagePump()
             std::wstring keys;
             g_charsetConverter.utf8ToW(data, keys, false);
 
-            if (keys.length() == 0)
+            if (keys.empty())
             {
               break;
             }
@@ -455,7 +462,7 @@ bool CWinEventsX11::MessagePump()
               newEvent.key.keysym.unicode = keys[i];
               ret |= ProcessKey(newEvent);
             }
-            if (keys.length() > 0)
+            if (!keys.empty())
             {
               newEvent.key.keysym.scancode = xevent.xkey.keycode;
               XLookupString(&xevent.xkey, NULL, 0, &xkeysym, NULL);

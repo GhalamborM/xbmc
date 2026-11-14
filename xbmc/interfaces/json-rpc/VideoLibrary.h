@@ -10,11 +10,17 @@
 
 #include "FileItemHandler.h"
 #include "JSONRPC.h"
+#include "XBDateTime.h"
+#include "utils/Artwork.h"
 #include "utils/DatabaseUtils.h"
 
+#include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
+class CFileItem;
+class CFileItemList;
 class CVideoDatabase;
 class CVariant;
 
@@ -66,18 +72,54 @@ namespace JSONRPC
     static JSONRPC_STATUS RemoveMusicVideo(const std::string &method, ITransportLayer *transport, IClient *client, const CVariant &parameterObject, CVariant &result);
 
     static JSONRPC_STATUS Scan(const std::string &method, ITransportLayer *transport, IClient *client, const CVariant &parameterObject, CVariant &result);
+    static JSONRPC_STATUS SetSourceContent(const std::string& method,
+                                           ITransportLayer* transport,
+                                           IClient* client,
+                                           const CVariant& parameterObject,
+                                           CVariant& result);
     static JSONRPC_STATUS Export(const std::string &method, ITransportLayer *transport, IClient *client, const CVariant &parameterObject, CVariant &result);
     static JSONRPC_STATUS Clean(const std::string &method, ITransportLayer *transport, IClient *client, const CVariant &parameterObject, CVariant &result);
 
-    static bool FillFileItem(const std::string &strFilename, CFileItemPtr &item, const CVariant &parameterObject = CVariant(CVariant::VariantTypeArray));
+    static bool FillFileItem(
+        const std::string& strFilename,
+        std::shared_ptr<CFileItem>& item,
+        const CVariant& parameterObject = CVariant(CVariant::VariantTypeArray));
     static bool FillFileItemList(const CVariant &parameterObject, CFileItemList &list);
     static void UpdateResumePoint(const CVariant &parameterObject, CVideoInfoTag &details, CVideoDatabase &videodatabase);
 
+    /*! \brief Provided the JSON-RPC parameter object compute the VideoDbDetails mask
+    * \param parameterObject the JSON parameter mask
+    * \return the mask value for the requested properties
+    */
+    static int GetDetailsFromJsonParameters(const CVariant& parameterObject);
+
+  protected:
+    struct PlaybackUpdate
+    {
+      int playCount;
+      CDateTime lastPlayed;
+    };
+
+    /*! \brief The playback state a show-level update leaves one of its episodes with.
+       \return what to store, or nothing when the episode is left as it is
+      */
+    static std::optional<PlaybackUpdate> EpisodePlaybackUpdate(const CVideoInfoTag& show,
+                                                               bool updatePlaycount,
+                                                               bool updateLastplayed,
+                                                               const CVideoInfoTag& episode);
+
   private:
-    static int RequiresAdditionalDetails(const MediaType& mediaType, const CVariant &parameterObject);
+    static int RequiresAdditionalDetails(KODI::MEDIA::TYPE mediaType, const CVariant &parameterObject);
     static JSONRPC_STATUS HandleItems(const char *idProperty, const char *resultName, CFileItemList &items, const CVariant &parameterObject, CVariant &result, bool limit = true);
     static JSONRPC_STATUS RemoveVideo(const CVariant &parameterObject);
-    static void UpdateVideoTag(const CVariant &parameterObject, CVideoInfoTag &details, std::map<std::string, std::string> &artwork, std::set<std::string> &removedArtwork, std::set<std::string>& updatedDetails);
-    static void UpdateVideoTagField(const CVariant& parameterObject, const std::string& fieldName, std::vector<std::string>& fieldValue, std::set<std::string>& updatedDetails);
+    static void UpdateVideoTag(const CVariant& parameterObject,
+                               CVideoInfoTag& details,
+                               KODI::ART::Artwork& artwork,
+                               std::set<std::string, std::less<>>& removedArtwork,
+                               std::set<std::string, std::less<>>& updatedDetails);
+    static void UpdateVideoTagField(const CVariant& parameterObject,
+                                    const std::string& fieldName,
+                                    std::vector<std::string>& fieldValue,
+                                    std::set<std::string, std::less<>>& updatedDetails);
   };
 }

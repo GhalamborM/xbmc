@@ -50,10 +50,13 @@ public:
     PLAYER_OPENFILE,
     PLAYER_STARTED,                 // sent whenever a sub player has finished it's first frame after open
     PLAYER_AVCHANGE,                // signal a change in audio, video or subtitle parameters
+    PLAYER_CONTENT_GEOMETRY,        // a live content geometry reading was confirmed or withdrawn
     PLAYER_ABORT,
     PLAYER_REPORT_STATE,
     PLAYER_FRAME_ADVANCE,
     PLAYER_DISPLAY_RESET,           // report display reset event
+    PLAYER_AUDIO_FORMAT_CHANGE,     // the audio sink was reconfigured for a passthrough format
+    PLAYER_AUDIO_FORMAT_HOLD,       // hold or release the audio output for a format change
 
     // demuxer related messages
     DEMUXER_PACKET,                 // data packet
@@ -108,12 +111,12 @@ class CDVDMsgGeneralSynchronizePriv;
 class CDVDMsgGeneralSynchronize : public CDVDMsg
 {
 public:
-  CDVDMsgGeneralSynchronize(unsigned int timeout, unsigned int sources);
- ~CDVDMsgGeneralSynchronize() override;
+  CDVDMsgGeneralSynchronize(std::chrono::milliseconds timeout, unsigned int sources);
+  ~CDVDMsgGeneralSynchronize() override;
 
   // waits until all threads waiting, released the object
   // if abort is set somehow
-  bool Wait(unsigned int ms, unsigned int source);
+  bool Wait(std::chrono::milliseconds ms, unsigned int source);
   void Wait(std::atomic<bool>& abort, unsigned int source);
 
 private:
@@ -184,7 +187,8 @@ public:
   explicit CDVDMsgPlayerSetState(const std::string& state) : CDVDMsg(PLAYER_SET_STATE), m_state(state) {}
   ~CDVDMsgPlayerSetState() override = default;
 
-  std::string GetState() { return m_state; }
+  const std::string& GetState() const { return m_state; }
+
 private:
   std::string m_state;
 };

@@ -16,12 +16,13 @@
 #include "filesystem/File.h"
 #include "guilib/TextureBundle.h"
 #include "guilib/TextureFormats.h"
-#include "threads/SingleLock.h"
 #include "utils/StringUtils.h"
 #include "utils/URIUtils.h"
 #include "utils/log.h"
 #include "windowing/GraphicContext.h"
 #include "windowing/WinSystem.h"
+
+#include <mutex>
 
 #ifdef _DEBUG_TEXTURES
 #include "utils/TimeUtils.h"
@@ -82,6 +83,15 @@ void CTextureArray::Reset()
   m_texWidth = 0;
   m_texHeight = 0;
   m_texCoordsArePixels = false;
+  m_scalingMethod = TEXTURE_SCALING::UNKNOWN;
+}
+
+void CTextureArray::SetScalingMethod(TEXTURE_SCALING scalingMethod)
+{
+  m_scalingMethod = scalingMethod;
+
+  for (const std::shared_ptr<CTexture>& texture : m_textures)
+    texture->SetScalingMethod(m_scalingMethod);
 }
 
 void CTextureArray::Add(std::shared_ptr<CTexture> texture, int delay)
@@ -108,7 +118,7 @@ void CTextureArray::Set(std::shared_ptr<CTexture> texture, int width, int height
 
 void CTextureArray::Free()
 {
-  CSingleLock lock(CServiceBroker::GetWinSystem()->GetGfxContext());
+  std::unique_lock lock(CServiceBroker::GetWinSystem()->GetGfxContext());
   Reset();
 }
 
@@ -138,7 +148,7 @@ CTextureMap::~CTextureMap()
 
 bool CTextureMap::Release()
 {
-  if (!m_texture.m_textures.size())
+  if (m_texture.m_textures.empty())
     return true;
   if (!m_referenceCount)
     return true;
@@ -205,10 +215,10 @@ bool CTextureMap::IsEmpty() const
 
 void CTextureMap::Add(std::unique_ptr<CTexture> texture, int delay)
 {
-  m_texture.Add(std::move(texture), delay);
-
   if (texture)
     m_memUsage += sizeof(CTexture) + (texture->GetTextureWidth() * texture->GetTextureHeight() * 4);
+
+  m_texture.Add(std::move(texture), delay);
 }
 
 /************************************************************************/
@@ -242,7 +252,7 @@ bool CGUITextureManager::CanLoad(const std::string &texturePath)
 
 bool CGUITextureManager::HasTexture(const std::string &textureName, std::string *path, int *bundle, int *size)
 {
-  CSingleLock lock(m_section);
+  std::unique_lock lock(m_section);
 
   // default values
   if (bundle) *bundle = -1;
@@ -298,6 +308,7 @@ const CTextureArray& CGUITextureManager::Load(const std::string& strTextureName,
 
   if (size) // we found the texture
   {
+    std::unique_lock lockTextures(m_section);
     for (int i = 0; i < (int)m_vecTextures.size(); ++i)
     {
       CTextureMap *pMap = m_vecTextures[i];
@@ -311,6 +322,9 @@ const CTextureArray& CGUITextureManager::Load(const std::string& strTextureName,
     return emptyTexture;
   }
 
+  //Lock here, we will do stuff that could break rendering
+  std::unique_lock lock(CServiceBroker::GetWinSystem()->GetGfxContext());
+
   for (auto i = m_unusedTextures.begin(); i != m_unusedTextures.end(); ++i)
   {
     CTextureMap* pMap = i->first;
@@ -320,6 +334,7 @@ const CTextureArray& CGUITextureManager::Load(const std::string& strTextureName,
 
     if (pMap->GetName() == strTextureName && duration.count() > 0)
     {
+      std::unique_lock lockTextures(m_section);
       m_vecTextures.push_back(pMap);
       m_unusedTextures.erase(i);
       return pMap->GetTexture();
@@ -329,9 +344,6 @@ const CTextureArray& CGUITextureManager::Load(const std::string& strTextureName,
   if (checkBundleOnly && bundle == -1)
     return emptyTexture;
 
-  //Lock here, we will do stuff that could break rendering
-  CSingleLock lock(CServiceBroker::GetWinSystem()->GetGfxContext());
-
 #ifdef _DEBUG_TEXTURES
   const auto start = std::chrono::steady_clock::now();
 #endif
@@ -339,19 +351,22 @@ const CTextureArray& CGUITextureManager::Load(const std::string& strTextureName,
   if (bundle >= 0 && StringUtils::EndsWithNoCase(strPath, ".gif"))
   {
     CTextureMap* pMap = nullptr;
-    std::vector<std::pair<std::unique_ptr<CTexture>, int>> textures;
-    int nLoops = 0, width = 0, height = 0;
-    bool success = m_TexBundle[bundle].LoadAnim(strTextureName, textures, width, height, nLoops);
-    if (!success)
+    std::optional<CTextureBundleXBT::Animation> animation =
+        m_TexBundle[bundle].LoadAnim(strTextureName);
+    if (!animation)
     {
       CLog::Log(LOGERROR, "Texture manager unable to load bundled file: {}", strTextureName);
       return emptyTexture;
     }
 
+    int nLoops = animation.value().loops;
+    int width = animation.value().width;
+    int height = animation.value().height;
+
     unsigned int maxWidth = 0;
     unsigned int maxHeight = 0;
     pMap = new CTextureMap(strTextureName, width, height, nLoops);
-    for (auto& texture : textures)
+    for (auto& texture : animation.value().textures)
     {
       maxWidth = std::max(maxWidth, texture.first->GetWidth());
       maxHeight = std::max(maxHeight, texture.first->GetHeight());
@@ -361,6 +376,7 @@ const CTextureArray& CGUITextureManager::Load(const std::string& strTextureName,
     pMap->SetWidth((int)maxWidth);
     pMap->SetHeight((int)maxHeight);
 
+    std::unique_lock lockTextures(m_section);
     m_vecTextures.push_back(pMap);
     return pMap->GetTexture();
   }
@@ -419,6 +435,7 @@ const CTextureArray& CGUITextureManager::Load(const std::string& strTextureName,
 
     file.Close();
 
+    std::unique_lock lockTextures(m_section);
     m_vecTextures.push_back(pMap);
     return pMap->GetTexture();
   }
@@ -427,11 +444,17 @@ const CTextureArray& CGUITextureManager::Load(const std::string& strTextureName,
   int width = 0, height = 0;
   if (bundle >= 0)
   {
-    if (!m_TexBundle[bundle].LoadTexture(strTextureName, pTexture, width, height))
+    std::optional<CTextureBundleXBT::Texture> texture =
+        m_TexBundle[bundle].LoadTexture(strTextureName);
+    if (!texture)
     {
       CLog::Log(LOGERROR, "Texture manager unable to load bundled file: {}", strTextureName);
       return emptyTexture;
     }
+
+    pTexture = std::move(texture.value().texture);
+    width = texture.value().width;
+    height = texture.value().height;
   }
   else
   {
@@ -446,7 +469,10 @@ const CTextureArray& CGUITextureManager::Load(const std::string& strTextureName,
 
   CTextureMap* pMap = new CTextureMap(strTextureName, width, height, 0);
   pMap->Add(std::move(pTexture), 100);
-  m_vecTextures.push_back(pMap);
+  {
+    std::unique_lock lockTextures(m_section);
+    m_vecTextures.push_back(pMap);
+  }
 
 #ifdef _DEBUG_TEXTURES
   const auto end = std::chrono::steady_clock::now();
@@ -461,7 +487,8 @@ const CTextureArray& CGUITextureManager::Load(const std::string& strTextureName,
 
 void CGUITextureManager::ReleaseTexture(const std::string& strTextureName, bool immediately /*= false */)
 {
-  CSingleLock lock(CServiceBroker::GetWinSystem()->GetGfxContext());
+  std::unique_lock lock(CServiceBroker::GetWinSystem()->GetGfxContext());
+  std::unique_lock lockTextures(m_section);
 
   ivecTextures i;
   i = m_vecTextures.begin();
@@ -491,7 +518,7 @@ void CGUITextureManager::ReleaseTexture(const std::string& strTextureName, bool 
 
 void CGUITextureManager::FreeUnusedTextures(unsigned int timeDelay)
 {
-  CSingleLock lock(CServiceBroker::GetWinSystem()->GetGfxContext());
+  std::unique_lock lock(CServiceBroker::GetWinSystem()->GetGfxContext());
   for (auto i = m_unusedTextures.begin(); i != m_unusedTextures.end();)
   {
     auto now = std::chrono::steady_clock::now();
@@ -524,13 +551,14 @@ void CGUITextureManager::FreeUnusedTextures(unsigned int timeDelay)
 
 void CGUITextureManager::ReleaseHwTexture(unsigned int texture)
 {
-  CSingleLock lock(CServiceBroker::GetWinSystem()->GetGfxContext());
+  std::unique_lock lock(CServiceBroker::GetWinSystem()->GetGfxContext());
   m_unusedHwTextures.push_back(texture);
 }
 
 void CGUITextureManager::Cleanup()
 {
-  CSingleLock lock(CServiceBroker::GetWinSystem()->GetGfxContext());
+  std::unique_lock lock(CServiceBroker::GetWinSystem()->GetGfxContext());
+  std::unique_lock lockTextures(m_section);
 
   ivecTextures i;
   i = m_vecTextures.begin();
@@ -562,7 +590,8 @@ void CGUITextureManager::Dump() const
 
 void CGUITextureManager::Flush()
 {
-  CSingleLock lock(CServiceBroker::GetWinSystem()->GetGfxContext());
+  std::unique_lock lock(CServiceBroker::GetWinSystem()->GetGfxContext());
+  std::unique_lock lockTextures(m_section);
 
   ivecTextures i;
   i = m_vecTextures.begin();
@@ -594,21 +623,21 @@ unsigned int CGUITextureManager::GetMemoryUsage() const
 
 void CGUITextureManager::SetTexturePath(const std::string &texturePath)
 {
-  CSingleLock lock(m_section);
+  std::unique_lock lock(m_section);
   m_texturePaths.clear();
   AddTexturePath(texturePath);
 }
 
 void CGUITextureManager::AddTexturePath(const std::string &texturePath)
 {
-  CSingleLock lock(m_section);
+  std::unique_lock lock(m_section);
   if (!texturePath.empty())
     m_texturePaths.push_back(texturePath);
 }
 
 void CGUITextureManager::RemoveTexturePath(const std::string &texturePath)
 {
-  CSingleLock lock(m_section);
+  std::unique_lock lock(m_section);
   for (std::vector<std::string>::iterator it = m_texturePaths.begin(); it != m_texturePaths.end(); ++it)
   {
     if (*it == texturePath)
@@ -625,10 +654,10 @@ std::string CGUITextureManager::GetTexturePath(const std::string &textureName, b
     return textureName;
   else
   { // texture doesn't include the full path, so check all fallbacks
-    CSingleLock lock(m_section);
+    std::unique_lock lock(m_section);
     for (const std::string& it : m_texturePaths)
     {
-      std::string path = URIUtils::AddFileToFolder(it.c_str(), "media", textureName);
+      std::string path = URIUtils::AddFileToFolder(it, "media", textureName);
       if (directory)
       {
         if (XFILE::CDirectory::Exists(path))

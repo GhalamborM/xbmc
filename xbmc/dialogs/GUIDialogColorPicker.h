@@ -11,6 +11,7 @@
 #include "GUIDialogBoxBase.h"
 #include "view/GUIViewControl.h"
 
+#include <memory>
 #include <string>
 
 class CFileItem;
@@ -39,7 +40,7 @@ public:
   */
   void LoadColors(const std::string& filePath);
   /*! \brief Get the hex value of the selected color */
-  std::string GetSelectedColor() const;
+  const std::string& GetSelectedColor() const;
   /*! \brief Set the selected color by hex value */
   void SetSelectedColor(const std::string& hexColor);
   /*! \brief Set the focus to the control button */
@@ -58,7 +59,7 @@ private:
   int GetSelectedItem() const;
 
   CGUIViewControl m_viewControl;
-  CFileItemList* m_vecList;
-  bool m_focusToButton;
+  std::unique_ptr<CFileItemList> m_vecList;
+  bool m_focusToButton = false;
   std::string m_selectedColor;
 };

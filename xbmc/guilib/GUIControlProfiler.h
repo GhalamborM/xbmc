@@ -13,7 +13,11 @@
 #include <vector>
 
 class CGUIControlProfiler;
-class TiXmlElement;
+
+namespace tinyxml2
+{
+class XMLElement;
+} // namespace tinyxml2
 
 class CGUIControlProfilerItem
 {
@@ -25,10 +29,10 @@ public:
   std::string m_strDescription;
   int m_controlID;
   CGUIControl::GUICONTROLTYPES m_ControlType;
-  unsigned int m_visTime;
-  unsigned int m_renderTime;
-  int64_t m_i64VisStart;
-  int64_t m_i64RenderStart;
+  unsigned int m_visTime = 0;
+  unsigned int m_renderTime = 0;
+  int64_t m_i64VisStart = 0;
+  int64_t m_i64RenderStart = 0;
 
   CGUIControlProfilerItem(CGUIControlProfiler *pProfiler, CGUIControlProfilerItem *pParent, CGUIControl *pControl);
   ~CGUIControlProfilerItem(void);
@@ -38,7 +42,7 @@ public:
   void EndVisibility(void);
   void BeginRender(void);
   void EndRender(void);
-  void SaveToXML(TiXmlElement *parent);
+  void SaveToXML(tinyxml2::XMLElement* parent);
   unsigned int GetTotalTime(void) const { return m_visTime + m_renderTime; }
 
   CGUIControlProfilerItem *AddControl(CGUIControl *pControl);

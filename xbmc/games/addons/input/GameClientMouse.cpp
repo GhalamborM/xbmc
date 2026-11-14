@@ -9,8 +9,10 @@
 #include "GameClientMouse.h"
 
 #include "GameClientInput.h"
+#include "GameClientTopology.h"
 #include "addons/kodi-dev-kit/include/kodi/addon-instance/Game.h"
 #include "games/addons/GameClient.h"
+#include "games/controllers/input/ControllerActivity.h"
 #include "input/mouse/interfaces/IMouseInputProvider.h"
 
 #include <utility>
@@ -20,12 +22,15 @@ using namespace GAME;
 
 CGameClientMouse::CGameClientMouse(CGameClient& gameClient,
                                    std::string controllerId,
-                                   MOUSE::IMouseInputProvider* inputProvider)
+                                   MOUSE::IMouseInputProvider* inputProvider,
+                                   std::string portAddress)
   : m_gameClient(gameClient),
     m_controllerId(std::move(controllerId)),
-    m_inputProvider(inputProvider)
+    m_inputProvider(inputProvider),
+    m_portAddress(std::move(portAddress)),
+    m_mouseActivity(std::make_unique<CControllerActivity>())
 {
-  inputProvider->RegisterMouseHandler(this, false);
+  inputProvider->RegisterMouseHandler(this, false, false);
 }
 
 CGameClientMouse::~CGameClientMouse()
@@ -38,8 +43,11 @@ std::string CGameClientMouse::ControllerID(void) const
   return m_controllerId;
 }
 
-bool CGameClientMouse::OnMotion(const std::string& relpointer, int dx, int dy)
+bool CGameClientMouse::OnMotion(const std::string& relpointer, int differenceX, int differenceY)
 {
+  // Allow mouse motion to activate controller
+  m_mouseActivity->OnMouseMotion(relpointer, differenceX, differenceY);
+
   // Only allow activated input in fullscreen game
   if (!m_gameClient.Input().AcceptsInput())
   {
@@ -52,18 +60,20 @@ bool CGameClientMouse::OnMotion(const std::string& relpointer, int dx, int dy)
 
   event.type = GAME_INPUT_EVENT_RELATIVE_POINTER;
   event.controller_id = m_controllerId.c_str();
-  event.port_type = GAME_PORT_MOUSE;
-  event.port_address = ""; // Not used
+  event.port_type = CGameClientTopology::GetPortType(m_portAddress);
+  event.port_address = m_portAddress.c_str();
   event.feature_name = relpointer.c_str();
-  event.rel_pointer.x = dx;
-  event.rel_pointer.y = dy;
-
+  event.rel_pointer.x = differenceX;
+  event.rel_pointer.y = differenceY;
 
   return m_gameClient.Input().InputEvent(event);
 }
 
 bool CGameClientMouse::OnButtonPress(const std::string& button)
 {
+  m_mouseActivity->OnMouseButtonPress(button);
+  m_mouseActivity->OnInputFrame();
+
   // Only allow activated input in fullscreen game
   if (!m_gameClient.Input().AcceptsInput())
   {
@@ -74,26 +84,47 @@ bool CGameClientMouse::OnButtonPress(const std::string& button)
 
   event.type = GAME_INPUT_EVENT_DIGITAL_BUTTON;
   event.controller_id = m_controllerId.c_str();
-  event.port_type = GAME_PORT_MOUSE;
-  event.port_address = ""; // Not used
+  event.port_type = CGameClientTopology::GetPortType(m_portAddress);
+  event.port_address = m_portAddress.c_str();
   event.feature_name = button.c_str();
   event.digital_button.pressed = true;
-
 
   return m_gameClient.Input().InputEvent(event);
 }
 
 void CGameClientMouse::OnButtonRelease(const std::string& button)
 {
+  m_mouseActivity->OnMouseButtonRelease(button);
+  m_mouseActivity->OnInputFrame();
+
   game_input_event event;
 
   event.type = GAME_INPUT_EVENT_DIGITAL_BUTTON;
   event.controller_id = m_controllerId.c_str();
-  event.port_type = GAME_PORT_MOUSE;
-  event.port_address = ""; // Not used
+  event.port_type = CGameClientTopology::GetPortType(m_portAddress);
+  event.port_address = m_portAddress.c_str();
   event.feature_name = button.c_str();
   event.digital_button.pressed = false;
 
-
   m_gameClient.Input().InputEvent(event);
+}
+
+void CGameClientMouse::OnInputFrame()
+{
+  m_mouseActivity->OnInputFrame();
+}
+
+float CGameClientMouse::GetActivation() const
+{
+  return m_mouseActivity->GetActivation();
+}
+
+void CGameClientMouse::SetSource(PERIPHERALS::PeripheralPtr sourcePeripheral)
+{
+  m_sourcePeripheral = std::move(sourcePeripheral);
+}
+
+void CGameClientMouse::ClearSource()
+{
+  m_sourcePeripheral.reset();
 }

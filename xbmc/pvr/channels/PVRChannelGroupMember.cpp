@@ -9,7 +9,6 @@
 #include "PVRChannelGroupMember.h"
 
 #include "ServiceBroker.h"
-#include "pvr/PVRDatabase.h"
 #include "pvr/PVRManager.h"
 #include "pvr/addons/PVRClient.h"
 #include "pvr/channels/PVRChannel.h"
@@ -21,10 +20,24 @@
 
 using namespace PVR;
 
+CPVRChannelGroupMember::CPVRChannelGroupMember(const std::string& groupName,
+                                               int groupClientID,
+                                               int order,
+                                               const std::shared_ptr<CPVRChannel>& channel)
+  : m_iGroupClientID(groupClientID),
+    m_clientChannelNumber(channel->ClientChannelNumber()),
+    m_iOrder(order)
+{
+  SetChannel(channel);
+  SetGroupName(groupName);
+}
+
 CPVRChannelGroupMember::CPVRChannelGroupMember(int iGroupID,
                                                const std::string& groupName,
+                                               int groupClientID,
                                                const std::shared_ptr<CPVRChannel>& channel)
   : m_iGroupID(iGroupID),
+    m_iGroupClientID(groupClientID),
     m_clientChannelNumber(channel->ClientChannelNumber()),
     m_iOrder(channel->ClientOrder())
 {
@@ -42,7 +55,7 @@ void CPVRChannelGroupMember::SetChannel(const std::shared_ptr<CPVRChannel>& chan
 {
   // note: no need to set m_bChanged, as these values are not persisted in the db
   m_channel = channel;
-  m_iClientID = channel->ClientID();
+  m_iChannelClientID = channel->ClientID();
   m_iChannelUID = channel->UniqueID();
   m_iChannelDatabaseID = channel->ChannelID();
   m_bIsRadio = channel->IsRadio();
@@ -50,16 +63,16 @@ void CPVRChannelGroupMember::SetChannel(const std::shared_ptr<CPVRChannel>& chan
 
 void CPVRChannelGroupMember::ToSortable(SortItem& sortable, Field field) const
 {
-  if (field == FieldChannelNumber)
+  if (field == Field::CHANNEL_NUMBER)
   {
-    sortable[FieldChannelNumber] = m_channelNumber.SortableChannelNumber();
+    sortable[Field::CHANNEL_NUMBER] = m_channelNumber.SortableChannelNumber();
   }
-  else if (field == FieldClientChannelOrder)
+  else if (field == Field::CLIENT_CHANNEL_ORDER)
   {
     if (m_iOrder)
-      sortable[FieldClientChannelOrder] = m_iOrder;
+      sortable[Field::CLIENT_CHANNEL_ORDER] = m_iOrder;
     else
-      sortable[FieldClientChannelOrder] = m_clientChannelNumber.SortableChannelNumber();
+      sortable[Field::CLIENT_CHANNEL_ORDER] = m_clientChannelNumber.SortableChannelNumber();
   }
 }
 
@@ -68,17 +81,26 @@ void CPVRChannelGroupMember::SetGroupID(int iGroupID)
   if (m_iGroupID != iGroupID)
   {
     m_iGroupID = iGroupID;
-    m_bChanged = true;
+    m_bNeedsSave = true;
   }
 }
 
 void CPVRChannelGroupMember::SetGroupName(const std::string& groupName)
 {
-  const std::shared_ptr<CPVRClient> client = CServiceBroker::GetPVRManager().GetClient(m_iClientID);
+  if (m_groupName != groupName)
+  {
+    m_groupName = groupName;
+    // Note: do not set m_bNeedsSave here as group name is not stored in database
+  }
+
+  const std::shared_ptr<const CPVRClient> client =
+      CServiceBroker::GetPVRManager().GetClient(m_iChannelClientID);
   if (client)
-    m_path = CPVRChannelsPath(m_bIsRadio, groupName, client->ID(), m_iChannelUID);
+    m_path = CPVRChannelsPath(m_bIsRadio, groupName, m_iGroupClientID, client->ID(),
+                              client->InstanceId(), m_iChannelUID)
+                 .AsString();
   else
-    CLog::LogF(LOGERROR, "Unable to obtain instance for client id: {}", m_iClientID);
+    CLog::LogF(LOGERROR, "Unable to obtain instance for client id: {}", m_iChannelClientID);
 }
 
 void CPVRChannelGroupMember::SetChannelNumber(const CPVRChannelNumber& channelNumber)
@@ -86,7 +108,7 @@ void CPVRChannelGroupMember::SetChannelNumber(const CPVRChannelNumber& channelNu
   if (m_channelNumber != channelNumber)
   {
     m_channelNumber = channelNumber;
-    m_bChanged = true;
+    m_bNeedsSave = true;
   }
 }
 
@@ -95,7 +117,7 @@ void CPVRChannelGroupMember::SetClientChannelNumber(const CPVRChannelNumber& cli
   if (m_clientChannelNumber != clientChannelNumber)
   {
     m_clientChannelNumber = clientChannelNumber;
-    m_bChanged = true;
+    m_bNeedsSave = true;
   }
 }
 
@@ -104,7 +126,7 @@ void CPVRChannelGroupMember::SetClientPriority(int iClientPriority)
   if (m_iClientPriority != iClientPriority)
   {
     m_iClientPriority = iClientPriority;
-    m_bChanged = true;
+    // Note: do not set m_bNeedsSave here as priority is not stored in database
   }
 }
 
@@ -113,15 +135,6 @@ void CPVRChannelGroupMember::SetOrder(int iOrder)
   if (m_iOrder != iOrder)
   {
     m_iOrder = iOrder;
-    m_bChanged = true;
+    m_bNeedsSave = true;
   }
-}
-
-bool CPVRChannelGroupMember::QueueDelete()
-{
-  const std::shared_ptr<CPVRDatabase> database = CServiceBroker::GetPVRManager().GetTVDatabase();
-  if (!database)
-    return false;
-
-  return database->QueueDeleteQuery(*this);
 }

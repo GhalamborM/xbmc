@@ -14,6 +14,8 @@ namespace KODI
 {
 namespace RETRO
 {
+class IPlayback;
+
 class IGameCallback
 {
 public:
@@ -25,6 +27,45 @@ public:
    * \return The game client's ID, or empty if no game is being played
    */
   virtual std::string GameClientID() const = 0;
+
+  /*!
+   * \brief Get the game that is being played
+   *
+   * \return The path to the game, or empty if no game is being played
+   */
+  virtual std::string GetPlayingGame() const = 0;
+
+  /*!
+   * \brief Creates a savestate
+   *
+   * \param autosave Whether the save type is auto
+   *
+   * \return The path to the created savestate, or empty on error
+   */
+  virtual std::string CreateSavestate(bool autosave) = 0;
+
+  /*!
+   * \brief Updates a savestate with the current game being played
+   *
+   * \param savestatePath The path to the savestate
+   *
+   * \return True if the savestate was updated, false on error
+   */
+  virtual bool UpdateSavestate(const std::string& savestatePath) = 0;
+
+  /*!
+   * \brief Loads a savestate
+   *
+   * \param savestatePath The path to the savestate
+   *
+   * \return True if the savestate was loaded, false on error
+   */
+  virtual bool LoadSavestate(const std::string& savestatePath) = 0;
+
+  /*!
+   * \brief Closes the OSD
+   */
+  virtual void CloseOSDCallback() = 0;
 };
 } // namespace RETRO
 } // namespace KODI

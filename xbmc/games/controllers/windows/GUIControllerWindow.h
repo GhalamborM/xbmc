@@ -22,6 +22,9 @@ class CControllerInstaller;
 class IControllerList;
 class IFeatureList;
 
+/*!
+ * \ingroup games
+ */
 class CGUIControllerWindow : public CGUIDialog
 {
 public:
@@ -44,10 +47,6 @@ private:
   void OnFeatureSelected(unsigned int featureIndex);
   void UpdateButtons(void);
 
-  // Callbacks for events
-  void OnEvent(const ADDON::CRepositoryUpdater::RepositoryUpdated& event);
-  void OnEvent(const ADDON::AddonEvent& event);
-
   // Action for the available button
   void GetMoreControllers(void);
   void GetAllControllers();
@@ -60,6 +59,7 @@ private:
 
   // Game parameters
   GameClientPtr m_gameClient;
+  std::string m_controllerId;
 
   // Controller parameters
   std::unique_ptr<CControllerInstaller> m_installer;

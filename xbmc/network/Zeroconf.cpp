@@ -8,15 +8,15 @@
 #include "Zeroconf.h"
 
 #include "ServiceBroker.h"
+
+#include <mutex>
 #if defined(HAS_MDNS)
 #include "mdns/ZeroconfMDNS.h"
 #endif
+#include "jobs/JobManager.h"
 #include "settings/Settings.h"
 #include "settings/SettingsComponent.h"
-#include "threads/Atomics.h"
 #include "threads/CriticalSection.h"
-#include "threads/SingleLock.h"
-#include "utils/JobManager.h"
 
 #if defined(TARGET_ANDROID)
 #include "platform/android/network/ZeroconfAndroid.h"
@@ -29,6 +29,13 @@
 
 #include <cassert>
 #include <utility>
+
+namespace
+{
+
+std::mutex singletonMutex;
+
+}
 
 #ifndef HAS_ZEROCONF
 //dummy implementation used if no zeroconf is present
@@ -46,7 +53,6 @@ class CZeroconfDummy : public CZeroconf
 };
 #endif
 
-std::atomic_flag CZeroconf::sm_singleton_guard = ATOMIC_FLAG_INIT;
 CZeroconf* CZeroconf::smp_instance = 0;
 
 CZeroconf::CZeroconf():mp_crit_sec(new CCriticalSection)
@@ -64,13 +70,13 @@ bool CZeroconf::PublishService(const std::string& fcr_identifier,
                                unsigned int f_port,
                                std::vector<std::pair<std::string, std::string> > txt /* = std::vector<std::pair<std::string, std::string> >() */)
 {
-  CSingleLock lock(*mp_crit_sec);
+  std::unique_lock lock(*mp_crit_sec);
   CZeroconf::PublishInfo info = {fcr_type, fcr_name, f_port, std::move(txt)};
   std::pair<tServiceMap::const_iterator, bool> ret = m_service_map.insert(std::make_pair(fcr_identifier, info));
   if(!ret.second) //identifier exists
     return false;
   if(m_started)
-    CJobManager::GetInstance().AddJob(new CPublish(fcr_identifier, info), NULL);
+    CServiceBroker::GetJobManager()->AddJob(new CPublish(fcr_identifier, info), nullptr);
 
   //not yet started, so its just queued
   return true;
@@ -78,7 +84,7 @@ bool CZeroconf::PublishService(const std::string& fcr_identifier,
 
 bool CZeroconf::RemoveService(const std::string& fcr_identifier)
 {
-  CSingleLock lock(*mp_crit_sec);
+  std::unique_lock lock(*mp_crit_sec);
   tServiceMap::iterator it = m_service_map.find(fcr_identifier);
   if(it == m_service_map.end())
     return false;
@@ -100,12 +106,12 @@ bool CZeroconf::ForceReAnnounceService(const std::string& fcr_identifier)
 
 bool CZeroconf::HasService(const std::string& fcr_identifier) const
 {
-  return (m_service_map.find(fcr_identifier) != m_service_map.end());
+  return (m_service_map.contains(fcr_identifier));
 }
 
 bool CZeroconf::Start()
 {
-  CSingleLock lock(*mp_crit_sec);
+  std::unique_lock lock(*mp_crit_sec);
   if(!IsZCdaemonRunning())
   {
     const std::shared_ptr<CSettings> settings = CServiceBroker::GetSettingsComponent()->GetSettings();
@@ -118,13 +124,13 @@ bool CZeroconf::Start()
     return true;
   m_started = true;
 
-  CJobManager::GetInstance().AddJob(new CPublish(m_service_map), NULL);
+  CServiceBroker::GetJobManager()->AddJob(new CPublish(m_service_map), nullptr);
   return true;
 }
 
 void CZeroconf::Stop()
 {
-  CSingleLock lock(*mp_crit_sec);
+  std::unique_lock lock(*mp_crit_sec);
   if(!m_started)
     return;
   doStop();
@@ -133,7 +139,7 @@ void CZeroconf::Stop()
 
 CZeroconf*  CZeroconf::GetInstance()
 {
-  CAtomicSpinLock lock(sm_singleton_guard);
+  std::lock_guard<std::mutex> lock(singletonMutex);
   if(!smp_instance)
   {
 #ifndef HAS_ZEROCONF
@@ -156,7 +162,7 @@ CZeroconf*  CZeroconf::GetInstance()
 
 void CZeroconf::ReleaseInstance()
 {
-  CAtomicSpinLock lock(sm_singleton_guard);
+  std::lock_guard<std::mutex> lock(singletonMutex);
   delete smp_instance;
   smp_instance = 0;
 }

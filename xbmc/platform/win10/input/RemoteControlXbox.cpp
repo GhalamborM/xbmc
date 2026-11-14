@@ -8,9 +8,9 @@
 
 #include "RemoteControlXbox.h"
 
-#include "AppInboundProtocol.h"
 #include "ServiceBroker.h"
-#include "input/remote/IRRemote.h"
+#include "application/AppInboundProtocol.h"
+#include "input/keymaps/remote/IRRemoteIDs.h"
 #include "settings/AdvancedSettings.h"
 #include "settings/SettingsComponent.h"
 #include "utils/log.h"
@@ -154,12 +154,16 @@ int32_t CRemoteControlXbox::TranslateVirtualKey(VirtualKey vk)
   switch (vk)
   {
   case VirtualKey::GamepadDPadLeft:
+  case VirtualKey::GamepadLeftThumbstickLeft:
     return XINPUT_IR_REMOTE_LEFT;
   case VirtualKey::GamepadDPadUp:
+  case VirtualKey::GamepadLeftThumbstickUp:
     return XINPUT_IR_REMOTE_UP;
   case VirtualKey::GamepadDPadRight:
+  case VirtualKey::GamepadLeftThumbstickRight:
     return XINPUT_IR_REMOTE_RIGHT;
   case VirtualKey::GamepadDPadDown:
+  case VirtualKey::GamepadLeftThumbstickDown:
     return XINPUT_IR_REMOTE_DOWN;
   case VirtualKey::GamepadA:
     return XINPUT_IR_REMOTE_SELECT;
@@ -202,8 +206,32 @@ int32_t CRemoteControlXbox::TranslateVirtualKey(VirtualKey vk)
   case VirtualKey::GamepadMenu:
     return XINPUT_IR_REMOTE_MENU;
   default:
-    CLog::LogFunction(LOGDEBUG, __FUNCTION__, "unknown vrtual key {}", static_cast<int>(vk));
+    CLog::LogF(LOGDEBUG, "unknown vrtual key {}", static_cast<int>(vk));
     return 0;
+  }
+}
+
+bool CRemoteControlXbox::IsMappedGamepadVirtualKey(VirtualKey vk)
+{
+  switch (vk)
+  {
+    case VirtualKey::GamepadA:
+    case VirtualKey::GamepadB:
+    case VirtualKey::GamepadX:
+    case VirtualKey::GamepadY:
+    case VirtualKey::GamepadDPadUp:
+    case VirtualKey::GamepadDPadDown:
+    case VirtualKey::GamepadDPadLeft:
+    case VirtualKey::GamepadDPadRight:
+    case VirtualKey::GamepadMenu:
+    case VirtualKey::GamepadView:
+    case VirtualKey::GamepadLeftThumbstickUp:
+    case VirtualKey::GamepadLeftThumbstickDown:
+    case VirtualKey::GamepadLeftThumbstickRight:
+    case VirtualKey::GamepadLeftThumbstickLeft:
+      return true;
+    default:
+      return false;
   }
 }
 

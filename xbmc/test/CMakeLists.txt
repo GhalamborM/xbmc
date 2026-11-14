@@ -1,11 +1,20 @@
-set(SOURCES TestBasicEnvironment.cpp
+set(SOURCES TestAutoSwitch.cpp
+            TestBackgroundInfoLoader.cpp
+            TestBasicEnvironment.cpp
+            TestCueDocument.cpp
+            TestDateTime.cpp
+            TestDateTimeSpan.cpp
+            TestEpisodeUtils.cpp
             TestFileItem.cpp
-            TestTextureUtils.cpp
+            TestMediaManager.cpp
+            TestMediaSource.cpp
+            TestPasswordManager.cpp
+            TestPlayListPlayer.cpp
+            TestTextureCache.cpp
+            TestTextureCacheJob.cpp
             TestURL.cpp
             TestUtil.cpp
-            TestUtils.cpp
-            TestDateTime.cpp
-            TestDateTimeSpan.cpp)
+            TestUtils.cpp)
 
 set(HEADERS TestBasicEnvironment.h
             TestUtils.h)

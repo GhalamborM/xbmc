@@ -9,8 +9,11 @@
 #include "VideoTagLoaderPlugin.h"
 
 #include "FileItem.h"
+#include "FileItemList.h"
 #include "URL.h"
 #include "filesystem/PluginDirectory.h"
+
+#include <memory>
 
 using namespace XFILE;
 
@@ -21,10 +24,10 @@ CVideoTagLoaderPlugin::CVideoTagLoaderPlugin(const CFileItem& item, bool forceRe
     return;
   // Preserve CFileItem video info and art to avoid info loss between creating VideoInfoTagLoaderFactory and calling Load()
   if (m_item.HasVideoInfoTag())
-    m_tag.reset(new CVideoInfoTag(*m_item.GetVideoInfoTag()));
+    m_tag = std::make_unique<CVideoInfoTag>(*m_item.GetVideoInfoTag());
   auto& art = item.GetArt();
   if (!art.empty())
-    m_art.reset(new CGUIListItem::ArtMap(art));
+    m_art = std::make_unique<KODI::ART::Artwork>(art);
 }
 
 bool CVideoTagLoaderPlugin::HasInfo() const
@@ -32,7 +35,9 @@ bool CVideoTagLoaderPlugin::HasInfo() const
   return m_tag || m_force_refresh;
 }
 
-CInfoScanner::INFO_TYPE CVideoTagLoaderPlugin::Load(CVideoInfoTag& tag, bool, std::vector<EmbeddedArt>*)
+CInfoScanner::InfoType CVideoTagLoaderPlugin::Load(CVideoInfoTag& tag,
+                                                   bool,
+                                                   std::vector<EmbeddedArt>*)
 {
   if (m_force_refresh)
   {
@@ -44,15 +49,15 @@ CInfoScanner::INFO_TYPE CVideoTagLoaderPlugin::Load(CVideoInfoTag& tag, bool, st
     CPluginDirectory plugin;
     CFileItemList items;
     if (!plugin.GetDirectory(url, items))
-      return CInfoScanner::ERROR_NFO;
+      return CInfoScanner::InfoType::ERROR_NFO;
     if (!items.IsEmpty())
     {
       const CFileItemPtr &item = items[0];
-      m_art.reset(new CGUIListItem::ArtMap(item->GetArt()));
+      m_art = std::make_unique<KODI::ART::Artwork>(item->GetArt());
       if (item->HasVideoInfoTag())
       {
         tag = *item->GetVideoInfoTag();
-        return CInfoScanner::FULL_NFO;
+        return CInfoScanner::InfoType::FULL;
       }
     }
   }
@@ -60,7 +65,7 @@ CInfoScanner::INFO_TYPE CVideoTagLoaderPlugin::Load(CVideoInfoTag& tag, bool, st
   {
     // Otherwise just copy CFileItem video info to tag
     tag = *m_tag;
-    return CInfoScanner::FULL_NFO;
+    return CInfoScanner::InfoType::FULL;
   }
-  return CInfoScanner::NO_NFO;
+  return CInfoScanner::InfoType::NONE;
 }

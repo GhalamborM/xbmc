@@ -10,7 +10,12 @@
 
 #include "FileItemHandler.h"
 #include "JSONRPC.h"
+#include "media/MediaSection.h"
 
+#include <memory>
+#include <optional>
+
+class CFileItem;
 class CVariant;
 
 namespace JSONRPC
@@ -27,10 +32,11 @@ namespace JSONRPC
     static JSONRPC_STATUS Download(const std::string &method, ITransportLayer *transport, IClient *client, const CVariant &parameterObject, CVariant &result);
 
     static bool FillFileItem(
-        const CFileItemPtr& originalItem,
-        CFileItemPtr& item,
-        const std::string& media = "",
+        const std::shared_ptr<CFileItem>& originalItem,
+        std::shared_ptr<CFileItem>& item,
+        std::optional<KODI::MEDIA::MediaSection> section = {},
         const CVariant& parameterObject = CVariant(CVariant::VariantTypeArray));
-    static bool FillFileItemList(const CVariant &parameterObject, CFileItemList &list);
+    static bool FillFileItemList(const CVariant& parameterObject, CFileItemList& list);
+    static bool NeedsLibraryLookup(const CVariant& parameterObject);
   };
 }

@@ -7,21 +7,22 @@
  */
 #include "ImageResource.h"
 
-#include "ServiceBroker.h"
 #include "URL.h"
-#include "addons/AddonManager.h"
-#include "filesystem/File.h"
+#include "addons/addoninfo/AddonType.h"
 #include "filesystem/XbtManager.h"
-#include "utils/StringUtils.h"
+#include "utils/FileUtils.h"
 #include "utils/URIUtils.h"
+
+#include <array>
+#include <string_view>
 
 namespace ADDON
 {
 
 CImageResource::CImageResource(const AddonInfoPtr& addonInfo)
-  : CResource(addonInfo, ADDON_RESOURCE_IMAGES)
+  : CResource(addonInfo, AddonType::RESOURCE_IMAGES),
+    m_type(Type(AddonType::RESOURCE_IMAGES)->GetValue("@type").asString())
 {
-  m_type = Type(ADDON_RESOURCE_IMAGES)->GetValue("@type").asString();
 }
 
 void CImageResource::OnPreUnInstall()
@@ -34,16 +35,10 @@ void CImageResource::OnPreUnInstall()
   XFILE::CXbtManager::GetInstance().Release(xbtUrl);
 }
 
-bool CImageResource::IsAllowed(const std::string &file) const
+CResource::Published CImageResource::PublishedFiles() const
 {
-  // check if the file path points to a directory
-  if (URIUtils::HasSlashAtEnd(file, true))
-    return true;
-
-  std::string ext = URIUtils::GetExtension(file);
-  return file.empty() ||
-         StringUtils::EqualsNoCase(ext, ".png") ||
-         StringUtils::EqualsNoCase(ext, ".jpg");
+  static constexpr std::array<std::string_view, 2> extensions{".png", ".jpg"};
+  return {.extensions = extensions};
 }
 
 std::string CImageResource::GetFullPath(const std::string &filePath) const
@@ -61,7 +56,7 @@ bool CImageResource::HasXbt(CURL& xbtUrl) const
 {
   std::string resourcePath = GetResourcePath();
   std::string xbtPath = URIUtils::AddFileToFolder(resourcePath, "Textures.xbt");
-  if (!XFILE::CFile::Exists(xbtPath))
+  if (!CFileUtils::Exists(xbtPath))
     return false;
 
   // translate it into a xbt:// URL

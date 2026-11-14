@@ -10,7 +10,9 @@
 
 #include "GUIControlFactory.h"
 #include "GUIInfoManager.h"
+#include "ServiceBroker.h"
 #include "guilib/GUIComponent.h"
+#include "utils/ArtTypes.h"
 #include "utils/StringUtils.h"
 #include "utils/Variant.h"
 #include "utils/XMLUtils.h"
@@ -35,13 +37,17 @@ CGUIStaticItem::CGUIStaticItem(const TiXmlElement *item, int parentID) : CFileIt
   CGUIControlFactory::GetActions(item, "onclick", m_clickActions);
   SetLabel(label.GetLabel(parentID));
   SetLabel2(label2.GetLabel(parentID));
-  SetArt("thumb", thumb.GetLabel(parentID, true));
-  SetArt("icon", icon.GetLabel(parentID, true));
-  if (!label.IsConstant())  m_info.push_back(std::make_pair(label, "label"));
-  if (!label2.IsConstant()) m_info.push_back(std::make_pair(label2, "label2"));
-  if (!thumb.IsConstant())  m_info.push_back(std::make_pair(thumb, "thumb"));
-  if (!icon.IsConstant())   m_info.push_back(std::make_pair(icon, "icon"));
-  m_iprogramCount = id ? atoi(id) : 0;
+  SetArt(KODI::ART::TYPE::THUMB, thumb.GetLabel(parentID, true));
+  SetArt(KODI::ART::TYPE::ICON, icon.GetLabel(parentID, true));
+  if (!label.IsConstant())
+    m_info.emplace_back(label, "label");
+  if (!label2.IsConstant())
+    m_info.emplace_back(label2, "label2");
+  if (!thumb.IsConstant())
+    m_info.emplace_back(thumb, "thumb");
+  if (!icon.IsConstant())
+    m_info.emplace_back(icon, "icon");
+  SetProgramCount(id ? std::atoi(id) : 0);
   // add any properties
   const TiXmlElement *property = item->FirstChildElement("property");
   while (property)
@@ -52,7 +58,7 @@ CGUIStaticItem::CGUIStaticItem(const TiXmlElement *item, int parentID) : CFileIt
     {
       SetProperty(name, prop.GetLabel(parentID, true).c_str());
       if (!prop.IsConstant())
-        m_info.push_back(std::make_pair(prop, name));
+        m_info.emplace_back(prop, name);
     }
     property = property->NextSiblingElement("property");
   }
@@ -62,6 +68,15 @@ CGUIStaticItem::CGUIStaticItem(const CFileItem &item)
 : CFileItem(item)
 {
   m_visState = false;
+}
+
+CGUIStaticItem::CGUIStaticItem(const CGUIStaticItem& other)
+  : CFileItem(other),
+    m_info(other.m_info),
+    m_visCondition(other.m_visCondition),
+    m_visState(other.m_visState),
+    m_clickActions(other.m_clickActions)
+{
 }
 
 void CGUIStaticItem::UpdateProperties(int contextWindow)
@@ -77,9 +92,9 @@ void CGUIStaticItem::UpdateProperties(int contextWindow)
     else if (StringUtils::EqualsNoCase(name, "label2"))
       SetLabel2(value);
     else if (StringUtils::EqualsNoCase(name, "thumb"))
-      SetArt("thumb", value);
+      SetArt(KODI::ART::TYPE::THUMB, value);
     else if (StringUtils::EqualsNoCase(name, "icon"))
-      SetArt("icon", value);
+      SetArt(KODI::ART::TYPE::ICON, value);
     else
       SetProperty(name, value.c_str());
   }
@@ -89,7 +104,7 @@ bool CGUIStaticItem::UpdateVisibility(int contextWindow)
 {
   if (!m_visCondition)
     return false;
-  bool state = m_visCondition->Get();
+  bool state = m_visCondition->Get(contextWindow);
   if (state != m_visState)
   {
     m_visState = state;

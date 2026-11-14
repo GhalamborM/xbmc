@@ -8,8 +8,8 @@
 
 #pragma once
 
-#include "XBDateTime.h"
-
+#include <cstdint>
+#include <cstring>
 #include <memory>
 #include <string>
 #include <vector>
@@ -22,6 +22,10 @@ namespace XFILE
 }
 class CVariant;
 class IArchivable;
+namespace KODI::TIME
+{
+struct SystemTime;
+}
 
 class CArchive
 {
@@ -129,7 +133,6 @@ public:
   CArchive& operator>>(std::vector<std::string>& strArray);
   CArchive& operator>>(std::vector<int>& iArray);
 
-  bool IsLoading() const;
   bool IsStoring() const;
 
   void Close();

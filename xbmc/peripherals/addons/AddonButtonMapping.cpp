@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2014-2018 Team Kodi
+ *  Copyright (C) 2014-2024 Team Kodi
  *  This file is part of Kodi - https://kodi.tv
  *
  *  SPDX-License-Identifier: GPL-2.0-or-later
@@ -8,11 +8,13 @@
 
 #include "AddonButtonMapping.h"
 
-#include "input/joysticks/generic/ButtonMapping.h"
 #include "input/joysticks/interfaces/IButtonMapper.h"
+#include "input/joysticks/mapping/ButtonMapping.h"
 #include "peripherals/Peripherals.h"
 #include "peripherals/addons/AddonButtonMap.h"
 #include "utils/log.h"
+
+#include <memory>
 
 using namespace KODI;
 using namespace JOYSTICK;
@@ -31,14 +33,14 @@ CAddonButtonMapping::CAddonButtonMapping(CPeripherals& manager,
   else
   {
     const std::string controllerId = mapper->ControllerID();
-    m_buttonMap.reset(new CAddonButtonMap(peripheral, addon, controllerId));
+    m_buttonMap = std::make_unique<CAddonButtonMap>(peripheral, addon, controllerId, manager);
     if (m_buttonMap->Load())
     {
-      IKeymap* keymap = peripheral->GetKeymap(controllerId);
-      m_buttonMapping.reset(new CButtonMapping(mapper, m_buttonMap.get(), keymap));
+      KEYMAP::IKeymap* keymap = peripheral->GetKeymap(controllerId);
+      m_buttonMapping = std::make_unique<CButtonMapping>(mapper, m_buttonMap.get(), keymap);
 
       // Allow the mapper to save our button map
-      mapper->SetButtonMapCallback(peripheral->DeviceName(), this);
+      mapper->SetButtonMapCallback(peripheral->Location(), this);
     }
     else
       m_buttonMap.reset();
@@ -78,10 +80,10 @@ bool CAddonButtonMapping::OnAxisMotion(unsigned int axisIndex,
   return false;
 }
 
-void CAddonButtonMapping::ProcessAxisMotions(void)
+void CAddonButtonMapping::OnInputFrame(void)
 {
   if (m_buttonMapping)
-    m_buttonMapping->ProcessAxisMotions();
+    m_buttonMapping->OnInputFrame();
 }
 
 bool CAddonButtonMapping::OnKeyPress(const CKey& key)

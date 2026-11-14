@@ -10,12 +10,10 @@
 
 #include "ServiceBroker.h"
 #include "URL.h"
-#include "filesystem/File.h"
 #include "interfaces/json-rpc/JSONRPC.h"
 #include "interfaces/json-rpc/JSONServiceDescription.h"
-#include "interfaces/json-rpc/JSONUtils.h"
-#include "network/WebServer.h"
 #include "network/httprequesthandler/HTTPRequestHandlerUtils.h"
+#include "utils/FileUtils.h"
 #include "utils/JSONVariantWriter.h"
 #include "utils/Variant.h"
 #include "utils/log.h"
@@ -52,7 +50,7 @@ MHD_RESULT CHTTPJsonRpcHandler::HandleRequest()
 
     isRequest = true;
   }
-  else if (m_request.method == GET)
+  else if (m_request.method == GET || m_request.method == HEAD)
   {
     std::map<std::string, std::string>::const_iterator argument = arguments.find("request");
     if (argument != arguments.end() && !argument->second.empty())
@@ -138,10 +136,10 @@ bool CHTTPJsonRpcHandler::appendPostData(const char *data, size_t size)
 
 bool CHTTPJsonRpcHandler::CHTTPTransportLayer::PrepareDownload(const char *path, CVariant &details, std::string &protocol)
 {
-  if (!XFILE::CFile::Exists(path))
+  if (!CFileUtils::Exists(path))
     return false;
 
-  protocol = "http";
+  protocol = HTTPRequestHandlerUtils::GetRequestScheme(m_request.connection);
   std::string url;
   std::string strPath = path;
   if (StringUtils::StartsWith(strPath, "image://") ||

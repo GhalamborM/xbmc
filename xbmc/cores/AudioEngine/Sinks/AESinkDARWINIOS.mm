@@ -19,9 +19,13 @@
 #include "utils/log.h"
 #include "windowing/WinSystem.h"
 
+#include <mutex>
 #include <sstream>
 
+#import <AVFoundation/AVAudioSession.h>
 #include <AudioToolbox/AudioToolbox.h>
+
+using namespace std::chrono_literals;
 
 #define CA_MAX_CHANNELS 8
 static enum AEChannel CAChannelMap[CA_MAX_CHANNELS + 1] = {
@@ -222,18 +226,18 @@ unsigned int CAAudioUnitSink::write(uint8_t *data, unsigned int frames)
 {
   if (m_buffer->GetWriteSize() < frames * m_frameSize)
   { // no space to write - wait for a bit
-    CSingleLock lock(mutex);
-    unsigned int timeout = 900 * frames / m_sampleRate;
+    std::unique_lock lock(mutex);
+    auto timeout = std::chrono::milliseconds(900 * frames / m_sampleRate);
     if (!m_started)
-      timeout = 4500;
+      timeout = 4500ms;
 
     // we are using a timer here for being sure for timeouts
     // condvar can be woken spuriously as signaled
-    XbmcThreads::EndTime timer(timeout);
-    condVar.wait(mutex, std::chrono::milliseconds(timeout));
+    XbmcThreads::EndTime<> timer(timeout);
+    condVar.wait(mutex, timeout);
     if (!m_started && timer.IsTimePast())
     {
-      CLog::Log(LOGERROR, "{} engine didn't start in {} ms!", __FUNCTION__, timeout);
+      CLog::Log(LOGERROR, "{} engine didn't start in {} ms!", __FUNCTION__, timeout.count());
       return INT_MAX;
     }
   }
@@ -250,12 +254,12 @@ void CAAudioUnitSink::drain()
   unsigned int bytes = m_buffer->GetReadSize();
   unsigned int totalBytes = bytes;
   int maxNumTimeouts = 3;
-  unsigned int timeout = 900 * bytes / (m_sampleRate * m_frameSize);
+  auto timeout = std::chrono::milliseconds(900 * bytes / (m_sampleRate * m_frameSize));
   while (bytes && maxNumTimeouts > 0)
   {
-    CSingleLock lock(mutex);
-    XbmcThreads::EndTime timer(timeout);
-    condVar.wait(mutex, std::chrono::milliseconds(timeout));
+    std::unique_lock lock(mutex);
+    XbmcThreads::EndTime<> timer(timeout);
+    condVar.wait(mutex, timeout);
 
     bytes = m_buffer->GetReadSize();
     // if we timeout and don't
@@ -271,14 +275,18 @@ void CAAudioUnitSink::setCoreAudioBuffersize()
 #if !TARGET_IPHONE_SIMULATOR
   // set the buffer size, this affects the number of samples
   // that get rendered every time the audio callback is fired.
-  Float32 preferredBufferSize = 512 * m_outputFormat.mChannelsPerFrame / m_outputFormat.mSampleRate;
-  CLog::Log(LOGINFO, "{} setting buffer duration to {:f}", __PRETTY_FUNCTION__,
-            preferredBufferSize);
-  OSStatus status = AudioSessionSetProperty(kAudioSessionProperty_PreferredHardwareIOBufferDuration,
-                                   sizeof(preferredBufferSize), &preferredBufferSize);
-  if (status != noErr)
-    CLog::Log(LOGWARNING, "{} preferredBufferSize couldn't be set (error: {})", __PRETTY_FUNCTION__,
-              (int)status);
+  auto preferredBufferSize = 512 * m_outputFormat.mChannelsPerFrame / m_outputFormat.mSampleRate;
+  CLog::LogF(LOGINFO, "setting buffer duration to {:f}", preferredBufferSize);
+
+  AVAudioSession* session = [AVAudioSession sharedInstance];
+  NSError* status = nil;
+
+  [session setPreferredIOBufferDuration:preferredBufferSize error:&status];
+  if (status)
+  {
+    CLog::LogF(LOGWARNING, "PreferredBufferSize couldn't be set (error: {})", (int)status.code);
+  }
+
 #endif
 }
 
@@ -299,23 +307,22 @@ bool CAAudioUnitSink::setCoreAudioInputFormat()
 
 void CAAudioUnitSink::setCoreAudioPreferredSampleRate()
 {
-  Float64 preferredSampleRate = m_outputFormat.mSampleRate;
-  CLog::Log(LOGINFO, "{} requesting hw samplerate {:f}", __PRETTY_FUNCTION__, preferredSampleRate);
-  OSStatus status = AudioSessionSetProperty(kAudioSessionProperty_PreferredHardwareSampleRate,
-                                   sizeof(preferredSampleRate), &preferredSampleRate);
-  if (status != noErr)
-    CLog::Log(LOGWARNING, "{} preferredSampleRate couldn't be set (error: {})", __PRETTY_FUNCTION__,
-              (int)status);
+  auto preferredSampleRate = m_outputFormat.mSampleRate;
+  CLog::LogF(LOGINFO, "requesting hw samplerate {:f}", preferredSampleRate);
+
+  AVAudioSession* session = [AVAudioSession sharedInstance];
+  NSError* status = nil;
+
+  [session setPreferredSampleRate:preferredSampleRate error:&status];
+  if (status)
+  {
+    CLog::LogF(LOGWARNING, "preferredSampleRate couldn't be set (error: {})", (int)status.code);
+  }
 }
 
 Float64 CAAudioUnitSink::getCoreAudioRealisedSampleRate()
 {
-  Float64 outputSampleRate = 0.0;
-  UInt32 ioDataSize = sizeof(outputSampleRate);
-  if (AudioSessionGetProperty(kAudioSessionProperty_CurrentHardwareSampleRate,
-                              &ioDataSize, &outputSampleRate) != noErr)
-    CLog::Log(LOGERROR, "{}: error getting CurrentHardwareSampleRate", __FUNCTION__);
-  return outputSampleRate;
+  return [[AVAudioSession sharedInstance] sampleRate];
 }
 
 bool CAAudioUnitSink::setupAudio()
@@ -416,21 +423,11 @@ bool CAAudioUnitSink::checkSessionProperties()
 {
   checkAudioRoute();
 
-  UInt32 ioDataSize;
-  ioDataSize = sizeof(m_outputVolume);
-  if (AudioSessionGetProperty(kAudioSessionProperty_CurrentHardwareOutputVolume,
-    &ioDataSize, &m_outputVolume) != noErr)
-    CLog::Log(LOGERROR, "{}: error getting CurrentHardwareOutputVolume", __FUNCTION__);
+  AVAudioSession* session = [AVAudioSession sharedInstance];
 
-  ioDataSize = sizeof(m_outputLatency);
-  if (AudioSessionGetProperty(kAudioSessionProperty_CurrentHardwareOutputLatency,
-    &ioDataSize, &m_outputLatency) != noErr)
-    CLog::Log(LOGERROR, "{}: error getting CurrentHardwareOutputLatency", __FUNCTION__);
-
-  ioDataSize = sizeof(m_bufferDuration);
-  if (AudioSessionGetProperty(kAudioSessionProperty_CurrentHardwareIOBufferDuration,
-    &ioDataSize, &m_bufferDuration) != noErr)
-    CLog::Log(LOGERROR, "{}: error getting CurrentHardwareIOBufferDuration", __FUNCTION__);
+  m_outputVolume = [session outputVolume];
+  m_outputLatency = [session outputLatency];
+  m_bufferDuration = [session IOBufferDuration];
 
   CLog::Log(LOGDEBUG, "{}: volume = {:f}, latency = {:f}, buffer = {:f}", __FUNCTION__,
             m_outputVolume, m_outputLatency, m_bufferDuration);
@@ -595,14 +592,13 @@ void CAESinkDARWINIOS::Register()
   AE::CAESinkFactory::RegisterSink(reg);
 }
 
-IAESink* CAESinkDARWINIOS::Create(std::string &device, AEAudioFormat &desiredFormat)
+std::unique_ptr<IAESink> CAESinkDARWINIOS::Create(std::string& device, AEAudioFormat& desiredFormat)
 {
-  IAESink *sink = new CAESinkDARWINIOS();
+  auto sink = std::make_unique<CAESinkDARWINIOS>();
   if (sink->Initialize(desiredFormat, device))
     return sink;
 
-  delete sink;
-  return nullptr;
+  return {};
 }
 
 bool CAESinkDARWINIOS::Initialize(AEAudioFormat &format, std::string &device)

@@ -9,31 +9,37 @@
 #include "DirectoryNodeGrouped.h"
 
 #include "QueryParams.h"
+#include "utils/ContentNames.h"
 #include "video/VideoDatabase.h"
 #include "video/VideoDbUrl.h"
 
 using namespace XFILE::VIDEODATABASEDIRECTORY;
 
-CDirectoryNodeGrouped::CDirectoryNodeGrouped(NODE_TYPE type, const std::string& strName, CDirectoryNode* pParent)
+namespace CONTENT = KODI::MEDIA::CONTENT;
+
+CDirectoryNodeGrouped::CDirectoryNodeGrouped(NodeType type,
+                                             const std::string& strName,
+                                             CDirectoryNode* pParent)
   : CDirectoryNode(type, strName, pParent)
 { }
 
-NODE_TYPE CDirectoryNodeGrouped::GetChildType() const
+NodeType CDirectoryNodeGrouped::GetChildType() const
 {
   CQueryParams params;
   CollectQueryParams(params);
 
-  if (params.GetContentType() == VIDEODB_CONTENT_MOVIES)
-    return NODE_TYPE_TITLE_MOVIES;
-  if (params.GetContentType() == VIDEODB_CONTENT_MUSICVIDEOS)
+  VideoDbContentType type = static_cast<VideoDbContentType>(params.GetContentType());
+  if (type == VideoDbContentType::MOVIES)
+    return NodeType::TITLE_MOVIES;
+  if (type == VideoDbContentType::MUSICVIDEOS)
   {
-    if (GetType() == NODE_TYPE_ACTOR)
-      return NODE_TYPE_MUSICVIDEOS_ALBUM;
+    if (GetType() == NodeType::ACTOR)
+      return NodeType::MUSICVIDEOS_ALBUM;
     else
-      return NODE_TYPE_TITLE_MUSICVIDEOS;
+      return NodeType::TITLE_MUSICVIDEOS;
   }
 
-  return NODE_TYPE_TITLE_TVSHOWS;
+  return NodeType::TITLE_TVSHOWS;
 }
 
 std::string CDirectoryNodeGrouped::GetLocalizedName() const
@@ -63,7 +69,9 @@ bool CDirectoryNodeGrouped::GetContent(CFileItemList& items) const
   if (!videoUrl.FromString(BuildPath()))
     return false;
 
-  return videodatabase.GetItems(videoUrl.ToString(), (VIDEODB_CONTENT_TYPE)params.GetContentType(), itemType, items);
+  return videodatabase.GetItems(videoUrl.ToString(),
+                                static_cast<VideoDbContentType>(params.GetContentType()), itemType,
+                                items);
 }
 
 std::string CDirectoryNodeGrouped::GetContentType() const
@@ -78,43 +86,46 @@ std::string CDirectoryNodeGrouped::GetContentType(const CQueryParams &params) co
 {
   switch (GetType())
   {
-    case NODE_TYPE_GENRE:
-      return "genres";
-    case NODE_TYPE_COUNTRY:
-      return "countries";
-    case NODE_TYPE_SETS:
-      return "sets";
-    case NODE_TYPE_TAGS:
-      return "tags";
-    case NODE_TYPE_YEAR:
-      return "years";
-    case NODE_TYPE_ACTOR:
-      if ((VIDEODB_CONTENT_TYPE)params.GetContentType() == VIDEODB_CONTENT_MUSICVIDEOS)
-        return "artists";
+    case NodeType::GENRE:
+      return CONTENT::GENRES;
+    case NodeType::COUNTRY:
+      return CONTENT::COUNTRIES;
+    case NodeType::SETS:
+      return CONTENT::SETS;
+    case NodeType::TAGS:
+      return CONTENT::TAGS;
+    case NodeType::VIDEOVERSIONS:
+      return CONTENT::VIDEOVERSIONS;
+    case NodeType::YEAR:
+      return CONTENT::YEARS;
+    case NodeType::ACTOR:
+      if (static_cast<VideoDbContentType>(params.GetContentType()) ==
+          VideoDbContentType::MUSICVIDEOS)
+        return CONTENT::ARTISTS;
       else
-        return "actors";
-    case NODE_TYPE_DIRECTOR:
-      return "directors";
-    case NODE_TYPE_STUDIO:
-      return "studios";
-    case NODE_TYPE_MUSICVIDEOS_ALBUM:
-      return "albums";
+        return CONTENT::ACTORS;
+    case NodeType::DIRECTOR:
+      return CONTENT::DIRECTORS;
+    case NodeType::STUDIO:
+      return CONTENT::STUDIOS;
+    case NodeType::MUSICVIDEOS_ALBUM:
+      return CONTENT::ALBUMS;
 
-    case NODE_TYPE_EPISODES:
-    case NODE_TYPE_MOVIES_OVERVIEW:
-    case NODE_TYPE_MUSICVIDEOS_OVERVIEW:
-    case NODE_TYPE_NONE:
-    case NODE_TYPE_OVERVIEW:
-    case NODE_TYPE_RECENTLY_ADDED_EPISODES:
-    case NODE_TYPE_RECENTLY_ADDED_MOVIES:
-    case NODE_TYPE_RECENTLY_ADDED_MUSICVIDEOS:
-    case NODE_TYPE_INPROGRESS_TVSHOWS:
-    case NODE_TYPE_ROOT:
-    case NODE_TYPE_SEASONS:
-    case NODE_TYPE_TITLE_MOVIES:
-    case NODE_TYPE_TITLE_MUSICVIDEOS:
-    case NODE_TYPE_TITLE_TVSHOWS:
-    case NODE_TYPE_TVSHOWS_OVERVIEW:
+    case NodeType::EPISODES:
+    case NodeType::MOVIES_OVERVIEW:
+    case NodeType::MUSICVIDEOS_OVERVIEW:
+    case NodeType::NONE:
+    case NodeType::OVERVIEW:
+    case NodeType::RECENTLY_ADDED_EPISODES:
+    case NodeType::RECENTLY_ADDED_MOVIES:
+    case NodeType::RECENTLY_ADDED_MUSICVIDEOS:
+    case NodeType::INPROGRESS_TVSHOWS:
+    case NodeType::ROOT:
+    case NodeType::SEASONS:
+    case NodeType::TITLE_MOVIES:
+    case NodeType::TITLE_MUSICVIDEOS:
+    case NodeType::TITLE_TVSHOWS:
+    case NodeType::TVSHOWS_OVERVIEW:
     default:
       break;
   }

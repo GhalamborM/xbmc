@@ -12,6 +12,8 @@
 #include "ServiceBroker.h"
 #include "games/GameServices.h"
 #include "games/GameSettings.h"
+#include "guilib/GUIControlGroupList.h"
+#include "guilib/GUIImage.h"
 #include "guilib/WindowIDs.h"
 #include "input/actions/Action.h"
 #include "input/actions/ActionIDs.h"
@@ -19,8 +21,15 @@
 using namespace KODI;
 using namespace GAME;
 
+namespace
+{
+constexpr int CONTROL_MENU = 1103;
+constexpr int CONTROL_BACKGROUND = 2001;
+} // namespace
+
 CDialogGameOSD::CDialogGameOSD()
-  : CGUIDialog(WINDOW_DIALOG_GAME_OSD, "GameOSD.xml"), m_helpDialog(new CDialogGameOSDHelp(*this))
+  : CGUIDialog(WINDOW_DIALOG_GAME_OSD, "GameOSD.xml"),
+    m_helpDialog(std::make_unique<CDialogGameOSDHelp>(*this))
 {
   // Initialize CGUIWindow
   m_loadType = KEEP_IN_MEMORY;
@@ -53,6 +62,25 @@ bool CDialogGameOSD::OnAction(const CAction& action)
   }
 
   return CGUIDialog::OnAction(action);
+}
+
+void CDialogGameOSD::Process(unsigned int currentTime, CDirtyRegionList& dirtyregions)
+{
+  const auto* menu = dynamic_cast<CGUIControlGroupList*>(GetControl(CONTROL_MENU));
+  auto* background = dynamic_cast<CGUIImage*>(GetControl(CONTROL_BACKGROUND));
+  if (menu != nullptr && background != nullptr)
+  {
+    const auto* parentControl = background->GetParentControl();
+    if (parentControl != nullptr)
+    {
+      // Match the cached menu height used by its parent grouplist for centering.
+      const float height = parentControl->GetHeight() + menu->GetHeight();
+      if (background->GetHeight() != height)
+        background->SetHeight(height);
+    }
+  }
+
+  CGUIDialog::Process(currentTime, dirtyregions);
 }
 
 void CDialogGameOSD::OnInitWindow()

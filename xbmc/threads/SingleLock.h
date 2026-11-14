@@ -10,28 +10,9 @@
 
 #pragma once
 
-// SingleLock.h: interface for the CSingleLock class.
-//
-//////////////////////////////////////////////////////////////////////
-
 #include "threads/CriticalSection.h"
-#include "threads/Lockables.h"
 
-/**
- * This implements a "guard" pattern for a CCriticalSection that
- *  borrows most of it's functionality from boost's unique_lock.
- */
-class CSingleLock : public XbmcThreads::UniqueLock<CCriticalSection>
-{
-public:
-  inline explicit CSingleLock(CCriticalSection& cs) : XbmcThreads::UniqueLock<CCriticalSection>(cs) {}
-
-  inline void Leave() { unlock(); }
-  inline void Enter() { lock(); }
-protected:
-  inline CSingleLock(CCriticalSection& cs, bool dicrim) : XbmcThreads::UniqueLock<CCriticalSection>(cs,true) {}
-};
-
+#include <mutex>
 
 /**
  * This implements a "guard" pattern for exiting all locks
@@ -49,4 +30,3 @@ public:
   inline explicit CSingleExit(CCriticalSection& cs) : sec(cs), count(cs.exit()) { }
   inline ~CSingleExit() { sec.restore(count); }
 };
-

@@ -16,6 +16,7 @@
 #include "commons/ilog.h"
 #include "filesystem/SpecialProtocol.h"
 #include "filesystem/XbtManager.h"
+#include "guilib/TextureFormats.h"
 #include "settings/Settings.h"
 #include "settings/SettingsComponent.h"
 #include "utils/StringUtils.h"
@@ -69,15 +70,6 @@ void CTextureBundleXBT::CloseBundle()
 bool CTextureBundleXBT::OpenBundle()
 {
   // Find the correct texture file (skin or theme)
-
-  auto mediaDir = CServiceBroker::GetWinSystem()->GetGfxContext().GetMediaDir();
-  if (mediaDir.empty())
-  {
-    mediaDir = CSpecialProtocol::TranslatePath(
-      URIUtils::AddFileToFolder("special://home/addons",
-        CServiceBroker::GetSettingsComponent()->GetSettings()->GetString(CSettings::SETTING_LOOKANDFEEL_SKIN)));
-  }
-
   if (m_themeBundle)
   {
     // if we are the theme bundle, we only load if the user has chosen
@@ -157,71 +149,67 @@ std::vector<std::string> CTextureBundleXBT::GetTexturesFromPath(const std::strin
   return textures;
 }
 
-bool CTextureBundleXBT::LoadTexture(const std::string& filename,
-                                    std::unique_ptr<CTexture>& texture,
-                                    int& width,
-                                    int& height)
+std::optional<CTextureBundleXBT::Texture> CTextureBundleXBT::LoadTexture(
+    const std::string& filename)
 {
   std::string name = Normalize(filename);
 
   CXBTFFile file;
   if (!m_XBTFReader->Get(name, file))
-    return false;
+    return {};
 
   if (file.GetFrames().empty())
-    return false;
+    return {};
 
-  CXBTFFrame& frame = file.GetFrames().at(0);
-  if (!ConvertFrameToTexture(filename, frame, texture))
-  {
-    return false;
-  }
+  const CXBTFFrame& frame = file.GetFrames().at(0);
 
-  width = frame.GetWidth();
-  height = frame.GetHeight();
+  Texture texture;
+  texture.width = frame.GetWidth();
+  texture.height = frame.GetHeight();
 
-  return true;
+  texture.texture = ConvertFrameToTexture(filename, frame);
+  if (!texture.texture)
+    return {};
+
+  return std::make_optional<Texture>(std::move(texture));
 }
 
-bool CTextureBundleXBT::LoadAnim(const std::string& filename,
-                                 std::vector<std::pair<std::unique_ptr<CTexture>, int>>& textures,
-                                 int& width,
-                                 int& height,
-                                 int& nLoops)
+std::optional<CTextureBundleXBT::Animation> CTextureBundleXBT::LoadAnim(const std::string& filename)
 {
   std::string name = Normalize(filename);
 
   CXBTFFile file;
   if (!m_XBTFReader->Get(name, file))
-    return false;
+    return {};
 
   if (file.GetFrames().empty())
-    return false;
+    return {};
 
   size_t nTextures = file.GetFrames().size();
-  textures.reserve(nTextures);
+
+  Animation animation;
+  animation.textures.reserve(nTextures);
 
   for (size_t i = 0; i < nTextures; i++)
   {
     CXBTFFrame& frame = file.GetFrames().at(i);
 
-    std::unique_ptr<CTexture> texture;
-    if (!ConvertFrameToTexture(filename, frame, texture))
-      return false;
+    std::unique_ptr<CTexture> texture = ConvertFrameToTexture(filename, frame);
+    if (!texture)
+      return {};
 
-    textures.emplace_back(std::move(texture), frame.GetDuration());
+    animation.textures.emplace_back(std::move(texture), frame.GetDuration());
   }
 
-  width = file.GetFrames().at(0).GetWidth();
-  height = file.GetFrames().at(0).GetHeight();
-  nLoops = file.GetLoop();
+  animation.width = file.GetFrames().at(0).GetWidth();
+  animation.height = file.GetFrames().at(0).GetHeight();
+  animation.loops = file.GetLoop();
 
-  return true;
+  return std::make_optional<Animation>(std::move(animation));
 }
 
-bool CTextureBundleXBT::ConvertFrameToTexture(const std::string& name,
-                                              const CXBTFFrame& frame,
-                                              std::unique_ptr<CTexture>& texture)
+std::unique_ptr<CTexture> CTextureBundleXBT::ConvertFrameToTexture(const std::string& name,
+                                                                   const CXBTFFrame& frame)
 {
   // found texture - allocate the necessary buffers
   std::vector<unsigned char> buffer(static_cast<size_t>(frame.GetPackedSize()));
@@ -230,7 +218,7 @@ bool CTextureBundleXBT::ConvertFrameToTexture(const std::string& name,
   if (!m_XBTFReader->Load(frame, buffer.data()))
   {
     CLog::Log(LOGERROR, "Error loading texture: {}", name);
-    return false;
+    return {};
   }
 
   // check if it's packed with lzo
@@ -243,17 +231,26 @@ bool CTextureBundleXBT::ConvertFrameToTexture(const std::string& name,
         s != frame.GetUnpackedSize())
     {
       CLog::Log(LOGERROR, "Error loading texture: {}: Decompression error", name);
-      return false;
+      return {};
     }
     buffer = std::move(unpacked);
   }
 
   // create an xbmc texture
-  texture = CTexture::CreateTexture();
-  texture->LoadFromMemory(frame.GetWidth(), frame.GetHeight(), 0, frame.GetFormat(),
-                          frame.HasAlpha(), buffer.data());
+  std::unique_ptr<CTexture> texture = CTexture::CreateTexture();
 
-  return true;
+  if (frame.GetKDFormatType())
+  {
+    texture->UploadFromMemory(frame.GetWidth(), frame.GetHeight(), 0, buffer.data(),
+                              frame.GetKDFormat(), frame.GetKDAlpha(), frame.GetKDSwizzle());
+  }
+  else if (frame.GetFormat() == XB_FMT_A8R8G8B8)
+  {
+    KD_TEX_ALPHA alpha = frame.HasAlpha() ? KD_TEX_ALPHA_STRAIGHT : KD_TEX_ALPHA_OPAQUE;
+    texture->UploadFromMemory(frame.GetWidth(), frame.GetHeight(), 0, buffer.data(),
+                              KD_TEX_FMT_SDR_BGRA8, alpha, KD_TEX_SWIZ_RGBA);
+  }
+  return texture;
 }
 
 void CTextureBundleXBT::SetThemeBundle(bool themeBundle)
@@ -272,15 +269,15 @@ std::string CTextureBundleXBT::Normalize(std::string name)
   return name;
 }
 
-std::vector<uint8_t> CTextureBundleXBT::UnpackFrame(const CXBTFReader& reader,
-                                                    const CXBTFFrame& frame)
+std::optional<std::vector<uint8_t>> CTextureBundleXBT::UnpackFrame(const CXBTFReader& reader,
+                                                                   const CXBTFFrame& frame)
 {
   // load the compressed texture
   std::vector<uint8_t> packedBuffer(static_cast<size_t>(frame.GetPackedSize()));
   if (!reader.Load(frame, packedBuffer.data()))
   {
     CLog::Log(LOGERROR, "CTextureBundleXBT: error loading frame");
-    return {};
+    return std::nullopt;
   }
 
   // if the frame isn't packed there's nothing else to be done
@@ -291,7 +288,7 @@ std::vector<uint8_t> CTextureBundleXBT::UnpackFrame(const CXBTFReader& reader,
   if (lzo_init() != LZO_E_OK)
   {
     CLog::Log(LOGERROR, "CTextureBundleXBT: failed to initialize lzo");
-    return {};
+    return std::nullopt;
   }
 
   lzo_uint size = static_cast<lzo_uint>(frame.GetUnpackedSize());
@@ -303,7 +300,7 @@ std::vector<uint8_t> CTextureBundleXBT::UnpackFrame(const CXBTFReader& reader,
     CLog::Log(LOGERROR,
               "CTextureBundleXBT: failed to decompress frame with {} unpacked bytes to {} bytes",
               frame.GetPackedSize(), frame.GetUnpackedSize());
-    return {};
+    return std::nullopt;
   }
 
   return unpackedBuffer;

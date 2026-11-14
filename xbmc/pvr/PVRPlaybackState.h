@@ -8,7 +8,9 @@
 
 #pragma once
 
+#include "pvr/PVRConstants.h" // PVR_CLIENT_INVALID_UID
 #include "threads/CriticalSection.h"
+#include "utils/ContentUtils.h"
 
 #include <memory>
 #include <string>
@@ -23,6 +25,7 @@ class CPVRChannelGroup;
 class CPVRChannelGroupMember;
 class CPVREpgInfoTag;
 class CPVRRecording;
+class CPVRStreamProperties;
 
 class CPVRPlaybackState
 {
@@ -48,23 +51,39 @@ public:
   void ReInit();
 
   /*!
+   * @brief Inform that playback of an item is going to happen.
+   * Add any info to the item that is needed for playback, e.g. add dyn path and properties
+   * @param item The item that shall be played.
+   * @return True on success, false otherwise.
+   */
+  bool OnPreparePlayback(CFileItem& item) const;
+
+  /*!
    * @brief Inform that playback of an item just started.
    * @param item The item that started to play.
    */
-  void OnPlaybackStarted(const std::shared_ptr<CFileItem>& item);
+  void OnPlaybackStarted(const CFileItem& item);
 
   /*!
    * @brief Inform that playback of an item was stopped due to user interaction.
    * @param item The item that stopped to play.
    * @return True, if the state has changed, false otherwise
    */
-  bool OnPlaybackStopped(const std::shared_ptr<CFileItem>& item);
+  bool OnPlaybackStopped(const CFileItem& item);
 
   /*!
    * @brief Inform that playback of an item has stopped without user interaction.
    * @param item The item that ended to play.
+   * @return True, if the state has changed, false otherwise
    */
-  void OnPlaybackEnded(const std::shared_ptr<CFileItem>& item);
+  bool OnPlaybackEnded(const CFileItem& item);
+
+  /*!
+   * @brief Start playback of the given item.
+   * @param item containing a channel, a recording or an epg tag.
+   * @param mode playback mode.
+   */
+  void StartPlayback(std::unique_ptr<CFileItem>& item, ContentUtils::PlayMode mode) const;
 
   /*!
    * @brief Check if a TV channel, radio channel or recording is playing.
@@ -115,27 +134,33 @@ public:
    * @param channel The channel to check.
    * @return True if it's playing, false otherwise.
    */
-  bool IsPlayingChannel(const std::shared_ptr<CPVRChannel>& channel) const;
+  bool IsPlayingChannel(const std::shared_ptr<const CPVRChannel>& channel) const;
 
   /*!
    * @brief Check if the given recording is playing.
    * @param recording The recording to check.
    * @return True if it's playing, false otherwise.
    */
-  bool IsPlayingRecording(const std::shared_ptr<CPVRRecording>& recording) const;
+  bool IsPlayingRecording(const std::shared_ptr<const CPVRRecording>& recording) const;
 
   /*!
    * @brief Check if the given epg tag is playing.
    * @param epgTag The tag to check.
    * @return True if it's playing, false otherwise.
    */
-  bool IsPlayingEpgTag(const std::shared_ptr<CPVREpgInfoTag>& epgTag) const;
+  bool IsPlayingEpgTag(const std::shared_ptr<const CPVREpgInfoTag>& epgTag) const;
 
   /*!
    * @brief Return the channel that is currently playing.
    * @return The channel or nullptr if none is playing.
    */
   std::shared_ptr<CPVRChannel> GetPlayingChannel() const;
+
+  /*!
+   * @brief Return the channel group member that is currently playing.
+   * @return The channel group member or nullptr if none is playing.
+   */
+  std::shared_ptr<CPVRChannelGroupMember> GetPlayingChannelGroupMember() const;
 
   /*!
    * @brief Return the recording that is currently playing.
@@ -163,7 +188,7 @@ public:
 
   /*!
    * @brief Get the ID of the playing client, if there is one.
-   * @return The ID or -1 if no client is playing.
+   * @return The ID or PVR_CLIENT_INVALID_UID if no client is playing.
    */
   int GetPlayingClientID() const;
 
@@ -196,6 +221,18 @@ public:
    * @param group The new group.
    */
   void SetActiveChannelGroup(const std::shared_ptr<CPVRChannelGroup>& group);
+
+  /*!
+   * @brief Set the active group to the group of the supplied channel group member.
+   * @param channel The channel group member
+   */
+  void SetActiveChannelGroup(const std::shared_ptr<CPVRChannelGroupMember>& channel);
+
+  /*!
+   * @brief Make the playing channel's group the active group, if another group is active.
+   * @return True if the active group was changed, false otherwise.
+   */
+  bool RestorePlayingChannelGroup();
 
   /*!
    * @brief Get the active channel group.
@@ -240,10 +277,11 @@ private:
   void ClearData();
 
   /*!
-   * @brief Set the active group to the group of the supplied channel group member.
-   * @param channel The channel group member
+   * @brief Return the next item to play automatically, if any.
+   * @param item The item which just finished playback.
+   * @return The item to play next, if any, nullptr otherwise.
    */
-  void SetActiveChannelGroup(const std::shared_ptr<CPVRChannelGroupMember>& channel);
+  std::unique_ptr<CFileItem> GetNextAutoplayItem(const CFileItem& item);
 
   /*!
    * @brief Updates the last watched timestamps of the channel and group which are currently playing.
@@ -251,7 +289,7 @@ private:
    * @param time The last watched time to set
    */
   void UpdateLastWatched(const std::shared_ptr<CPVRChannelGroupMember>& channel,
-                         const CDateTime& time);
+                         const CDateTime& time) const;
 
   mutable CCriticalSection m_critSection;
 
@@ -264,7 +302,7 @@ private:
   std::shared_ptr<CPVRChannelGroupMember> m_previousToLastPlayedChannelRadio;
   std::string m_strPlayingClientName;
   int m_playingGroupId = -1;
-  int m_playingClientId = -1;
+  int m_playingClientId = PVR_CLIENT_INVALID_UID;
   int m_playingChannelUniqueId = -1;
   std::string m_strPlayingRecordingUniqueId;
   int m_playingEpgTagChannelUniqueId = -1;

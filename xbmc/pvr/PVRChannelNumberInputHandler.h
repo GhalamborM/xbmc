@@ -11,28 +11,34 @@
 #include "pvr/channels/PVRChannelNumber.h"
 #include "threads/CriticalSection.h"
 #include "threads/Timer.h"
+#include "utils/EventStream.h"
 
+#include <cstdint>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace PVR
 {
+struct PVRChannelNumberInputChangedEvent
+{
+  explicit PVRChannelNumberInputChangedEvent(const std::string& input) : m_input(input) {}
+  virtual ~PVRChannelNumberInputChangedEvent() = default;
+
+  std::string m_input;
+};
 
 class CPVRChannelNumberInputHandler : private ITimerCallback
 {
 public:
-  static const int CHANNEL_NUMBER_INPUT_MAX_DIGITS = 5;
-
   CPVRChannelNumberInputHandler();
+  ~CPVRChannelNumberInputHandler() override = default;
 
   /*!
-   * @brief ctor.
-   * @param iDelay timer delay in millisecods.
-   * @param iMaxDigits maximum number of display digits to use.
+   * @brief Get the events available for CEventStream.
+   * @return The events.
    */
-  CPVRChannelNumberInputHandler(int iDelay, int iMaxDigits = CHANNEL_NUMBER_INPUT_MAX_DIGITS);
-
-  ~CPVRChannelNumberInputHandler() override = default;
+  CEventStream<PVRChannelNumberInputChangedEvent>& Events() { return m_events; }
 
   // implementation of ITimerCallback
   void OnTimeout() override;
@@ -85,17 +91,18 @@ protected:
    */
   size_t GetCurrentDigitCount() const { return m_inputBuffer.size(); }
 
-  mutable CCriticalSection m_mutex;
-
 private:
   void ExecuteAction();
 
+  void SetLabel(std::string_view label);
+
+  mutable CCriticalSection m_mutex;
   std::vector<std::string> m_sortedChannelNumbers;
-  const int m_iDelay;
-  const int m_iMaxDigits;
+  const uint32_t m_delay{2000}; // 2 secs
   std::string m_inputBuffer;
   std::string m_label;
   CTimer m_timer;
+  CEventSource<PVRChannelNumberInputChangedEvent> m_events;
 };
 
 } // namespace PVR

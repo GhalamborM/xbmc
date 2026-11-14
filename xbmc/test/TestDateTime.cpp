@@ -6,11 +6,16 @@
  *  See LICENSES/README.md for more information.
  */
 
-#include "LangInfo.h"
+#include "ServiceBroker.h"
 #include "XBDateTime.h"
-#include "guilib/LocalizeStrings.h"
+#include "interfaces/legacy/ModuleXbmc.h" //Needed to test getRegion()
+#include "language/LangInfo.h"
+#include "resources/LocalizeStrings.h"
+#include "resources/ResourcesComponent.h"
+#include "utils/XTimeUtils.h"
 
 #include <array>
+#include <cstdint>
 #include <iostream>
 
 #include <gtest/gtest.h>
@@ -78,15 +83,46 @@ TEST_F(TestDateTime, TimeTOperators)
 
 TEST_F(TestDateTime, TmOperators)
 {
-  CDateTime dateTime1(1991, 5, 14, 12, 34, 56);
-  CDateTime dateTime2(1991, 5, 14, 12, 34, 57);
+  {
+    CDateTime dateTime1(1991, 5, 14, 12, 34, 56);
 
-  tm t;
-  dateTime2.GetAsTm(t);
+    tm t1;
+    dateTime1.GetAsTm(t1);
 
-  EXPECT_TRUE(dateTime1 < t);
-  EXPECT_FALSE(dateTime1 > t);
-  EXPECT_FALSE(dateTime1 == t);
+    EXPECT_FALSE(dateTime1 < t1);
+    EXPECT_FALSE(dateTime1 > t1);
+    EXPECT_TRUE(dateTime1 == t1);
+
+    CDateTime dateTime2(1991, 5, 14, 12, 34, 57);
+
+    tm t2;
+    dateTime2.GetAsTm(t2);
+
+    EXPECT_TRUE(dateTime1 < t2);
+    EXPECT_FALSE(dateTime1 > t2);
+    EXPECT_FALSE(dateTime1 == t2);
+  }
+
+  // same test but opposite daylight saving
+  {
+    CDateTime dateTime1(1991, 1, 14, 12, 34, 56);
+
+    tm t1;
+    dateTime1.GetAsTm(t1);
+
+    EXPECT_FALSE(dateTime1 < t1);
+    EXPECT_FALSE(dateTime1 > t1);
+    EXPECT_TRUE(dateTime1 == t1);
+
+    CDateTime dateTime2(1991, 1, 14, 12, 34, 57);
+
+    tm t2;
+    dateTime2.GetAsTm(t2);
+
+    EXPECT_TRUE(dateTime1 < t2);
+    EXPECT_FALSE(dateTime1 > t2);
+    EXPECT_FALSE(dateTime1 == t2);
+  }
 }
 
 // no way to test this platform agnostically (for now) so just log it.
@@ -206,10 +242,9 @@ TEST_F(TestDateTime, SetFromW3CDate)
 
 TEST_F(TestDateTime, SetFromW3CDateTime)
 {
-  CDateTimeSpan bias = CDateTime::GetTimezoneBias();
   CDateTime dateTime;
   dateTime.SetFromDBDateTime("1994-11-05 13:15:30");
-  dateTime += bias;
+  dateTime += dateTime.GetTimezoneBias();
   std::string dateTimeStr = dateTime.GetAsDBDate() + "T" + dateTime.GetAsDBTime() + "Z";
 
   CDateTime dateTime1;
@@ -231,12 +266,33 @@ TEST_F(TestDateTime, SetFromW3CDateTime)
   EXPECT_EQ(dateTime2.GetSecond(), 30);
 }
 
+TEST_F(TestDateTime, SetFromW3CDateInvalid)
+{
+  CDateTime dateTime;
+  EXPECT_FALSE(dateTime.SetFromW3CDate("not a date"));
+  EXPECT_FALSE(dateTime.IsValid());
+  EXPECT_FALSE(dateTime.SetFromW3CDate("1994-13-05"));
+  EXPECT_FALSE(dateTime.SetFromW3CDate("1994-11-32"));
+  EXPECT_FALSE(dateTime.SetFromW3CDate("0000-11-05"));
+}
+
+TEST_F(TestDateTime, SetFromW3CDateTimeInvalid)
+{
+  CDateTime dateTime;
+  EXPECT_FALSE(dateTime.SetFromW3CDateTime("not a date"));
+  EXPECT_FALSE(dateTime.IsValid());
+  EXPECT_FALSE(dateTime.SetFromW3CDateTime("1994-13-05T13:15:30Z"));
+  EXPECT_FALSE(dateTime.SetFromW3CDateTime("1994-11-32T13:15:30Z"));
+  EXPECT_FALSE(dateTime.SetFromW3CDateTime("1994-11-05T24:15:30Z"));
+  EXPECT_FALSE(dateTime.SetFromW3CDateTime("1994-11-05T13:61:30Z"));
+  EXPECT_FALSE(dateTime.SetFromW3CDateTime("1994-11-05T13:15:61Z"));
+}
+
 TEST_F(TestDateTime, SetFromUTCDateTime)
 {
-  CDateTimeSpan bias = CDateTime::GetTimezoneBias();
-
   CDateTime dateTime1;
   dateTime1.SetFromDBDateTime("1991-05-14 12:34:56");
+  const CDateTimeSpan bias{dateTime1.GetTimezoneBias()};
   dateTime1 += bias;
 
   CDateTime dateTime2;
@@ -320,22 +376,28 @@ TEST_F(TestDateTime, GetAsStrings)
   EXPECT_EQ(dateTime.GetAsW3CDate(), "1991-05-14");
 }
 
-// disabled because we have no way to validate these values
-// GetTimezoneBias() always returns a positive value so
-// there is no way to detect the direction of the offset
-TEST_F(TestDateTime, DISABLED_GetAsStringsWithBias)
+TEST_F(TestDateTime, GetAsStringsWithBias)
 {
-  CDateTimeSpan bias = CDateTime::GetTimezoneBias();
-
   CDateTime dateTime;
   dateTime.SetDateTime(1991, 05, 14, 12, 34, 56);
 
-  CDateTime dateTimeWithBias(dateTime);
-  dateTimeWithBias += bias;
-
+  // Positive bias
+  dateTime.SetTimeZoneBias(CDateTimeSpan{0, 8, 0, 0});
   EXPECT_EQ(dateTime.GetAsRFC1123DateTime(), "Tue, 14 May 1991 20:34:56 GMT");
   EXPECT_EQ(dateTime.GetAsW3CDateTime(false), "1991-05-14T12:34:56+08:00");
   EXPECT_EQ(dateTime.GetAsW3CDateTime(true), "1991-05-14T20:34:56Z");
+
+  // No bias
+  dateTime.SetTimeZoneBias(CDateTimeSpan{0, 0, 0, 0});
+  EXPECT_EQ(dateTime.GetAsRFC1123DateTime(), "Tue, 14 May 1991 12:34:56 GMT");
+  EXPECT_EQ(dateTime.GetAsW3CDateTime(false), "1991-05-14T12:34:56+00:00");
+  EXPECT_EQ(dateTime.GetAsW3CDateTime(true), "1991-05-14T12:34:56Z");
+
+  // Negative bias
+  dateTime.SetTimeZoneBias(CDateTimeSpan{0, -8, 0, 0});
+  EXPECT_EQ(dateTime.GetAsRFC1123DateTime(), "Tue, 14 May 1991 04:34:56 GMT");
+  EXPECT_EQ(dateTime.GetAsW3CDateTime(false), "1991-05-14T12:34:56-08:00");
+  EXPECT_EQ(dateTime.GetAsW3CDateTime(true), "1991-05-14T04:34:56Z");
 }
 
 TEST_F(TestDateTime, GetAsLocalized)
@@ -373,7 +435,8 @@ TEST_F(TestDateTime, GetAsLocalized)
   // "DD. MMMM. YYYY",
   // "YYYY. MMMM. D"
 
-  ASSERT_TRUE(g_localizeStrings.Load(g_langInfo.GetLanguagePath(), "resource.language.en_gb"));
+  ASSERT_TRUE(CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Load(
+      g_langInfo.GetLanguagePath(), "resource.language.en_gb"));
 
   // 24 hour clock must be set before time format
   g_langInfo.Set24HourClock(false);
@@ -443,6 +506,64 @@ TEST_F(TestDateTime, GetAsLocalized)
   EXPECT_EQ(dateTime1.GetAsLocalizedTime(TIME_FORMAT(16)), "12");
   EXPECT_EQ(dateTime1.GetAsLocalizedTime(TIME_FORMAT(19)), "12:34:56");
   EXPECT_EQ(dateTime1.GetAsLocalizedTime(TIME_FORMAT(27)), "12:34:56 PM");
+
+  //Test abbreviated month and short year formats
+  CDateTime dateTime3;
+  dateTime3.SetDateTime(1991, 05, 9, 12, 34, 56); //Need a single digit date
+
+  g_langInfo.SetShortDateFormat("DD-mmm-YY");
+  g_langInfo.SetLongDateFormat("ddd, D MMMM YYYY");
+
+  //Actual formatted date
+  //Test short month name and 2 digit year.
+  EXPECT_EQ(dateTime3.GetAsLocalizedDate(false), "09-May-91");
+  //Test short day name and single digit day number.
+  EXPECT_EQ(dateTime3.GetAsLocalizedDate(true), "Thu, 9 May 1991");
+
+  //Test that the Python date formatting string is returned instead
+  //of the actual formatted date string.
+
+  CDateTime dateTime4;
+  dateTime4.SetDateTime(1991, 05, 9, 12, 34, 56); //Need a single digit date
+
+  //Test non zero-padded day and short month name.
+  EXPECT_EQ(
+      dateTime4.GetAsLocalizedDate(std::string("D-mmm-YY"), CDateTime::ReturnFormat::CHOICE_YES),
+      "%-d-%b-%y");
+  //Test NZP day and NZP month.
+  EXPECT_EQ(
+      dateTime4.GetAsLocalizedDate(std::string("D-M-YY"), CDateTime::ReturnFormat::CHOICE_YES),
+      "%-d-%-m-%y");
+
+  g_langInfo.SetShortDateFormat("D/M/YY");
+  g_langInfo.SetLongDateFormat("ddd, D MMMM YYYY");
+
+  //Test getRegion() here because it is directly reliant on GetAsLocalizedDate()
+  //and the windows-specific formatting happens in getRegion().
+#ifdef TARGET_WINDOWS
+  //Windows is handled differently because that's what ModuleXbmc.cpp does.
+  EXPECT_EQ(XBMCAddon::xbmc::getRegion("dateshort"), "%#d/%#m/%y");
+  EXPECT_EQ(XBMCAddon::xbmc::getRegion("datelong"), "%a, %#d %B %Y");
+#else
+  EXPECT_EQ(XBMCAddon::xbmc::getRegion("dateshort"), "%-d/%-m/%y");
+  EXPECT_EQ(XBMCAddon::xbmc::getRegion("datelong"), "%a, %-d %B %Y");
+#endif
+
+  //Test short day name, short month name and 2 digit year.
+  EXPECT_EQ(dateTime4.GetAsLocalizedDate(std::string("ddd, DD-mmm-YY"),
+                                         CDateTime::ReturnFormat::CHOICE_YES),
+            "%a, %d-%b-%y");
+  //Test as above but with 4 digit year.
+  EXPECT_EQ(dateTime4.GetAsLocalizedDate(std::string("ddd, DD-mmm-YYYY"),
+                                         CDateTime::ReturnFormat::CHOICE_YES),
+            "%a, %d-%b-%Y");
+  //Test some 'normal' DMY.
+  EXPECT_EQ(
+      dateTime4.GetAsLocalizedDate(std::string("DD/MM/YYYY"), CDateTime::ReturnFormat::CHOICE_YES),
+      "%d/%m/%Y");
+  EXPECT_EQ(
+      dateTime4.GetAsLocalizedDate(std::string("DD/MM/YY"), CDateTime::ReturnFormat::CHOICE_YES),
+      "%d/%m/%y");
 
   // not possible to use these three
   // EXPECT_EQ(dateTime1.GetAsLocalizedTime(TIME_FORMAT(32)), "");
@@ -551,42 +672,105 @@ TEST_F(TestDateTime, GetAsTime)
   EXPECT_TRUE(dateTime == time);
 }
 
-TEST_F(TestDateTime, GetAsTm)
+//! \brief Whether a rendered date can name the times below. CDateTime renders through gmtime_r on
+//! POSIX, so a 32-bit time_t cannot reach either of them, and only the round trip is assertable.
+constexpr bool RENDERS_BEYOND_32_BITS{sizeof(time_t) >= 8};
+
+TEST_F(TestDateTime, SecondsSinceEpoch)
 {
-  CDateTime dateTime;
-  dateTime.SetDateTime(1991, 05, 14, 12, 34, 56);
+  // 2200-01-01 00:00:00 UTC, past the unsigned 32-bit ceiling of 2106-02-07
+  constexpr int64_t seconds{7258118400};
 
-  tm time;
-  dateTime.GetAsTm(time);
+  const CDateTime dateTime{CDateTime::FromSecondsSinceEpoch(seconds)};
 
-  EXPECT_TRUE(dateTime == time);
+  EXPECT_TRUE(dateTime.IsValid());
+  EXPECT_EQ(seconds, dateTime.GetAsSecondsSinceEpoch());
+
+  if constexpr (RENDERS_BEYOND_32_BITS)
+  {
+    EXPECT_EQ("2200-01-01 00:00:00", dateTime.GetAsDBDateTime());
+  }
 }
 
-// Disabled pending std::chrono and std::date changes.
-TEST_F(TestDateTime, DISABLED_GetAsTimeStamp)
+TEST_F(TestDateTime, SecondsSinceEpochOutOfRange)
 {
-  CDateTimeSpan bias = CDateTime::GetTimezoneBias();
+  // a count read out of a database column can be anything, and one this size overflows the
+  // conversion rather than naming a time
+  EXPECT_FALSE(CDateTime::FromSecondsSinceEpoch(9000000000000000000).IsValid());
+  EXPECT_FALSE(CDateTime::FromSecondsSinceEpoch(-9000000000000000000).IsValid());
 
+  // the ends of the range the conversion does hold
+  EXPECT_TRUE(CDateTime::FromSecondsSinceEpoch(-11644473600).IsValid());
+  EXPECT_TRUE(CDateTime::FromSecondsSinceEpoch(910692730085).IsValid());
+}
+
+TEST_F(TestDateTime, SecondsSinceEpochBeforeTheEpoch)
+{
+  constexpr int64_t seconds{-2208988800}; // 1900-01-01 00:00:00 UTC
+
+  const CDateTime dateTime{CDateTime::FromSecondsSinceEpoch(seconds)};
+
+  EXPECT_TRUE(dateTime.IsValid());
+  EXPECT_EQ(seconds, dateTime.GetAsSecondsSinceEpoch());
+
+  if constexpr (RENDERS_BEYOND_32_BITS)
+  {
+    EXPECT_EQ("1900-01-01 00:00:00", dateTime.GetAsDBDateTime());
+  }
+}
+
+TEST_F(TestDateTime, GetAsTm)
+{
+  {
+    CDateTime dateTime;
+    dateTime.SetDateTime(1991, 05, 14, 12, 34, 56);
+
+    tm time;
+    dateTime.GetAsTm(time);
+    EXPECT_TRUE(dateTime == time);
+  }
+
+  // same test but opposite daylight saving
+  {
+    CDateTime dateTime;
+    dateTime.SetDateTime(1991, 01, 14, 12, 34, 56);
+
+    tm time;
+    dateTime.GetAsTm(time);
+    EXPECT_TRUE(dateTime == time);
+  }
+}
+
+TEST_F(TestDateTime, GetAsTimeStamp)
+{
   CDateTime dateTime;
   dateTime.SetDateTime(1991, 05, 14, 12, 34, 56);
 
   KODI::TIME::FileTime fileTime;
   dateTime.GetAsTimeStamp(fileTime);
-  dateTime += bias;
+  dateTime += dateTime.GetTimezoneBias();
 
   EXPECT_TRUE(dateTime == fileTime);
 }
 
+TEST_F(TestDateTime, GetTimezoneBiasBefore1970)
+{
+  KODI::TIME::SystemTime time{};
+  time.year = 1969;
+  time.month = 12;
+  time.day = 31;
+
+  EXPECT_TRUE(std::get<0>(KODI::TIME::GetTimezoneBias(time)));
+}
+
 TEST_F(TestDateTime, GetAsUTCDateTime)
 {
-  CDateTimeSpan bias = CDateTime::GetTimezoneBias();
-
   CDateTime dateTime1;
   dateTime1.SetDateTime(1991, 05, 14, 12, 34, 56);
 
   CDateTime dateTime2;
   dateTime2 = dateTime1.GetAsUTCDateTime();
-  dateTime2 -= bias;
+  dateTime2 -= dateTime1.GetTimezoneBias();
 
   EXPECT_EQ(dateTime2.GetYear(), 1991);
   EXPECT_EQ(dateTime2.GetMonth(), 5);
@@ -596,19 +780,14 @@ TEST_F(TestDateTime, GetAsUTCDateTime)
   EXPECT_EQ(dateTime2.GetSecond(), 56);
 }
 
-// disabled on osx and freebsd as their mktime functions
-// don't work for dates before 1900
-#if defined(TARGET_DARWIN_OSX) || defined(TARGET_FREEBSD)
-TEST_F(TestDateTime, DISABLED_Reset)
-#else
 TEST_F(TestDateTime, Reset)
-#endif
 {
   CDateTime dateTime;
   dateTime.SetDateTime(1991, 05, 14, 12, 34, 56);
 
   dateTime.Reset();
 
+  EXPECT_FALSE(dateTime.IsValid());
   EXPECT_EQ(dateTime.GetYear(), 1601);
   EXPECT_EQ(dateTime.GetMonth(), 1);
   EXPECT_EQ(dateTime.GetDay(), 1);

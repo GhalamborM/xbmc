@@ -34,7 +34,6 @@ enum RenderOrder {
 };
 
 // forward
-class TiXmlNode;
 class TiXmlElement;
 class CXBMCTinyXML;
 class CVariant;
@@ -185,6 +184,11 @@ public:
    */
   void ClearProperties();
 
+  /*! \brief Retrieve names of all properties of this window
+   \return the property names
+   */
+  std::vector<std::string> GetPropertyNames() const;
+
 #ifdef _DEBUG
   void DumpTextureUse() override;
 #endif
@@ -192,7 +196,7 @@ public:
 
   virtual void OnDeinitWindow(int nextWindowID);
 protected:
-  EVENT_RESULT OnMouseEvent(const CPoint &point, const CMouseEvent &event) override;
+  EVENT_RESULT OnMouseEvent(const CPoint& point, const KODI::MOUSE::CMouseEvent& event) override;
 
   /*!
    \brief Load the window XML from the given path
@@ -210,10 +214,10 @@ protected:
 
   /*!
    \brief Prepare the XML for load
-   \param pRootElement the original XML element
+   \param rootElement the original XML element
    \return the prepared XML (resolved includes, constants and expression)
    */
-  virtual std::unique_ptr<TiXmlElement> Prepare(TiXmlElement *pRootElement);
+  virtual std::unique_ptr<TiXmlElement> Prepare(const std::unique_ptr<TiXmlElement>& rootElement);
 
   /*!
    \brief Check if window needs a (re)load. The window need to be (re)loaded when window is not loaded or include conditions values were changed
@@ -243,6 +247,9 @@ protected:
   RESOLUTION_INFO m_coordsRes; // resolution that the window coordinates are in.
   bool m_needsScaling;
   bool m_windowLoaded;  // true if the window's xml file has been loaded
+  //! bumped whenever the controls are cleared, so a control held across a call that may
+  //! destroy the tree can be told apart from one that is still alive
+  uint32_t m_controlsGeneration{0};
   LOAD_TYPE m_loadType;
   bool m_dynamicResourceAlloc;
   bool m_closing;
@@ -273,7 +280,10 @@ protected:
   CGUIAction m_loadActions;
   CGUIAction m_unloadActions;
 
-  TiXmlElement* m_windowXMLRootElement;
+  /*! \brief window root xml definition after resolving any skin includes.
+    Stored to avoid parsing the XML every time the window is loaded.
+   */
+  std::unique_ptr<TiXmlElement> m_windowXMLRootElement;
 
   bool m_manualRunActions;
 

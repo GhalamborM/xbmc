@@ -9,6 +9,9 @@
 #pragma once
 
 #include "IRetroPlayerStream.h"
+#include "cores/RetroPlayer/RetroPlayerTypes.h"
+
+#include <cstdint>
 
 extern "C"
 {
@@ -27,46 +30,67 @@ struct VideoStreamProperties : public StreamProperties
   VideoStreamProperties(AVPixelFormat pixfmt,
                         unsigned int nominalWidth,
                         unsigned int nominalHeight,
+                        float nominalDisplayAspectRatio,
                         unsigned int maxWidth,
-                        unsigned int maxHeight,
-                        float pixelAspectRatio)
+                        unsigned int maxHeight)
     : pixfmt(pixfmt),
       nominalWidth(nominalWidth),
       nominalHeight(nominalHeight),
+      nominalDisplayAspectRatio(nominalDisplayAspectRatio),
       maxWidth(maxWidth),
-      maxHeight(maxHeight),
-      pixelAspectRatio(pixelAspectRatio)
+      maxHeight(maxHeight)
   {
   }
 
   AVPixelFormat pixfmt;
   unsigned int nominalWidth;
   unsigned int nominalHeight;
+  float nominalDisplayAspectRatio;
   unsigned int maxWidth;
   unsigned int maxHeight;
-  float pixelAspectRatio;
 };
 
 struct VideoStreamBuffer : public StreamBuffer
 {
-  AVPixelFormat pixfmt;
-  uint8_t* data;
-  size_t size;
+  VideoStreamBuffer() = default;
+
+  VideoStreamBuffer(
+      AVPixelFormat pixfmt, uint8_t* data, size_t size, DataAccess access, DataAlignment alignment)
+    : pixfmt(pixfmt),
+      data(data),
+      size(size),
+      access(access),
+      alignment(alignment)
+  {
+  }
+
+  AVPixelFormat pixfmt{AV_PIX_FMT_NONE};
+  uint8_t* data{nullptr};
+  size_t size{0};
+  DataAccess access{DataAccess::READ_WRITE};
+  DataAlignment alignment{DataAlignment::DATA_UNALIGNED};
 };
 
 struct VideoStreamPacket : public StreamPacket
 {
   VideoStreamPacket(unsigned int width,
                     unsigned int height,
+                    float displayAspectRatio,
                     VideoRotation rotation,
                     const uint8_t* data,
                     size_t size)
-    : width(width), height(height), rotation(rotation), data(data), size(size)
+    : width(width),
+      height(height),
+      displayAspectRatio(displayAspectRatio),
+      rotation(rotation),
+      data(data),
+      size(size)
   {
   }
 
   unsigned int width;
   unsigned int height;
+  float displayAspectRatio;
   VideoRotation rotation;
   const uint8_t* data;
   size_t size;
@@ -83,6 +107,11 @@ public:
   CRetroPlayerVideo(CRPRenderManager& m_renderManager, CRPProcessInfo& m_processInfo);
   ~CRetroPlayerVideo() override;
 
+  /*!
+   * \brief Whether frames handed over are shown or thrown away
+   */
+  void Enable(bool bEnabled) { m_bVideoEnabled = bEnabled; }
+
   // implementation of IRetroPlayerStream
   bool OpenStream(const StreamProperties& properties) override;
   bool GetStreamBuffer(unsigned int width, unsigned int height, StreamBuffer& buffer) override;
@@ -96,6 +125,7 @@ private:
 
   // Stream properties
   bool m_bOpen = false;
+  bool m_bVideoEnabled = true;
 };
 } // namespace RETRO
 } // namespace KODI

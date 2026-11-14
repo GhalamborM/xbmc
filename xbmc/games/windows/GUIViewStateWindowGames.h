@@ -14,6 +14,9 @@ namespace KODI
 {
 namespace GAME
 {
+/*!
+ * \ingroup games
+ */
 class CGUIViewStateWindowGames : public CGUIViewState
 {
 public:
@@ -22,9 +25,9 @@ public:
   ~CGUIViewStateWindowGames() override = default;
 
   // implementation of CGUIViewState
-  std::string GetLockType() override;
+  std::optional<KODI::MEDIA::MediaSection> GetLockType() override;
   std::string GetExtensions() override;
-  VECSOURCES& GetSources() override;
+  std::vector<CMediaSource>& GetSources() override;
 
 protected:
   // implementation of CGUIViewState

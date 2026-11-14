@@ -10,30 +10,101 @@
 
 #include "File.h"
 #include "FileItem.h"
+#include "FileItemList.h"
 #include "ServiceBroker.h"
+#include "VideoDatabaseDirectory/DirectoryNode.h"
 #include "VideoDatabaseDirectory/QueryParams.h"
-#include "guilib/LocalizeStrings.h"
 #include "guilib/TextureManager.h"
+#include "resources/LocalizeStrings.h"
+#include "resources/ResourcesComponent.h"
 #include "settings/Settings.h"
 #include "settings/SettingsComponent.h"
+#include "utils/ArtTypes.h"
+#include "utils/ContentNames.h"
 #include "utils/Crc32.h"
+#include "utils/DefaultArt.h"
+#include "utils/ItemProperties.h"
 #include "utils/LegacyPathTranslation.h"
 #include "utils/StringUtils.h"
 #include "utils/URIUtils.h"
 #include "video/VideoDatabase.h"
+#include "video/VideoDbPaths.h"
 
 using namespace XFILE;
 using namespace VIDEODATABASEDIRECTORY;
+
+namespace CONTENT = KODI::MEDIA::CONTENT;
 
 CVideoDatabaseDirectory::CVideoDatabaseDirectory(void) = default;
 
 CVideoDatabaseDirectory::~CVideoDatabaseDirectory(void) = default;
 
+namespace
+{
+std::string GetChildContentType(const std::unique_ptr<CDirectoryNode>& node)
+{
+  switch (node->GetChildType())
+  {
+    case NodeType::EPISODES:
+    case NodeType::RECENTLY_ADDED_EPISODES:
+      return CONTENT::EPISODES;
+    case NodeType::SEASONS:
+      return CONTENT::SEASONS;
+    case NodeType::TITLE_MOVIES:
+    case NodeType::RECENTLY_ADDED_MOVIES:
+      return CONTENT::MOVIES;
+    case NodeType::TITLE_TVSHOWS:
+    case NodeType::INPROGRESS_TVSHOWS:
+      return CONTENT::TVSHOWS;
+    case NodeType::TITLE_MUSICVIDEOS:
+    case NodeType::RECENTLY_ADDED_MUSICVIDEOS:
+      return CONTENT::MUSICVIDEOS;
+    case NodeType::GENRE:
+      return CONTENT::GENRES;
+    case NodeType::COUNTRY:
+      return CONTENT::COUNTRIES;
+    case NodeType::ACTOR:
+    {
+      CQueryParams params;
+      node->CollectQueryParams(params);
+      if (static_cast<VideoDbContentType>(params.GetContentType()) ==
+          VideoDbContentType::MUSICVIDEOS)
+        return CONTENT::ARTISTS;
+
+      return CONTENT::ACTORS;
+    }
+    case NodeType::DIRECTOR:
+      return CONTENT::DIRECTORS;
+    case NodeType::STUDIO:
+      return CONTENT::STUDIOS;
+    case NodeType::YEAR:
+      return CONTENT::YEARS;
+    case NodeType::MUSICVIDEOS_ALBUM:
+      return CONTENT::ALBUMS;
+    case NodeType::SETS:
+      return CONTENT::SETS;
+    case NodeType::TAGS:
+      return CONTENT::TAGS;
+    case NodeType::VIDEOVERSIONS:
+    case NodeType::MOVIE_ASSETS_VERSIONS:
+      return CONTENT::VIDEOVERSIONS;
+    case NodeType::MOVIE_ASSETS_EXTRAS:
+      return CONTENT::VIDEOEXTRAS;
+    case NodeType::MOVIE_ASSETS:
+      return CONTENT::VIDEOASSETS;
+    default:
+      break;
+  }
+  return {};
+}
+
+} // unnamed namespace
+
 bool CVideoDatabaseDirectory::GetDirectory(const CURL& url, CFileItemList &items)
 {
   std::string path = CLegacyPathTranslation::TranslateVideoDbPath(url);
   items.SetPath(path);
-  items.m_dwSize = -1;  // No size
+  items.SetSize(-1); // No size
   std::unique_ptr<CDirectoryNode> pNode(CDirectoryNode::ParseURL(path));
 
   if (!pNode)
@@ -43,59 +114,62 @@ bool CVideoDatabaseDirectory::GetDirectory(const CURL& url, CFileItemList &items
   for (int i=0;i<items.Size();++i)
   {
     CFileItemPtr item = items[i];
-    if (item->m_bIsFolder && !item->HasArt("icon") && !item->HasArt("thumb"))
+    if (item->IsFolder() && !item->HasArt(KODI::ART::TYPE::ICON) &&
+        !item->HasArt(KODI::ART::TYPE::THUMB))
     {
       std::string strImage = GetIcon(item->GetPath());
       if (!strImage.empty() && CServiceBroker::GetGUI()->GetTextureManager().HasTexture(strImage))
-        item->SetArt("icon", strImage);
+        item->SetArt(KODI::ART::TYPE::ICON, strImage);
     }
-    if (item->GetVideoInfoTag())
+    if (item->HasVideoInfoTag())
     {
       item->SetDynPath(item->GetVideoInfoTag()->GetPath());
     }
   }
-  if (items.HasProperty("customtitle"))
-    items.SetLabel(items.GetProperty("customtitle").asString());
+  if (items.HasProperty(KODI::ITEM::PROPERTY::CUSTOM_TITLE))
+    items.SetLabel(items.GetProperty(KODI::ITEM::PROPERTY::CUSTOM_TITLE).asString());
   else
     items.SetLabel(pNode->GetLocalizedName());
+
+  items.SetContent(GetChildContentType(pNode));
 
   return bResult;
 }
 
-NODE_TYPE CVideoDatabaseDirectory::GetDirectoryChildType(const std::string& strPath)
+NodeType CVideoDatabaseDirectory::GetDirectoryChildType(const std::string& strPath)
 {
   std::string path = CLegacyPathTranslation::TranslateVideoDbPath(strPath);
   std::unique_ptr<CDirectoryNode> pNode(CDirectoryNode::ParseURL(path));
 
   if (!pNode)
-    return NODE_TYPE_NONE;
+    return NodeType::NONE;
 
   return pNode->GetChildType();
 }
 
-NODE_TYPE CVideoDatabaseDirectory::GetDirectoryType(const std::string& strPath)
+NodeType CVideoDatabaseDirectory::GetDirectoryType(const std::string& strPath)
 {
   std::string path = CLegacyPathTranslation::TranslateVideoDbPath(strPath);
   std::unique_ptr<CDirectoryNode> pNode(CDirectoryNode::ParseURL(path));
 
   if (!pNode)
-    return NODE_TYPE_NONE;
+    return NodeType::NONE;
 
   return pNode->GetType();
 }
 
-NODE_TYPE CVideoDatabaseDirectory::GetDirectoryParentType(const std::string& strPath)
+NodeType CVideoDatabaseDirectory::GetDirectoryParentType(const std::string& strPath)
 {
   std::string path = CLegacyPathTranslation::TranslateVideoDbPath(strPath);
   std::unique_ptr<CDirectoryNode> pNode(CDirectoryNode::ParseURL(path));
 
   if (!pNode)
-    return NODE_TYPE_NONE;
+    return NodeType::NONE;
 
-  CDirectoryNode* pParentNode=pNode->GetParent();
+  CDirectoryNode* pParentNode = pNode->GetParent();
 
   if (!pParentNode)
-    return NODE_TYPE_NONE;
+    return NodeType::NONE;
 
   return pParentNode->GetChildType();
 }
@@ -172,50 +246,85 @@ bool CVideoDatabaseDirectory::GetLabel(const std::string& strDirectory, std::str
     strLabel += strTemp;
   }
 
+  // get videoversions
+  if (params.GetVideoVersionId() != -1)
+    strLabel += videodatabase.GetVideoVersionById(params.GetVideoVersionId());
+
   if (strLabel.empty())
   {
     switch (pNode->GetChildType())
     {
-    case NODE_TYPE_TITLE_MOVIES:
-    case NODE_TYPE_TITLE_TVSHOWS:
-    case NODE_TYPE_TITLE_MUSICVIDEOS:
-      strLabel = g_localizeStrings.Get(369); break;
-    case NODE_TYPE_ACTOR: // Actor
-      strLabel = g_localizeStrings.Get(344); break;
-    case NODE_TYPE_GENRE: // Genres
-      strLabel = g_localizeStrings.Get(135); break;
-    case NODE_TYPE_COUNTRY: // Countries
-      strLabel = g_localizeStrings.Get(20451); break;
-    case NODE_TYPE_YEAR: // Year
-      strLabel = g_localizeStrings.Get(562); break;
-    case NODE_TYPE_DIRECTOR: // Director
-      strLabel = g_localizeStrings.Get(20348); break;
-    case NODE_TYPE_SETS: // Sets
-      strLabel = g_localizeStrings.Get(20434); break;
-    case NODE_TYPE_TAGS: // Tags
-      strLabel = g_localizeStrings.Get(20459); break;
-    case NODE_TYPE_MOVIES_OVERVIEW: // Movies
-      strLabel = g_localizeStrings.Get(342); break;
-    case NODE_TYPE_TVSHOWS_OVERVIEW: // TV Shows
-      strLabel = g_localizeStrings.Get(20343); break;
-    case NODE_TYPE_RECENTLY_ADDED_MOVIES: // Recently Added Movies
-      strLabel = g_localizeStrings.Get(20386); break;
-    case NODE_TYPE_RECENTLY_ADDED_EPISODES: // Recently Added Episodes
-      strLabel = g_localizeStrings.Get(20387); break;
-    case NODE_TYPE_STUDIO: // Studios
-      strLabel = g_localizeStrings.Get(20388); break;
-    case NODE_TYPE_MUSICVIDEOS_OVERVIEW: // Music Videos
-      strLabel = g_localizeStrings.Get(20389); break;
-    case NODE_TYPE_RECENTLY_ADDED_MUSICVIDEOS: // Recently Added Music Videos
-      strLabel = g_localizeStrings.Get(20390); break;
-    case NODE_TYPE_SEASONS: // Seasons
-      strLabel = g_localizeStrings.Get(33054); break;
-    case NODE_TYPE_EPISODES: // Episodes
-      strLabel = g_localizeStrings.Get(20360); break;
-    case NODE_TYPE_INPROGRESS_TVSHOWS: // InProgress TvShows
-      strLabel = g_localizeStrings.Get(626); break;
-    default:
-      return false;
+      case NodeType::TITLE_MOVIES:
+      case NodeType::TITLE_TVSHOWS:
+      case NodeType::TITLE_MUSICVIDEOS:
+        strLabel = CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(369);
+        break;
+      case NodeType::ACTOR: // Actor
+        strLabel = CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(344);
+        break;
+      case NodeType::GENRE: // Genres
+        strLabel = CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(135);
+        break;
+      case NodeType::COUNTRY: // Countries
+        strLabel = CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(20451);
+        break;
+      case NodeType::YEAR: // Year
+        strLabel = CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(562);
+        break;
+      case NodeType::DIRECTOR: // Director
+        strLabel = CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(20348);
+        break;
+      case NodeType::SETS: // Sets
+        strLabel = CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(20434);
+        break;
+      case NodeType::TAGS: // Tags
+        strLabel = CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(20459);
+        break;
+      case NodeType::VIDEOVERSIONS: // Video versions
+        strLabel = CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(40000);
+        break;
+      case NodeType::MOVIES_OVERVIEW: // Movies
+        strLabel = CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(342);
+        break;
+      case NodeType::TVSHOWS_OVERVIEW: // TV Shows
+        strLabel = CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(20343);
+        break;
+      case NodeType::RECENTLY_ADDED_MOVIES: // Recently Added Movies
+        strLabel = CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(20386);
+        break;
+      case NodeType::RECENTLY_ADDED_EPISODES: // Recently Added Episodes
+        strLabel = CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(20387);
+        break;
+      case NodeType::STUDIO: // Studios
+        strLabel = CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(20388);
+        break;
+      case NodeType::MUSICVIDEOS_OVERVIEW: // Music Videos
+        strLabel = CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(20389);
+        break;
+      case NodeType::RECENTLY_ADDED_MUSICVIDEOS: // Recently Added Music Videos
+        strLabel = CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(20390);
+        break;
+      case NodeType::SEASONS: // Seasons
+        strLabel = CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(33054);
+        break;
+      case NodeType::EPISODES: // Episodes
+        strLabel = CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(20360);
+        break;
+      case NodeType::INPROGRESS_TVSHOWS: // InProgress TvShows
+        strLabel = CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(626);
+        break;
+      case NodeType::MOVIE_ASSETS: // Video assets
+        strLabel = CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(40209);
+        break;
+      case NodeType::MOVIE_ASSETS_VERSIONS: // Video versions
+        strLabel = CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(40210);
+        break;
+      case NodeType::MOVIE_ASSETS_EXTRAS: // Video extras
+        strLabel = CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(40211);
+        break;
+
+      default:
+        return false;
     }
   }
 
@@ -227,64 +336,69 @@ std::string CVideoDatabaseDirectory::GetIcon(const std::string &strDirectory)
   std::string path = CLegacyPathTranslation::TranslateVideoDbPath(strDirectory);
   switch (GetDirectoryChildType(path))
   {
-  case NODE_TYPE_TITLE_MOVIES:
-    if (URIUtils::PathEquals(path, "videodb://movies/titles/"))
-    {
-      if (CServiceBroker::GetSettingsComponent()->GetSettings()->GetBool(CSettings::SETTING_MYVIDEOS_FLATTEN))
-        return "DefaultMovies.png";
-      return "DefaultMovieTitle.png";
-    }
-    return "";
-  case NODE_TYPE_TITLE_TVSHOWS:
-    if (URIUtils::PathEquals(path, "videodb://tvshows/titles/"))
-    {
-      if (CServiceBroker::GetSettingsComponent()->GetSettings()->GetBool(CSettings::SETTING_MYVIDEOS_FLATTEN))
-        return "DefaultTVShows.png";
-      return "DefaultTVShowTitle.png";
-    }
-    return "";
-  case NODE_TYPE_TITLE_MUSICVIDEOS:
-    if (URIUtils::PathEquals(path, "videodb://musicvideos/titles/"))
-    {
-      if (CServiceBroker::GetSettingsComponent()->GetSettings()->GetBool(CSettings::SETTING_MYVIDEOS_FLATTEN))
-        return "DefaultMusicVideos.png";
-      return "DefaultMusicVideoTitle.png";
-    }
-    return "";
-  case NODE_TYPE_ACTOR: // Actor
-    return "DefaultActor.png";
-  case NODE_TYPE_GENRE: // Genres
-    return "DefaultGenre.png";
-  case NODE_TYPE_COUNTRY: // Countries
-    return "DefaultCountry.png";
-  case NODE_TYPE_SETS: // Sets
-    return "DefaultSets.png";
-  case NODE_TYPE_TAGS: // Tags
-    return "DefaultTags.png";
-  case NODE_TYPE_YEAR: // Year
-    return "DefaultYear.png";
-  case NODE_TYPE_DIRECTOR: // Director
-    return "DefaultDirector.png";
-  case NODE_TYPE_MOVIES_OVERVIEW: // Movies
-    return "DefaultMovies.png";
-  case NODE_TYPE_TVSHOWS_OVERVIEW: // TV Shows
-    return "DefaultTVShows.png";
-  case NODE_TYPE_RECENTLY_ADDED_MOVIES: // Recently Added Movies
-    return "DefaultRecentlyAddedMovies.png";
-  case NODE_TYPE_RECENTLY_ADDED_EPISODES: // Recently Added Episodes
-    return "DefaultRecentlyAddedEpisodes.png";
-  case NODE_TYPE_RECENTLY_ADDED_MUSICVIDEOS: // Recently Added Episodes
-    return "DefaultRecentlyAddedMusicVideos.png";
-  case NODE_TYPE_INPROGRESS_TVSHOWS: // InProgress TvShows
-    return "DefaultInProgressShows.png";
-  case NODE_TYPE_STUDIO: // Studios
-    return "DefaultStudios.png";
-  case NODE_TYPE_MUSICVIDEOS_OVERVIEW: // Music Videos
-    return "DefaultMusicVideos.png";
-  case NODE_TYPE_MUSICVIDEOS_ALBUM: // Music Videos - Albums
-    return "DefaultMusicAlbums.png";
-  default:
-    break;
+    case NodeType::TITLE_MOVIES:
+      if (URIUtils::PathEquals(path, KODI::VIDEO::DB_PATH::MOVIE_TITLES))
+      {
+        if (CServiceBroker::GetSettingsComponent()->GetSettings()->GetBool(
+                CSettings::SETTING_MYVIDEOS_FLATTEN))
+          return KODI::ART::DEFAULT::MOVIES;
+        return KODI::ART::DEFAULT::MOVIE_TITLE;
+      }
+      return "";
+    case NodeType::TITLE_TVSHOWS:
+      if (URIUtils::PathEquals(path, KODI::VIDEO::DB_PATH::TVSHOW_TITLES))
+      {
+        if (CServiceBroker::GetSettingsComponent()->GetSettings()->GetBool(
+                CSettings::SETTING_MYVIDEOS_FLATTEN))
+          return KODI::ART::DEFAULT::TV_SHOWS;
+        return KODI::ART::DEFAULT::TV_SHOW_TITLE;
+      }
+      return "";
+    case NodeType::TITLE_MUSICVIDEOS:
+      if (URIUtils::PathEquals(path, KODI::VIDEO::DB_PATH::MUSICVIDEO_TITLES))
+      {
+        if (CServiceBroker::GetSettingsComponent()->GetSettings()->GetBool(
+                CSettings::SETTING_MYVIDEOS_FLATTEN))
+          return KODI::ART::DEFAULT::MUSIC_VIDEOS;
+        return KODI::ART::DEFAULT::MUSIC_VIDEO_TITLE;
+      }
+      return "";
+    case NodeType::ACTOR: // Actor
+      return KODI::ART::DEFAULT::ACTOR;
+    case NodeType::GENRE: // Genres
+      return KODI::ART::DEFAULT::GENRE;
+    case NodeType::COUNTRY: // Countries
+      return KODI::ART::DEFAULT::COUNTRY;
+    case NodeType::SETS: // Sets
+      return KODI::ART::DEFAULT::SETS;
+    case NodeType::TAGS: // Tags
+      return KODI::ART::DEFAULT::TAGS;
+    case NodeType::VIDEOVERSIONS: // Video versions
+      return KODI::ART::DEFAULT::VIDEO_VERSIONS;
+    case NodeType::YEAR: // Year
+      return KODI::ART::DEFAULT::YEAR;
+    case NodeType::DIRECTOR: // Director
+      return KODI::ART::DEFAULT::DIRECTOR;
+    case NodeType::MOVIES_OVERVIEW: // Movies
+      return KODI::ART::DEFAULT::MOVIES;
+    case NodeType::TVSHOWS_OVERVIEW: // TV Shows
+      return KODI::ART::DEFAULT::TV_SHOWS;
+    case NodeType::RECENTLY_ADDED_MOVIES: // Recently Added Movies
+      return KODI::ART::DEFAULT::RECENTLY_ADDED_MOVIES;
+    case NodeType::RECENTLY_ADDED_EPISODES: // Recently Added Episodes
+      return KODI::ART::DEFAULT::RECENTLY_ADDED_EPISODES;
+    case NodeType::RECENTLY_ADDED_MUSICVIDEOS: // Recently Added Episodes
+      return KODI::ART::DEFAULT::RECENTLY_ADDED_MUSIC_VIDEOS;
+    case NodeType::INPROGRESS_TVSHOWS: // InProgress TvShows
+      return KODI::ART::DEFAULT::IN_PROGRESS_SHOWS;
+    case NodeType::STUDIO: // Studios
+      return KODI::ART::DEFAULT::STUDIOS;
+    case NodeType::MUSICVIDEOS_OVERVIEW: // Music Videos
+      return KODI::ART::DEFAULT::MUSIC_VIDEOS;
+    case NodeType::MUSICVIDEOS_ALBUM: // Music Videos - Albums
+      return KODI::ART::DEFAULT::MUSIC_ALBUMS;
+    default:
+      break;
   }
 
   return "";
@@ -292,8 +406,10 @@ std::string CVideoDatabaseDirectory::GetIcon(const std::string &strDirectory)
 
 bool CVideoDatabaseDirectory::ContainsMovies(const std::string &path)
 {
-  VIDEODATABASEDIRECTORY::NODE_TYPE type = GetDirectoryChildType(path);
-  if (type == VIDEODATABASEDIRECTORY::NODE_TYPE_TITLE_MOVIES || type == VIDEODATABASEDIRECTORY::NODE_TYPE_EPISODES || type == VIDEODATABASEDIRECTORY::NODE_TYPE_TITLE_MUSICVIDEOS) return true;
+  const auto type = GetDirectoryChildType(path);
+  if (type == NodeType::TITLE_MOVIES || type == NodeType::EPISODES ||
+      type == NodeType::TITLE_MUSICVIDEOS || type == NodeType::VIDEOVERSIONS)
+    return true;
   return false;
 }
 
@@ -305,7 +421,7 @@ bool CVideoDatabaseDirectory::Exists(const CURL& url)
   if (!pNode)
     return false;
 
-  if (pNode->GetChildType() == VIDEODATABASEDIRECTORY::NODE_TYPE_NONE)
+  if (pNode->GetChildType() == NodeType::NONE)
     return false;
 
   return true;

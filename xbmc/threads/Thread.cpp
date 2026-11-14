@@ -1,31 +1,52 @@
 /*
  *  Copyright (c) 2002 Frodo
  *      Portions Copyright (c) by the authors of ffmpeg and xvid
- *  Copyright (C) 2002-2018 Team Kodi
+ *  Copyright (C) 2002-2026 Team Kodi
  *  This file is part of Kodi - https://kodi.tv
  *
  *  SPDX-License-Identifier: GPL-2.0-or-later
  *  See LICENSES/README.md for more information.
  */
 
-#define __STDC_FORMAT_MACROS
-
 #include "Thread.h"
-#include "IRunnable.h"
 
+#include "IRunnable.h"
 #include "commons/Exception.h"
+#include "threads/IThreadImpl.h"
 #include "threads/SingleLock.h"
 #include "utils/log.h"
 
 #include <atomic>
 #include <inttypes.h>
 #include <iostream>
+#include <mutex>
 #include <stdlib.h>
 
-static thread_local CThread* currentThread;
+#include <fmt/format.h>
+#if FMT_VERSION >= 90000
+#include <fmt/ostream.h>
+#endif
 
-// This is including .cpp code so should be after the other #includes
-#include "threads/platform/ThreadImpl.cpp"
+#if FMT_VERSION >= 90000
+template<>
+struct fmt::formatter<std::thread::id> : ostream_formatter
+{
+};
+#else
+template<>
+struct fmt::formatter<std::thread::id> : fmt::formatter<std::string>
+{
+  template<class FormatContext>
+  auto format(const std::thread::id& e, FormatContext& ctx)
+  {
+    std::ostringstream str;
+    str << e;
+    return fmt::formatter<std::string>::format(str.str(), ctx);
+  }
+};
+#endif
+
+static thread_local CThread* currentThread;
 
 //////////////////////////////////////////////////////////////////////
 // Construction/Destruction
@@ -82,10 +103,9 @@ void CThread::Create(bool bAutoDelete)
   m_StartEvent.Reset();
 
   // lock?
-  //CSingleLock l(m_CriticalSection);
+  //std::unique_lock l(m_CriticalSection);
 
   std::promise<bool> prom;
-  m_future = prom.get_future();
 
   {
     // The std::thread internals must be set prior to the lambda doing
@@ -93,7 +113,9 @@ void CThread::Create(bool bAutoDelete)
     //   is fully initialized. Interestingly, using a std::atomic doesn't
     //   have the appropriate memory barrier behavior to accomplish the
     //   same thing so a full system mutex needs to be used.
-    CSingleLock blockLambdaTillDone(m_CriticalSection);
+    std::unique_lock blockLambdaTillDone(m_CriticalSection);
+    m_future = prom.get_future().share();
+    ++m_threadGeneration;
     m_thread = new std::thread([](CThread* pThread, std::promise<bool> promise)
     {
       try
@@ -105,15 +127,12 @@ void CThread::Create(bool bAutoDelete)
           // lambda's call stack prior to the thread that kicked off this lambda
           // having it set. Once this lock is released, the CThread::Create function
           // that kicked this off is done so everything should be set.
-          CSingleLock waitForThreadInternalsToBeSet(pThread->m_CriticalSection);
+          std::unique_lock waitForThreadInternalsToBeSet(pThread->m_CriticalSection);
         }
 
         // This is used in various helper methods like GetCurrentThread so it needs
         // to be set before anything else is done.
         currentThread = pThread;
-
-        std::string name;
-        bool autodelete;
 
         if (pThread == nullptr)
         {
@@ -122,36 +141,26 @@ void CThread::Create(bool bAutoDelete)
           return;
         }
 
-        name = pThread->m_ThreadName;
+        pThread->m_impl = IThreadImpl::CreateThreadImpl(pThread->m_thread->native_handle());
+        pThread->m_impl->SetThreadInfo(pThread->m_ThreadName);
 
-        std::stringstream ss;
-        ss << std::this_thread::get_id();
-        std::string id = ss.str();
-        autodelete = pThread->m_bAutoDelete;
-
-        pThread->SetThreadInfo();
-
-        CLog::Log(LOGDEBUG, "Thread {} start, auto delete: {}", name,
-                  (autodelete ? "true" : "false"));
+        CLog::Log(LOGDEBUG, "Thread {} start, auto delete: {}", pThread->m_ThreadName,
+                  (pThread->m_bAutoDelete ? "true" : "false"));
 
         pThread->m_StartEvent.Set();
 
         pThread->Action();
 
-        // lock during termination
+        if (pThread->m_bAutoDelete)
         {
-          CSingleLock lock(pThread->m_CriticalSection);
-          pThread->TermHandler();
-        }
-
-        if (autodelete)
-        {
-          CLog::Log(LOGDEBUG, "Thread {} {} terminating (autodelete)", name, id);
+          CLog::Log(LOGDEBUG, "Thread {} {} terminating (autodelete)", pThread->m_ThreadName,
+                    std::this_thread::get_id());
           delete pThread;
           pThread = NULL;
         }
         else
-          CLog::Log(LOGDEBUG, "Thread {} {} terminating", name, id);
+          CLog::Log(LOGDEBUG, "Thread {} {} terminating", pThread->m_ThreadName,
+                    std::this_thread::get_id());
       }
       catch (const std::exception& e)
       {
@@ -184,6 +193,21 @@ bool CThread::IsRunning() const
     return false;
 }
 
+bool CThread::SetPriority(const ThreadPriority& priority)
+{
+  return m_impl->SetPriority(priority);
+}
+
+bool CThread::SetTask(const ThreadTask& task)
+{
+  return m_impl->SetTask(task);
+}
+
+bool CThread::RevertTask()
+{
+  return m_impl->RevertTask();
+}
+
 bool CThread::IsAutoDelete() const
 {
   return m_bAutoDelete;
@@ -195,14 +219,23 @@ void CThread::StopThread(bool bWait /*= true*/)
 
   m_bStop = true;
   m_StopEvent.Set();
-  CSingleLock lock(m_CriticalSection);
+  std::unique_lock lock(m_CriticalSection);
   std::thread* lthread = m_thread;
+  const uint64_t generation = m_threadGeneration;
+  const std::shared_future<bool> future = m_future;
   if (lthread != nullptr && bWait && !IsCurrentThread())
   {
-    lock.Leave();
-    if (!Join(std::chrono::milliseconds::max())) // eh?
-      lthread->join();
-    m_thread = nullptr;
+    lock.unlock();
+    future.wait();
+    lock.lock();
+    // a concurrent StopThread() may already have joined and deleted it, or restarted the thread
+    if (m_thread == lthread && m_threadGeneration == generation)
+    {
+      if (lthread->joinable())
+        lthread->join();
+      m_thread = nullptr;
+      delete lthread;
+    }
   }
 }
 
@@ -226,14 +259,12 @@ CThread* CThread::GetCurrentThread()
   return currentThread;
 }
 
-void CThread::TermHandler()
-{
-}
-
 bool CThread::Join(std::chrono::milliseconds duration)
 {
-  CSingleLock l(m_CriticalSection);
+  std::unique_lock l(m_CriticalSection);
   std::thread* lthread = m_thread;
+  const uint64_t generation = m_threadGeneration;
+  const std::shared_future<bool> future = m_future;
   if (lthread != nullptr)
   {
     if (IsCurrentThread())
@@ -241,14 +272,21 @@ bool CThread::Join(std::chrono::milliseconds duration)
 
     {
       CSingleExit exit(m_CriticalSection); // don't hold the thread lock while we're waiting
-      std::future_status stat = m_future.wait_for(duration);
-      if (stat != std::future_status::ready)
+      // wait_for() overflows on a max() timeout and returns immediately
+      if (duration == std::chrono::milliseconds::max())
+        future.wait();
+      else if (future.wait_for(duration) != std::future_status::ready)
         return false;
     }
 
-    // it's possible it's already joined since we released the lock above.
-    if (lthread->joinable())
-      m_thread->join();
+    // restarted by Create() while we waited, so the replacement thread is still running
+    if (m_threadGeneration != generation)
+      return false;
+
+    // it's possible it's already joined and deleted by StopThread() since we released the lock
+    // above.
+    if (m_thread == lthread && lthread->joinable())
+      lthread->join();
     return true;
   }
   else

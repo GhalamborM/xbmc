@@ -25,7 +25,7 @@ extern "C"
   /// @brief Denotes that no provider uid is available.
   ///
   /// Special @ref kodi::addon::PVRChannel::SetClientProviderUid()
-  #define PVR_PROVIDER_INVALID_UID -1
+#define PVR_PROVIDER_INVALID_UID -1
   //----------------------------------------------------------------------------
 
   //============================================================================
@@ -33,7 +33,7 @@ extern "C"
   /// @brief Separator to use in strings containing different tokens, for example
   /// country and language.
   ///
-  #define PROVIDER_STRING_TOKEN_SEPARATOR ","
+#define PROVIDER_STRING_TOKEN_SEPARATOR ","
 
   //============================================================================
   /// @defgroup cpp_kodi_addon_pvr_Defs_Channel_PVR_PROVIDER_TYPE enum PVR_PROVIDER_TYPE
@@ -79,15 +79,15 @@ extern "C"
   typedef struct PVR_PROVIDER
   {
     unsigned int iUniqueId;
-    char strName[PVR_ADDON_NAME_STRING_LENGTH];
+    const char* strName;
     enum PVR_PROVIDER_TYPE type;
-    char strIconPath[PVR_ADDON_URL_STRING_LENGTH];
+    const char* strIconPath;
     //! @brief ISO 3166 country codes, separated by PROVIDER_STRING_TOKEN_SEPARATOR
     /// (e.g 'GB,IE,FR,CA'), an empty string means this value is undefined
-    char strCountries[PVR_ADDON_COUNTRIES_STRING_LENGTH];
+    const char* strCountries;
     //! @brief RFC 5646 language codes, separated by PROVIDER_STRING_TOKEN_SEPARATOR
-    /// (e.g. 'en_GB,fr_CA'), an empty string means this value is undefined
-    char strLanguages[PVR_ADDON_LANGUAGES_STRING_LENGTH];
+    /// (e.g. 'en-GB,fr-CA'), an empty string means this value is undefined
+    const char* strLanguages;
   } PVR_PROVIDER;
 
 #ifdef __cplusplus

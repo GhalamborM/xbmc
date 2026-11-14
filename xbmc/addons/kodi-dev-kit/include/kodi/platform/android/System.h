@@ -46,8 +46,8 @@ class ATTR_DLL_LOCAL CInterfaceAndroidSystem
 {
 public:
   CInterfaceAndroidSystem()
-    : m_interface(static_cast<AddonToKodiFuncTable_android_system*>(
-          GetInterface(INTERFACE_ANDROID_SYSTEM_NAME, INTERFACE_ANDROID_SYSTEM_VERSION)))
+    : m_interface(static_cast<AddonToKodiFuncTable_android_system*>(kodi::addon::GetInterface(
+          INTERFACE_ANDROID_SYSTEM_NAME, INTERFACE_ANDROID_SYSTEM_VERSION)))
   {
   }
 
@@ -86,7 +86,8 @@ public:
 
   //============================================================================
   /// @ingroup cpp_kodi_platform_CInterfaceAndroidSystem
-  /// @brief Request the android main class name e.g. <b>`org.xbmc.kodi`</b>.
+  /// @brief Request the android main class name using the internal slash notation
+  /// format e.g. <b>`org/xbmc/kodi`</b>.
   ///
   /// @return package class name
   ///

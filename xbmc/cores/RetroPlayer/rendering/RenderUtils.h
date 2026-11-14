@@ -9,9 +9,7 @@
 #pragma once
 
 #include "cores/GameSettings.h"
-#include "utils/Geometry.h"
-
-#include <array>
+#include "cores/RetroPlayer/RetroPlayerTypes.h"
 
 namespace KODI
 {
@@ -36,8 +34,26 @@ public:
 
   static void ClipRect(const CRect& viewRect, CRect& sourceRect, CRect& destRect);
 
-  static std::array<CPoint, 4> ReorderDrawPoints(const CRect& destRect,
-                                                 unsigned int orientationDegCCW);
+  static void CropSource(CRect& sourceRect,
+                         unsigned int rotationDegCCW,
+                         float viewWidth,
+                         float viewHeight,
+                         float sourceWidth,
+                         float sourceHeight,
+                         float destWidth,
+                         float destHeight);
+
+  static ViewportCoordinates ReorderDrawPoints(const CRect& destRect,
+                                               unsigned int orientationDegCCW);
+
+  /*!
+   * \brief Get the width a frame is shown at for its height
+   *
+   * \param displayAspectRatio The frame's display aspect ratio, or 0 for square pixels
+   */
+  static unsigned int GetDisplayWidth(unsigned int width,
+                                      unsigned int height,
+                                      float displayAspectRatio);
 };
 } // namespace RETRO
 } // namespace KODI

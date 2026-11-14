@@ -41,14 +41,14 @@ struct StyleRecord
   uint16_t fontID;
   uint8_t faceStyleFlags; // FaceStyleFlag
   uint8_t fontSize;
-  UTILS::COLOR::Color textColorARGB;
+  KODI::UTILS::COLOR::Color textColorARGB;
   unsigned int textColorAlphaCh;
 };
 
 constexpr uint32_t BOX_TYPE_UUID = StreamUtils::MakeFourCC('u', 'u', 'i', 'd');
 constexpr uint32_t BOX_TYPE_STYL = StreamUtils::MakeFourCC('s', 't', 'y', 'l'); // TextStyleBox
 
-void ConvertStyleToTags(std::string& strUTF8, StyleRecord& style, bool closingTags)
+void ConvertStyleToTags(std::string& strUTF8, const StyleRecord& style, bool closingTags)
 {
   if (style.faceStyleFlags & BOLD)
     strUTF8.append(closingTags ? "{\\b0}" : "{\\b1}");
@@ -56,13 +56,13 @@ void ConvertStyleToTags(std::string& strUTF8, StyleRecord& style, bool closingTa
     strUTF8.append(closingTags ? "{\\i0}" : "{\\i1}");
   if (style.faceStyleFlags & UNDERLINE)
     strUTF8.append(closingTags ? "{\\u0}" : "{\\u1}");
-  if (style.textColorARGB != UTILS::COLOR::WHITE)
+  if (style.textColorARGB != KODI::UTILS::COLOR::WHITE)
   {
     if (closingTags)
       strUTF8 += "{\\c}";
     else
     {
-      UTILS::COLOR::Color color = UTILS::COLOR::ConvertToBGR(style.textColorARGB);
+      KODI::UTILS::COLOR::Color color = KODI::UTILS::COLOR::ConvertToBGR(style.textColorARGB);
       strUTF8 += StringUtils::Format("{{\\c&H{:06x}&}}", color);
     }
   }
@@ -81,28 +81,14 @@ CDVDOverlayCodecTX3G::CDVDOverlayCodecTX3G() : CDVDOverlayCodec("TX3G Subtitle D
 {
 }
 
-CDVDOverlayCodecTX3G::~CDVDOverlayCodecTX3G()
-{
-  Dispose();
-}
-
 bool CDVDOverlayCodecTX3G::Open(CDVDStreamInfo& hints, CDVDCodecOptions& options)
 {
   if (hints.codec != AV_CODEC_ID_MOV_TEXT)
     return false;
 
-  Dispose();
+  m_pOverlay.reset();
 
   return Initialize();
-}
-
-void CDVDOverlayCodecTX3G::Dispose()
-{
-  if (m_pOverlay)
-  {
-    m_pOverlay->Release();
-    m_pOverlay = nullptr;
-  }
 }
 
 OverlayMessage CDVDOverlayCodecTX3G::Decode(DemuxPacket* pPacket)
@@ -151,7 +137,7 @@ OverlayMessage CDVDOverlayCodecTX3G::Decode(DemuxPacket* pPacket)
     else if (boxType == BOX_TYPE_STYL)
     {
       // Parse the contained StyleRecords
-      if (styleRecords.size() != 0)
+      if (!styleRecords.empty())
       {
         CLog::Log(LOGDEBUG, "{} - Found additional TextStyleBox, skipping", __FUNCTION__);
         sampleData.SkipChars(boxSize - MP4_BOX_HEADER_SIZE);
@@ -168,7 +154,8 @@ OverlayMessage CDVDOverlayCodecTX3G::Decode(DemuxPacket* pPacket)
       // Get the data of each style record
       // Each style is ordered by starting character offset, and the starting
       // offset of one style record shall be greater than or equal to the
-      // ending character offset of the preceding record.
+      // ending character offset of the preceding record,
+      // styles records shall not overlap their character ranges.
       for (int i = 0; i < styleCount; i++)
       {
         if (sampleData.CharsLeft() < 12)
@@ -184,7 +171,8 @@ OverlayMessage CDVDOverlayCodecTX3G::Decode(DemuxPacket* pPacket)
         styleRec.fontID = sampleData.ReadNextUnsignedShort();
         styleRec.faceStyleFlags = sampleData.ReadNextUnsignedChar();
         styleRec.fontSize = sampleData.ReadNextUnsignedChar();
-        styleRec.textColorARGB = UTILS::COLOR::ConvertToARGB(sampleData.ReadNextUnsignedInt());
+        styleRec.textColorARGB =
+            KODI::UTILS::COLOR::ConvertToARGB(sampleData.ReadNextUnsignedInt());
         styleRec.textColorAlphaCh = (styleRec.textColorARGB & 0xFF000000) >> 24;
         // clamp bgnChar/bgnChar to textLength, we alloc enough space above and
         // this fixes broken encoders that do not handle endChar correctly.
@@ -192,6 +180,10 @@ OverlayMessage CDVDOverlayCodecTX3G::Decode(DemuxPacket* pPacket)
           styleRec.startChar = textLength;
         if (styleRec.endChar > textLength)
           styleRec.endChar = textLength;
+
+        // Skip zero-length style
+        if (styleRec.startChar == styleRec.endChar)
+          continue;
 
         styleRecords.emplace_back(styleRec);
       }
@@ -219,17 +211,21 @@ OverlayMessage CDVDOverlayCodecTX3G::Decode(DemuxPacket* pPacket)
       continue; // ...without incrementing 'charIndex'
     }
 
-    if (styleIndex < styleRecords.size())
+    // Go through styles, a style can end where another one begins
+    while (styleIndex < styleRecords.size())
     {
-      if (styleRecords[styleIndex].endChar == charIndex)
+      if (styleRecords[styleIndex].startChar == charIndex)
+      {
+        ConvertStyleToTags(strUTF8, styleRecords[styleIndex], false);
+        break;
+      }
+      else if (styleRecords[styleIndex].endChar == charIndex)
       {
         ConvertStyleToTags(strUTF8, styleRecords[styleIndex], true);
         styleIndex++;
       }
-      if (styleRecords[styleIndex].startChar == charIndex)
-      {
-        ConvertStyleToTags(strUTF8, styleRecords[styleIndex], false);
-      }
+      else
+        break;
     }
 
     if (*curPos == '{') // erase unsupported tags
@@ -262,25 +258,19 @@ void CDVDOverlayCodecTX3G::PostProcess(std::string& text)
 
 void CDVDOverlayCodecTX3G::Reset()
 {
-  Dispose();
   Flush();
 }
 
 void CDVDOverlayCodecTX3G::Flush()
 {
-  if (m_pOverlay)
-  {
-    m_pOverlay->Release();
-    m_pOverlay = nullptr;
-  }
-
+  m_pOverlay.reset();
   FlushSubtitles();
 }
 
-CDVDOverlay* CDVDOverlayCodecTX3G::GetOverlay()
+std::shared_ptr<CDVDOverlay> CDVDOverlayCodecTX3G::GetOverlay()
 {
   if (m_pOverlay)
     return nullptr;
   m_pOverlay = CreateOverlay();
-  return m_pOverlay->Acquire();
+  return m_pOverlay;
 }

@@ -2,39 +2,25 @@
 # -----------
 # Finds the libxkbcommon library
 #
-# This will define the following variables::
+# This will define the following target:
 #
-# XKBCOMMON_FOUND        - the system has libxkbcommon
-# XKBCOMMON_INCLUDE_DIRS - the libxkbcommon include directory
-# XKBCOMMON_LIBRARIES    - the libxkbcommon libraries
+#   ${APP_NAME_LC}::Xkbcommon   - The libxkbcommon library
 
-if(PKG_CONFIG_FOUND)
-  pkg_check_modules(PC_XKBCOMMON xkbcommon QUIET)
-endif()
+if(NOT TARGET ${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME})
 
+  include(cmake/scripts/common/ModuleHelpers.cmake)
 
-find_path(XKBCOMMON_INCLUDE_DIR NAMES xkbcommon/xkbcommon.h
-                           PATHS ${PC_XKBCOMMON_INCLUDEDIR})
-find_library(XKBCOMMON_LIBRARY NAMES xkbcommon
-                          PATHS ${PC_XKBCOMMON_LIBDIR})
+  set(${CMAKE_FIND_PACKAGE_NAME}_MODULE_LC xkbcommon)
 
-set(XKBCOMMON_VERSION ${PC_XKBCOMMON_VERSION})
+  set(${${CMAKE_FIND_PACKAGE_NAME}_MODULE_LC}_DISABLE_VERSION ON)
 
-include(FindPackageHandleStandardArgs)
-find_package_handle_standard_args(Xkbcommon
-                                  REQUIRED_VARS XKBCOMMON_LIBRARY XKBCOMMON_INCLUDE_DIR
-                                  VERSION_VAR XKBCOMMON_VERSION)
+  SETUP_BUILD_VARS()
 
-if(XKBCOMMON_FOUND)
-  set(XKBCOMMON_INCLUDE_DIRS ${XKBCOMMON_INCLUDE_DIR})
-  set(XKBCOMMON_LIBRARIES ${XKBCOMMON_LIBRARY})
+  SETUP_FIND_SPECS()
 
-  if(NOT TARGET XKBCOMMON::XKBCOMMON)
-    add_library(XKBCOMMON::XKBCOMMON UNKNOWN IMPORTED)
-    set_target_properties(XKBCOMMON::XKBCOMMON PROPERTIES
-                                     IMPORTED_LOCATION "${XKBCOMMON_LIBRARY}"
-                                     INTERFACE_INCLUDE_DIRECTORIES "${XKBCOMMON_INCLUDE_DIR}")
+  SEARCH_EXISTING_PACKAGES()
+
+  if(${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME}_FOUND)
+    add_library(${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME} ALIAS PkgConfig::${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME})
   endif()
 endif()
-
-mark_as_advanced(XKBCOMMON_INCLUDE_DIR XKBCOMMON_LIBRARY)

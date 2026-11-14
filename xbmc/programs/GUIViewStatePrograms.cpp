@@ -8,26 +8,36 @@
 
 #include "GUIViewStatePrograms.h"
 
-#include "FileItem.h"
+#include "FileItemList.h"
 #include "ServiceBroker.h"
-#include "filesystem/Directory.h"
-#include "guilib/LocalizeStrings.h"
-#include "guilib/TextureManager.h"
 #include "guilib/WindowIDs.h"
 #include "settings/MediaSourceSettings.h"
 #include "settings/Settings.h"
 #include "settings/SettingsComponent.h"
+#include "utils/DefaultArt.h"
 #include "view/ViewState.h"
+#include "view/ViewStateNames.h"
 #include "view/ViewStateSettings.h"
 
+#ifdef TARGET_ANDROID
+#include "guilib/TextureManager.h"
+#include "resources/LocalizeStrings.h"
+#include "resources/ResourcesComponent.h"
+#endif
+
 using namespace XFILE;
+using KODI::MEDIA::MediaSection;
 
 CGUIViewStateWindowPrograms::CGUIViewStateWindowPrograms(const CFileItemList& items) : CGUIViewState(items)
 {
-  AddSortMethod(SortByLabel, 551, LABEL_MASKS("%K", "%I", "%L", ""),  // Title, Size | Foldername, empty
-    CServiceBroker::GetSettingsComponent()->GetSettings()->GetBool(CSettings::SETTING_FILELISTS_IGNORETHEWHENSORTING) ? SortAttributeIgnoreArticle : SortAttributeNone);
+  AddSortMethod(SortBy::LABEL, 551,
+                LABEL_MASKS("%K", "%I", "%L", ""), // Title, Size | Foldername, empty
+                CServiceBroker::GetSettingsComponent()->GetSettings()->GetBool(
+                    CSettings::SETTING_FILELISTS_IGNORETHEWHENSORTING)
+                    ? SortAttributeIgnoreArticle
+                    : SortAttributeNone);
 
-  const CViewState *viewState = CViewStateSettings::GetInstance().Get("programs");
+  const CViewState* viewState = CViewStateSettings::GetInstance().Get(KODI::VIEW::STATE::PROGRAMS);
   SetSortMethod(viewState->m_sortDescription);
   SetViewAsControl(viewState->m_viewMode);
   SetSortOrder(viewState->m_sortDescription.sortOrder);
@@ -37,12 +47,13 @@ CGUIViewStateWindowPrograms::CGUIViewStateWindowPrograms(const CFileItemList& it
 
 void CGUIViewStateWindowPrograms::SaveViewState()
 {
-  SaveViewToDb(m_items.GetPath(), WINDOW_PROGRAMS, CViewStateSettings::GetInstance().Get("programs"));
+  SaveViewToDb(m_items.GetPath(), WINDOW_PROGRAMS,
+               CViewStateSettings::GetInstance().Get(KODI::VIEW::STATE::PROGRAMS));
 }
 
-std::string CGUIViewStateWindowPrograms::GetLockType()
+std::optional<KODI::MEDIA::MediaSection> CGUIViewStateWindowPrograms::GetLockType()
 {
-  return "programs";
+  return KODI::MEDIA::MediaSection::PROGRAMS;
 }
 
 std::string CGUIViewStateWindowPrograms::GetExtensions()
@@ -50,24 +61,24 @@ std::string CGUIViewStateWindowPrograms::GetExtensions()
   return ".cut";
 }
 
-VECSOURCES& CGUIViewStateWindowPrograms::GetSources()
+std::vector<CMediaSource>& CGUIViewStateWindowPrograms::GetSources()
 {
-  AddAddonsSource("executable", g_localizeStrings.Get(1043), "DefaultAddonProgram.png");
 #if defined(TARGET_ANDROID)
   {
     CMediaSource source;
     source.strPath = "androidapp://sources/apps/";
-    source.strName = g_localizeStrings.Get(20244);
-    if (CServiceBroker::GetGUI()->GetTextureManager().HasTexture("DefaultProgram.png"))
-      source.m_strThumbnailImage = "DefaultProgram.png";
-    source.m_iDriveType = CMediaSource::SOURCE_TYPE_LOCAL;
+    source.strName = CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(20244);
+    if (CServiceBroker::GetGUI()->GetTextureManager().HasTexture(KODI::ART::DEFAULT::PROGRAM))
+      source.m_strThumbnailImage = KODI::ART::DEFAULT::PROGRAM;
+    source.m_iDriveType = SourceType::LOCAL;
     source.m_ignore = true;
     m_sources.emplace_back(std::move(source));
   }
 #endif
 
-  VECSOURCES *programSources = CMediaSourceSettings::GetInstance().GetSources("programs");
-  AddOrReplace(*programSources, CGUIViewState::GetSources());
-  return *programSources;
+  std::vector<CMediaSource>& programSources =
+      CMediaSourceSettings::GetInstance().GetSources(MediaSection::PROGRAMS);
+  AddOrReplace(programSources, CGUIViewState::GetSources());
+  return programSources;
 }
 

@@ -8,6 +8,8 @@
 
 #pragma once
 
+#include "cores/RetroPlayer/RetroPlayerTypes.h"
+
 extern "C"
 {
 #include <libavutil/pixfmt.h>
@@ -32,6 +34,8 @@ public:
   virtual void Acquire(std::shared_ptr<IRenderBufferPool> pool) = 0;
   virtual void Release() = 0;
   virtual IRenderBufferPool* GetPool() = 0;
+  virtual DataAccess GetMemoryAccess() const = 0;
+  virtual DataAlignment GetMemoryAlignment() const = 0;
 
   // Buffer functions
   virtual bool Allocate(AVPixelFormat format, unsigned int width, unsigned int height) = 0;
@@ -39,6 +43,7 @@ public:
   virtual size_t GetFrameSize() const = 0;
   virtual uint8_t* GetMemory() = 0;
   virtual void ReleaseMemory() {}
+  virtual uintptr_t GetCurrentFramebuffer() = 0;
   virtual bool UploadTexture() = 0;
   virtual void BindToUnit(unsigned int unit) {}
   virtual void SetHeader(void* header) {}
@@ -47,10 +52,22 @@ public:
   AVPixelFormat GetFormat() const { return m_format; }
   unsigned int GetWidth() const { return m_width; }
   unsigned int GetHeight() const { return m_height; }
+  void SetSize(unsigned int width, unsigned int height)
+  {
+    m_width = width;
+    m_height = height;
+  }
   bool IsLoaded() const { return m_bLoaded; }
   void SetLoaded(bool bLoaded) { m_bLoaded = bLoaded; }
   bool IsRendered() const { return m_bRendered; }
   void SetRendered(bool bRendered) { m_bRendered = bRendered; }
+
+  // Video properties
+  virtual float GetDisplayAspectRatio() const { return m_displayAspectRatio; }
+  void SetDisplayAspectRatio(float displayAspectRatio)
+  {
+    m_displayAspectRatio = displayAspectRatio;
+  }
   unsigned int GetRotation() const { return m_rotationDegCCW; }
   void SetRotation(unsigned int rotationDegCCW) { m_rotationDegCCW = rotationDegCCW; }
 
@@ -60,6 +77,7 @@ protected:
   unsigned int m_height = 0;
   bool m_bLoaded = false;
   bool m_bRendered = false;
+  float m_displayAspectRatio{0.0f}; // 0.0f means square pixels
   unsigned int m_rotationDegCCW = 0;
 };
 } // namespace RETRO

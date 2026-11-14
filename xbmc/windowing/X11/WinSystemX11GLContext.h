@@ -10,11 +10,14 @@
 
 #include "WinSystemX11.h"
 #include "rendering/gl/RenderSystemGL.h"
-#include "system_egl.h"
+#include "windowing/X11/GLContext.h"
 
 #include <memory>
 
+#include "system_egl.h"
+
 class CGLContext;
+class CVideoReferenceClock;
 
 namespace KODI
 {
@@ -42,11 +45,12 @@ public:
   bool SetFullScreen(bool fullScreen, RESOLUTION_INFO& res, bool blankOtherDisplays) override;
   bool DestroyWindowSystem() override;
   bool DestroyWindow() override;
+  int GetBufferAge() override { return m_bufferAgeSupport ? m_pGLContext->GetBufferAge() : 2; }
 
   bool IsExtSupported(const char* extension) const override;
 
   // videosync
-  std::unique_ptr<CVideoSync> GetVideoSync(void *clock) override;
+  std::unique_ptr<CVideoSync> GetVideoSync(CVideoReferenceClock* clock) override;
   float GetFrameLatencyAdjustment() override;
   uint64_t GetVblankTiming(uint64_t &msc, uint64_t &interval);
 
@@ -57,11 +61,16 @@ public:
   EGLContext GetEGLContext() const;
   EGLConfig GetEGLConfig() const;
 
+  bool BindTextureUploadContext() override;
+  bool UnbindTextureUploadContext() override;
+  bool HasContext() override;
+
 protected:
   bool SetWindow(int width, int height, bool fullscreen, const std::string &output, int *winstate = NULL) override;
   void PresentRenderImpl(bool rendered) override;
   void SetVSyncImpl(bool enable) override;
-  bool RefreshGLContext(bool force);
+  bool RefreshGLContext(
+      bool force, int width, int height, bool fullscreen, const std::string& output);
   XVisualInfo* GetVisual() override;
 
   CGLContext *m_pGLContext = nullptr;
@@ -72,6 +81,8 @@ protected:
     void operator()(CVaapiProxy *p) const;
   };
   std::unique_ptr<CVaapiProxy, delete_CVaapiProxy> m_vaapiProxy;
+
+  bool m_bufferAgeSupport{false};
 };
 
 }

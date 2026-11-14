@@ -12,13 +12,8 @@
 #include "threads/CriticalSection.h"
 #include "utils/ColorUtils.h"
 
-#include <string>
-#ifdef HAS_DX
-#include "guilib/GUIShaderDX.h"
-#include <wrl/client.h>
-#endif
-
 #include <memory>
+#include <string>
 
 class CTexture;
 
@@ -35,8 +30,10 @@ public:
     int length = 0;
   };
 
+  static std::unique_ptr<CSlideShowPic> CreateSlideShowPicture();
+
   CSlideShowPic();
-  ~CSlideShowPic();
+  virtual ~CSlideShowPic();
 
   void SetTexture(int iSlideNumber,
                   std::unique_ptr<CTexture> pTexture,
@@ -53,7 +50,8 @@ public:
   DISPLAY_EFFECT DisplayEffect() const { return m_displayEffect; }
   bool DisplayEffectNeedChange(DISPLAY_EFFECT newDispEffect) const;
   bool IsStarted() const { return m_iCounter > 0; }
-  bool IsFinished() const { return m_bIsFinished; }
+  bool IsFinished() const;
+  bool IsAnimating() const;
   bool DrawNextImage() const { return m_bDrawNextImage; }
 
   int GetWidth() const { return (int)m_fWidth; }
@@ -68,6 +66,7 @@ public:
 
   void Zoom(float fZoomAmount, bool immediate = false);
   void Rotate(float fRotateAngle, bool immediate = false);
+  void UpdateAlpha();
   void Pause(bool bPause);
   void SetInSlideshow(bool slideshow);
   void SetOriginalSize(int iOriginalWidth, int iOriginalHeight, bool bFullSize);
@@ -81,26 +80,29 @@ public:
   bool m_bIsComic;
   bool m_bCanMoveHorizontally;
   bool m_bCanMoveVertically;
+
+protected:
+  virtual void Render(float* x, float* y, CTexture* pTexture, KODI::UTILS::COLOR::Color color) = 0;
+
 private:
   void SetTexture_Internal(int iSlideNumber,
                            std::unique_ptr<CTexture> pTexture,
                            DISPLAY_EFFECT dispEffect = EFFECT_RANDOM,
                            TRANSITION_EFFECT transEffect = FADEIN_FADEOUT);
   void UpdateVertices(float cur_x[4], float cur_y[4], const float new_x[4], const float new_y[4], CDirtyRegionList &dirtyregions);
-  void Render(float* x, float* y, CTexture* pTexture, UTILS::COLOR::Color color);
+
   std::unique_ptr<CTexture> m_pImage;
 
   int m_iOriginalWidth;
   int m_iOriginalHeight;
   int m_iSlideNumber;
   bool m_bIsLoaded;
-  bool m_bIsFinished;
   bool m_bDrawNextImage;
   bool m_bIsDirty;
   std::string m_strFileName;
   float m_fWidth;
   float m_fHeight;
-  UTILS::COLOR::Color m_alpha = 0;
+  KODI::UTILS::COLOR::Color m_alpha = 0;
   // stuff relative to middle position
   float m_fPosX;
   float m_fPosY;
@@ -111,10 +113,10 @@ private:
   float m_fZoomAmount;
   float m_fZoomLeft;
   float m_fZoomTop;
-  float m_ax[4], m_ay[4];
-  float m_sx[4], m_sy[4];
-  float m_bx[4], m_by[4];
-  float m_ox[4], m_oy[4];
+  float m_ax[4]{}, m_ay[4]{};
+  float m_sx[4]{}, m_sy[4]{};
+  float m_bx[4]{}, m_by[4]{};
+  float m_ox[4]{}, m_oy[4]{};
 
   // transition and display effects
   DISPLAY_EFFECT m_displayEffect = EFFECT_NONE;
@@ -132,8 +134,4 @@ private:
   bool m_bTransitionImmediately;
 
   CCriticalSection m_textureAccess;
-#ifdef HAS_DX
-  Microsoft::WRL::ComPtr<ID3D11Buffer> m_vb;
-  bool UpdateVertexBuffer(Vertex *vertices);
-#endif
 };

@@ -21,6 +21,7 @@ namespace XbmcThreads
    *   lock();
    *   try_lock();
    *   unlock();
+   *   IsLocked();
    *
    * "Exitable" specifically means that, no matter how deep the recursion
    * on the mutex/critical section, we can exit from it and then restore
@@ -49,6 +50,12 @@ namespace XbmcThreads
     inline void lock() { mutex.lock(); count++; }
     inline bool try_lock() { return mutex.try_lock() ? count++, true : false; }
     inline void unlock() { count--; mutex.unlock(); }
+
+    /*!
+     * \brief Check if have a lock owned
+     * \return True if have a lock, otherwise false
+     */
+    inline bool IsLocked() const { return count > 0; }
 
     /**
      * This implements the "exitable" behavior mentioned above.
@@ -96,69 +103,5 @@ namespace XbmcThreads
      */
     inline L& get_underlying() { return mutex; }
   };
-
-
-  /**
-   * This template can be used to define the base implementation for any UniqueLock
-   * (such as CSingleLock) that uses a Lockable as its mutex/critical section.
-   */
-  template<typename L> class UniqueLock
-  {
-    UniqueLock(const UniqueLock&) = delete;
-    UniqueLock& operator=(const UniqueLock&) = delete;
-  protected:
-    L& mutex;
-    bool owns;
-    inline explicit UniqueLock(L& lockable) : mutex(lockable), owns(true) { mutex.lock(); }
-    inline UniqueLock(L& lockable, bool try_to_lock_discrim ) : mutex(lockable) { owns = mutex.try_lock(); }
-    inline ~UniqueLock() { if (owns) mutex.unlock(); }
-
-  public:
-
-    inline bool owns_lock() const { return owns; }
-
-    //This also implements lockable
-    inline void lock() { mutex.lock(); owns=true; }
-    inline bool try_lock() { return (owns = mutex.try_lock()); }
-    inline void unlock() { if (owns) { mutex.unlock(); owns=false; } }
-
-    /**
-     * See the note on the same method on CountingLockable
-     */
-    inline L& get_underlying() { return mutex; }
-  };
-
-  /**
-   * This template can be used to define the base implementation for any SharedLock
-   * (such as CSharedLock) that uses a Shared Lockable as its mutex/critical section.
-   *
-   * Something that implements the "Shared Lockable" concept has all of the methods
-   * required by the Lockable concept and also:
-   *
-   * void lock_shared();
-   * bool try_lock_shared();
-   * void unlock_shared();
-   */
-  template<typename L> class SharedLock
-  {
-    SharedLock(const SharedLock&) = delete;
-    SharedLock& operator=(const SharedLock&) = delete;
-  protected:
-    L& mutex;
-    bool owns;
-    inline explicit SharedLock(L& lockable) : mutex(lockable), owns(true) { mutex.lock_shared(); }
-    inline ~SharedLock() { if (owns) mutex.unlock_shared(); }
-
-    inline bool owns_lock() const { return owns; }
-    inline void lock() { mutex.lock_shared(); owns = true; }
-    inline bool try_lock() { return (owns = mutex.try_lock_shared()); }
-    inline void unlock() { if (owns) mutex.unlock_shared(); owns = false; }
-
-    /**
-     * See the note on the same method on CountingLockable
-     */
-    inline L& get_underlying() { return mutex; }
-  };
-
 
 }

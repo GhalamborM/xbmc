@@ -13,12 +13,15 @@
 #include "UPnPDirectory.h"
 
 #include "FileItem.h"
+#include "FileItemList.h"
 #include "ServiceBroker.h"
 #include "URL.h"
 #include "network/upnp/UPnP.h"
 #include "network/upnp/UPnPInternal.h"
 #include "settings/Settings.h"
 #include "settings/SettingsComponent.h"
+#include "utils/ArtTypes.h"
+#include "utils/ContentNames.h"
 #include "utils/StringUtils.h"
 #include "utils/URIUtils.h"
 #include "utils/log.h"
@@ -29,6 +32,8 @@
 using namespace MUSIC_INFO;
 using namespace XFILE;
 using namespace UPNP;
+
+namespace CONTENT = KODI::MEDIA::CONTENT;
 
 namespace XFILE
 {
@@ -41,19 +46,19 @@ static std::string GetContentMapping(NPT_String& objectClass)
         const char* Content;
     };
     static const SClassMapping mapping[] = {
-          { "object.item.videoItem.videoBroadcast"                  , "episodes"      }
-        , { "object.item.videoItem.musicVideoClip"                  , "musicvideos"  }
-        , { "object.item.videoItem"                                 , "movies"       }
-        , { "object.item.audioItem.musicTrack"                      , "songs"        }
-        , { "object.item.audioItem"                                 , "songs"        }
-        , { "object.item.imageItem.photo"                           , "photos"       }
-        , { "object.item.imageItem"                                 , "photos"       }
-        , { "object.container.album.videoAlbum.videoBroadcastShow"  , "tvshows"      }
-        , { "object.container.album.videoAlbum.videoBroadcastSeason", "seasons"      }
-        , { "object.container.album.musicAlbum"                     , "albums"       }
-        , { "object.container.album.photoAlbum"                     , "photos"       }
-        , { "object.container.album"                                , "albums"       }
-        , { "object.container.person"                               , "artists"      }
+          { "object.item.videoItem.videoBroadcast"                  , CONTENT::EPISODES      }
+        , { "object.item.videoItem.musicVideoClip"                  , CONTENT::MUSICVIDEOS  }
+        , { "object.item.videoItem"                                 , CONTENT::MOVIES       }
+        , { "object.item.audioItem.musicTrack"                      , CONTENT::SONGS        }
+        , { "object.item.audioItem"                                 , CONTENT::SONGS        }
+        , { "object.item.imageItem.photo"                           , CONTENT::PHOTOS       }
+        , { "object.item.imageItem"                                 , CONTENT::PHOTOS       }
+        , { "object.container.album.videoAlbum.videoBroadcastShow"  , CONTENT::TVSHOWS      }
+        , { "object.container.album.videoAlbum.videoBroadcastSeason", CONTENT::SEASONS      }
+        , { "object.container.album.musicAlbum"                     , CONTENT::ALBUMS       }
+        , { "object.container.album.photoAlbum"                     , CONTENT::PHOTOS       }
+        , { "object.container.album"                                , CONTENT::ALBUMS       }
+        , { "object.container.person"                               , CONTENT::ARTISTS      }
         , { NULL                                                    , NULL           }
     };
     for(const SClassMapping* map = mapping; map->ObjectClass; map++)
@@ -64,7 +69,7 @@ static std::string GetContentMapping(NPT_String& objectClass)
           break;
         }
     }
-    return "unknown";
+    return CONTENT::UNKNOWN;
 }
 
 static bool FindDeviceWait(CUPnP* upnp, const char* uuid, PLT_DeviceDataReference& device)
@@ -102,14 +107,13 @@ static bool FindDeviceWait(CUPnP* upnp, const char* uuid, PLT_DeviceDataReferenc
 /*----------------------------------------------------------------------
 |   CUPnPDirectory::GetFriendlyName
 +---------------------------------------------------------------------*/
-const char*
-CUPnPDirectory::GetFriendlyName(const CURL& url)
+std::string CUPnPDirectory::GetFriendlyName(const CURL& url)
 {
     NPT_String path = url.Get().c_str();
     if (!path.EndsWith("/")) path += "/";
 
     if (path.Left(7).Compare("upnp://", true) != 0) {
-        return NULL;
+      return {};
     } else if (path.Compare("upnp://", true) == 0) {
         return "UPnP Media Servers (Auto-Discover)";
     }
@@ -117,7 +121,7 @@ CUPnPDirectory::GetFriendlyName(const CURL& url)
     // look for nextslash
     int next_slash = path.Find('/', 7);
     if (next_slash == -1)
-        return NULL;
+      return {};
 
     NPT_String uuid = path.SubString(7, next_slash-7);
     NPT_String object_id = path.SubString(next_slash+1, path.GetLength()-next_slash-2);
@@ -125,9 +129,9 @@ CUPnPDirectory::GetFriendlyName(const CURL& url)
     // look for device
     PLT_DeviceDataReference device;
     if(!FindDeviceWait(CUPnP::GetInstance(), uuid, device))
-        return NULL;
+      return {};
 
-    return (const char*)device->GetFriendlyName();
+    return device->GetFriendlyName().GetChars();
 }
 
 /*----------------------------------------------------------------------
@@ -187,7 +191,7 @@ CUPnPDirectory::GetDirectory(const CURL& url, CFileItemList &items)
     CUPnP* upnp = CUPnP::GetInstance();
 
     /* upnp should never be cached, it has internal cache */
-    items.SetCacheToDisc(CFileItemList::CACHE_NEVER);
+    items.SetCacheToDisc(CFileItemList::CacheType::NEVER);
 
     // We accept upnp://devuuid/[item_id/]
     NPT_String path = url.Get().c_str();
@@ -205,12 +209,13 @@ CUPnPDirectory::GetDirectory(const CURL& url, CFileItemList &items)
             NPT_String name = (*device)->GetFriendlyName();
             NPT_String uuid = (*device)->GetUUID();
 
-            CFileItemPtr pItem(new CFileItem((const char*)name));
-            pItem->SetPath(std::string((const char*) "upnp://" + uuid + "/"));
-            pItem->m_bIsFolder = true;
-            pItem->SetArt("thumb", (const char*)(*device)->GetIconUrl("image/png"));
+            auto pItem{std::make_shared<CFileItem>(static_cast<const char*>(name))};
+            pItem->SetPath(static_cast<const char*>("upnp://" + uuid + "/"));
+            pItem->SetFolder(true);
+            pItem->SetArt(KODI::ART::TYPE::THUMB,
+                          static_cast<const char*>((*device)->GetIconUrl("image/png")));
 
-            items.Add(pItem);
+            items.Add(std::move(pItem));
 
             ++device;
         }
@@ -306,16 +311,6 @@ CUPnPDirectory::GetDirectory(const CURL& url, CFileItemList &items)
                 continue;
             }
 
-            // never show empty containers in media views
-            if((*entry)->IsContainer()) {
-                if( (audio || video || image)
-                 && ((PLT_MediaContainer*)(*entry))->m_ChildrenCount == 0) {
-                    ++entry;
-                    continue;
-                }
-            }
-
-
             // keep count of classes
             classes[(*entry)->m_ObjectClass.type]++;
             CFileItemPtr pItem = BuildObject(*entry, UPnPClient);
@@ -326,13 +321,13 @@ CUPnPDirectory::GetDirectory(const CURL& url, CFileItemList &items)
 
             std::string id;
             if ((*entry)->m_ReferenceID.IsEmpty())
-                id = (const char*) (*entry)->m_ObjectID;
+              id = static_cast<const char*>((*entry)->m_ObjectID);
             else
-                id = (const char*) (*entry)->m_ReferenceID;
+              id = static_cast<const char*>((*entry)->m_ReferenceID);
 
             id = CURL::Encode(id);
             URIUtils::AddSlashAtEnd(id);
-            pItem->SetPath(std::string((const char*) "upnp://" + uuid + "/" + id.c_str()));
+            pItem->SetPath(static_cast<const char*>("upnp://" + uuid + "/" + id.c_str()));
 
             items.Add(pItem);
 
@@ -351,12 +346,13 @@ CUPnPDirectory::GetDirectory(const CURL& url, CFileItemList &items)
         }
         std::string content = GetContentMapping(max_string);
         items.SetContent(content);
-        if (content == "unknown")
+        if (content == CONTENT::UNKNOWN)
         {
-          items.AddSortMethod(SortByNone, 571, LABEL_MASKS("%L", "%I", "%L", ""));
-          items.AddSortMethod(SortByLabel, SortAttributeIgnoreFolders, 551, LABEL_MASKS("%L", "%I", "%L", ""));
-          items.AddSortMethod(SortBySize, 553, LABEL_MASKS("%L", "%I", "%L", "%I"));
-          items.AddSortMethod(SortByDate, 552, LABEL_MASKS("%L", "%J", "%L", "%J"));
+          items.AddSortMethod(SortBy::NONE, 571, LABEL_MASKS("%L", "%I", "%L", ""));
+          items.AddSortMethod(SortBy::LABEL, SortAttributeIgnoreFolders, 551,
+                              LABEL_MASKS("%L", "%I", "%L", ""));
+          items.AddSortMethod(SortBy::SIZE, 553, LABEL_MASKS("%L", "%I", "%L", "%I"));
+          items.AddSortMethod(SortBy::DATE, 552, LABEL_MASKS("%L", "%J", "%L", "%J"));
         }
     }
 
@@ -366,4 +362,9 @@ cleanup:
 failure:
     return false;
 }
+}
+
+bool CUPnPDirectory::Resolve(CFileItem& item) const
+{
+  return GetResource(item.GetURL(), item);
 }

@@ -3,46 +3,121 @@
 # -----------
 # Finds the LCMS Color Management library
 #
-# This will define the following variables::
+# This will define the following target:
 #
-# LCMS2_FOUND - system has LCMS Color Management
-# LCMS2_INCLUDE_DIRS - the LCMS Color Management include directory
-# LCMS2_LIBRARIES - the LCMS Color Management libraries
-# LCMS2_DEFINITIONS - the LCMS Color Management definitions
-#
-# and the following imported targets::
-#
-#   LCMS2::LCMS2   - The LCMS Color Management library
+#   ${APP_NAME_LC}::LCMS2 - The LCMS Color Management library
+#   LIBRARY::LCMS2 - ALIAS target for the LCMS Color Management library
 
-if(PKG_CONFIG_FOUND)
-  pkg_check_modules(PC_LCMS2 lcms2>=2.10 QUIET)
-endif()
+if(NOT TARGET ${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME})
 
-find_path(LCMS2_INCLUDE_DIR NAMES lcms2.h
-                            PATHS ${PC_LCMS2_INCLUDEDIR})
-find_library(LCMS2_LIBRARY NAMES lcms2 liblcms2
-                           PATHS ${PC_LCMS2_LIBDIR})
+  include(cmake/scripts/common/ModuleHelpers.cmake)
 
-set(LCMS2_VERSION ${PC_LCMS2_VERSION})
+  macro(buildmacroLCMS2)
+    # Build tools
+    find_package(Meson REQUIRED)
+    find_package(Ninja REQUIRED)
 
-include(FindPackageHandleStandardArgs)
-find_package_handle_standard_args(LCMS2
-                                  REQUIRED_VARS LCMS2_LIBRARY LCMS2_INCLUDE_DIR
-                                  VERSION_VAR LCMS2_VERSION)
+    if(WIN32 OR WINDOWS_STORE)
+      set(${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_libType shared)
+      set(${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_SHARED_LIB TRUE)
+      list(APPEND ${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_EXTRA_ARGS -Dversionedlibs=false)
 
-if(LCMS2_FOUND)
-  set(LCMS2_LIBRARIES ${LCMS2_LIBRARY})
-  set(LCMS2_INCLUDE_DIRS ${LCMS2_INCLUDE_DIR})
-  set(LCMS2_DEFINITIONS -DHAVE_LCMS2=1 -DCMS_NO_REGISTER_KEYWORD=1)
+      if(WINDOWS_STORE)
+        set(${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_EXE_LINKER_FLAGS "/APPCONTAINER WindowsApp.lib")
+      endif()
 
-  if(NOT TARGET LCMS2::LCMS2)
-    add_library(LCMS2::LCMS2 UNKNOWN IMPORTED)
-    set_target_properties(LCMS2::LCMS2 PROPERTIES
-                                       IMPORTED_LOCATION "${LCMS2_LIBRARY}"
-                                       INTERFACE_INCLUDE_DIRECTORIES "${LCMS2_INCLUDE_DIR}"
-                                       INTERFACE_COMPILE_DEFINITIONS HAVE_LCMS2=1)
+      create_module_dev_env()
+    else()
+      set(${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_libType static)
+    endif()
+
+    # generate meson cross file for build target
+    generate_mesoncrossfile()
+
+    if(EXISTS ${DEPENDS_PATH}/share/${${CMAKE_FIND_PACKAGE_NAME}_MODULE_LC}-cross-file.meson)
+      set(${${CMAKE_FIND_PACKAGE_NAME}_MODULE_LC}_CROSS_FILE --cross-file=${DEPENDS_PATH}/share/${${CMAKE_FIND_PACKAGE_NAME}_MODULE_LC}-cross-file.meson)
+    elseif(EXISTS ${DEPENDS_PATH}/share/cross-file.meson)
+      set(${${CMAKE_FIND_PACKAGE_NAME}_MODULE_LC}_CROSS_FILE --cross-file=${DEPENDS_PATH}/share/cross-file.meson)
+    endif()
+
+    set(CONFIGURE_COMMAND ${${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_dev_env}
+                          ${CMAKE_COMMAND} -E env --modify NINJA=set:${NINJA_EXECUTABLE}
+                          ${MESON_EXECUTABLE} setup ./build
+                          --cmake-prefix-path=['${DEPENDS_PATH}/lib/cmake']
+                          --prefix=${DEPENDS_PATH}
+                          --libdir=lib
+                          --buildtype=release
+                          -Ddefault_library=${${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_libType}
+                          -Dtests=disabled
+                          -Dutils=false
+                          ${${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_EXTRA_ARGS}
+                          ${${${CMAKE_FIND_PACKAGE_NAME}_MODULE_LC}_CROSS_FILE})
+
+    set(BUILD_COMMAND ${${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_dev_env}
+                      ${NINJA_EXECUTABLE} -C ./build)
+    set(INSTALL_COMMAND ${NINJA_EXECUTABLE} -C ./build install)
+    set(BUILD_IN_SOURCE 1)
+
+    BUILD_DEP_TARGET()
+
+  endmacro()
+
+  set(${CMAKE_FIND_PACKAGE_NAME}_MODULE_LC lcms2)
+
+  SETUP_BUILD_VARS()
+
+  SETUP_FIND_SPECS()
+
+  SEARCH_EXISTING_PACKAGES()
+
+  if((${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME}_VERSION VERSION_LESS ${${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_VER} AND ENABLE_INTERNAL_LCMS2) OR
+     (((CORE_SYSTEM_NAME STREQUAL linux AND NOT "webos" IN_LIST CORE_PLATFORM_NAME_LC) OR CORE_SYSTEM_NAME STREQUAL freebsd) AND ENABLE_INTERNAL_LCMS2))
+    cmake_language(EVAL CODE "
+      buildmacro${CMAKE_FIND_PACKAGE_NAME}()
+    ")
+  endif()
+
+  if(${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME}_FOUND)
+    if(TARGET PkgConfig::${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME_PC} AND NOT TARGET ${${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_BUILD_NAME})
+      add_library(${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME} ALIAS PkgConfig::${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME_PC})
+      add_library(LIBRARY::${CMAKE_FIND_PACKAGE_NAME} ALIAS PkgConfig::${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME_PC})
+
+      if(WIN32 OR WINDOWS_STORE)
+        include(CheckSymbolExists)
+        include(CMakePushCheckState)
+        cmake_push_check_state(RESET)
+        set(CMAKE_REQUIRED_DEFINITIONS -DCMS_DLL)
+        set(CMAKE_REQUIRED_LIBRARIES ${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME})
+        unset(${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_SHARED_LIB CACHE)
+        check_symbol_exists(cmsCreateTransform lcms2.h ${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_SHARED_LIB)
+        cmake_pop_check_state()
+      endif()
+    elseif(TARGET ${${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_BUILD_NAME})
+      SETUP_BUILD_TARGET()
+
+      add_dependencies(${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME} ${${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_BUILD_NAME})
+
+      # We are building as a requirement, so set LIB_BUILD property to allow calling
+      # modules to know we will be building, and they will want to rebuild as well.
+      # Property must be set on actual TARGET and not the ALIAS
+      set_target_properties(${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME} PROPERTIES LIB_BUILD ON)
+
+      add_library(LIBRARY::${CMAKE_FIND_PACKAGE_NAME} ALIAS ${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME})
+    endif()
+
+    if((WIN32 OR WINDOWS_STORE) AND ${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_SHARED_LIB)
+      list(APPEND ${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_COMPILE_DEFINITIONS CMS_DLL)
+    endif()
+
+    list(APPEND ${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_COMPILE_DEFINITIONS HAVE_LCMS2
+                                                                         CMS_NO_REGISTER_KEYWORD)
+
+    ADD_TARGET_COMPILE_DEFINITION()
+
+    ADD_MULTICONFIG_BUILDMACRO()
+  else()
+    if(LCMS2_FIND_REQUIRED)
+      message(FATAL_ERROR "LCMS2 libraries were not found.")
+    endif()
   endif()
 endif()
-
-mark_as_advanced(LCMS2_INCLUDE_DIR LCMS2_LIBRARY)
-

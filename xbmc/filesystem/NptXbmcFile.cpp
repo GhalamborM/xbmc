@@ -13,8 +13,9 @@
 +---------------------------------------------------------------------*/
 #include "File.h"
 #include "FileFactory.h"
+#include "PasswordManager.h"
 #include "URL.h"
-#include "Util.h"
+#include "utils/URIUtils.h"
 
 #include <limits>
 
@@ -244,16 +245,14 @@ public:
 private:
     // members
     NPT_File&             m_Delegator;
-    OpenMode              m_Mode;
+    OpenMode m_Mode = 0;
     NPT_XbmcFileReference m_FileReference;
 };
 
 /*----------------------------------------------------------------------
 |   NPT_XbmcFile::NPT_XbmcFile
 +---------------------------------------------------------------------*/
-NPT_XbmcFile::NPT_XbmcFile(NPT_File& delegator) :
-    m_Delegator(delegator),
-    m_Mode(0)
+NPT_XbmcFile::NPT_XbmcFile(NPT_File& delegator) : m_Delegator(delegator)
 {
 }
 
@@ -297,16 +296,15 @@ NPT_XbmcFile::Open(NPT_File::OpenMode mode)
         }
 
         bool result;
-        CURL* url = new CURL(name);
+        const CURL url{name};
+        const CURL authUrl{URIUtils::AddCredentials(URIUtils::SubstitutePath(url))};
 
         // compute mode
-        if (mode & NPT_FILE_OPEN_MODE_WRITE) {
-            result = file->OpenForWrite(*url, (mode & NPT_FILE_OPEN_MODE_TRUNCATE)?true:false);
-        } else {
-            result = file->Open(*url);
-        }
+        if (mode & NPT_FILE_OPEN_MODE_WRITE)
+          result = file->OpenForWrite(authUrl, (mode & NPT_FILE_OPEN_MODE_TRUNCATE) ? true : false);
+        else
+          result = file->Open(authUrl);
 
-        delete url;
         if (!result) return NPT_ERROR_NO_SUCH_FILE;
     }
 
@@ -498,7 +496,7 @@ NPT_File::GetInfo(const char* path, NPT_FileInfo* info)
   if (!info)
     return NPT_FAILURE;
 
-  NPT_SetMemory(info, 0, sizeof(*info));
+  *info = NPT_FileInfo();
 
   result = CFile::Stat(path, &stat_buffer);
   if (result != 0)

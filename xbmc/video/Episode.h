@@ -8,42 +8,42 @@
 
 #pragma once
 
-#include "FileItem.h"
 #include "XBDateTime.h"
 #include "utils/ScraperUrl.h"
 
+#include <memory>
 #include <string>
 #include <vector>
 
+class CFileItem;
+
 // single episode information
-namespace VIDEO
+namespace KODI::VIDEO
 {
-  struct EPISODE
+struct EPISODE
+{
+  bool isFolder;
+  int iSeason;
+  int iEpisode;
+  int iSubepisode;
+  unsigned int duration{0};
+  std::string strPath;
+  std::string strTitle;
+  CDateTime cDate;
+  CScraperUrl cScraperUrl;
+  std::shared_ptr<CFileItem> item;
+  EPISODE(int Season = -1, int Episode = -1, int Subepisode = 0, bool Folder = false)
   {
-    bool        isFolder;
-    int         iSeason;
-    int         iEpisode;
-    int         iSubepisode;
-    std::string strPath;
-    std::string strTitle;
-    CDateTime   cDate;
-    CScraperUrl cScraperUrl;
-    CFileItemPtr item;
-    EPISODE(int Season = -1, int Episode = -1, int Subepisode = 0, bool Folder = false)
-    {
-      iSeason     = Season;
-      iEpisode    = Episode;
-      iSubepisode = Subepisode;
-      isFolder    = Folder;
-    }
-    bool operator==(const struct EPISODE& rhs) const
-    {
-      return (iSeason     == rhs.iSeason  &&
-              iEpisode    == rhs.iEpisode &&
-              iSubepisode == rhs.iSubepisode);
-    }
-  };
+    iSeason = Season;
+    iEpisode = Episode;
+    iSubepisode = Subepisode;
+    isFolder = Folder;
+  }
+  bool operator==(const struct EPISODE& rhs) const
+  {
+    return (iSeason == rhs.iSeason && iEpisode == rhs.iEpisode && iSubepisode == rhs.iSubepisode);
+  }
+};
 
   typedef std::vector<EPISODE> EPISODELIST;
-}
-
+  } // namespace KODI::VIDEO

@@ -9,20 +9,25 @@
 #include "LibraryDirectory.h"
 
 #include "Directory.h"
-#include "File.h"
 #include "FileItem.h"
+#include "FileItemList.h"
 #include "GUIInfoManager.h"
+#include "ServiceBroker.h"
 #include "SmartPlaylistDirectory.h"
 #include "URL.h"
 #include "guilib/GUIControlFactory.h" // for label parsing
 #include "guilib/TextureManager.h"
 #include "playlists/SmartPlayList.h"
 #include "profiles/ProfileManager.h"
+#include "utils/ArtTypes.h"
+#include "utils/FileUtils.h"
+#include "utils/ItemProperties.h"
 #include "utils/StringUtils.h"
 #include "utils/URIUtils.h"
 #include "utils/XMLUtils.h"
 #include "utils/log.h"
 
+using namespace KODI;
 using namespace XFILE;
 
 CLibraryDirectory::CLibraryDirectory(void) = default;
@@ -43,7 +48,7 @@ bool CLibraryDirectory::GetDirectory(const CURL& url, CFileItemList &items)
       std::string type = XMLUtils::GetAttribute(node, "type");
       if (type == "filter")
       {
-        CSmartPlaylist playlist;
+        PLAYLIST::CSmartPlaylist playlist;
         std::string type, label;
         XMLUtils::GetString(node, "content", type);
         if (type.empty())
@@ -59,7 +64,7 @@ bool CLibraryDirectory::GetDirectory(const CURL& url, CFileItemList &items)
         if (playlist.LoadFromXML(node) &&
             CSmartPlaylistDirectory::GetDirectory(playlist, items))
         {
-          items.SetProperty("library.filter", "true");
+          items.SetProperty(ITEM::PROPERTY::LIBRARY_FILTER, "true");
           items.SetPath(items.GetProperty("path.db").asString());
           return true;
         }
@@ -93,7 +98,7 @@ bool CLibraryDirectory::GetDirectory(const CURL& url, CFileItemList &items)
   {
     const TiXmlElement *node = NULL;
     std::string xml = nodes[i]->GetPath();
-    if (nodes[i]->m_bIsFolder)
+    if (nodes[i]->IsFolder())
       node = LoadXML(URIUtils::AddFileToFolder(xml, "index.xml"));
     else
     {
@@ -123,18 +128,18 @@ bool CLibraryDirectory::GetDirectory(const CURL& url, CFileItemList &items)
 
       item->SetLabel(label);
       if (!icon.empty() && CServiceBroker::GetGUI()->GetTextureManager().HasTexture(icon))
-        item->SetArt("icon", icon);
-      item->m_iprogramCount = order;
+        item->SetArt(ART::TYPE::ICON, icon);
+      item->SetProgramCount(order);
       items.Add(item);
     }
   }
-  items.Sort(SortByPlaylistOrder, SortOrderAscending);
+  items.Sort(SortBy::PLAYLIST_ORDER, SortOrder::ASCENDING);
   return true;
 }
 
 TiXmlElement *CLibraryDirectory::LoadXML(const std::string &xmlFile)
 {
-  if (!CFile::Exists(xmlFile))
+  if (!CFileUtils::Exists(xmlFile))
     return nullptr;
 
   if (!m_doc.LoadFile(xmlFile))
@@ -147,7 +152,8 @@ TiXmlElement *CLibraryDirectory::LoadXML(const std::string &xmlFile)
   // check the condition
   std::string condition = XMLUtils::GetAttribute(xml, "visible");
   CGUIComponent* gui = CServiceBroker::GetGUI();
-  if (condition.empty() || (gui && gui->GetInfoManager().EvaluateBool(condition)))
+  if (condition.empty() ||
+      (gui && gui->GetInfoManager().EvaluateBool(condition, INFO::DEFAULT_CONTEXT)))
     return xml;
 
   return nullptr;
@@ -174,7 +180,7 @@ std::string CLibraryDirectory::GetNode(const CURL& url)
   std::string xmlNode = libDir;
   URIUtils::RemoveSlashAtEnd(xmlNode);
 
-  if (CFile::Exists(xmlNode))
+  if (CFileUtils::Exists(xmlNode))
     return xmlNode;
 
   return "";

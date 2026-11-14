@@ -35,11 +35,14 @@ public:
   bool ResizeWindow(int newWidth, int newHeight, int newLeft, int newTop) override;
   bool SetFullScreen(bool fullScreen, RESOLUTION_INFO& res, bool blankOtherDisplays) override;
 
-  std::unique_ptr<CVideoSync> GetVideoSync(void* clock) override;
+  std::unique_ptr<CVideoSync> GetVideoSync(CVideoReferenceClock* clock) override;
 
   float GetFrameLatencyAdjustment() override;
   bool IsHDRDisplay() override;
   bool SetHDR(const VideoPicture* videoPicture) override;
+  int GetOutputBitDepth() const override;
+  KODI::UTILS::Eotf GetEotf() const override;
+  KODI::UTILS::Colorimetry GetColorimetry() const override;
 
   EGLDisplay GetEGLDisplay() const;
   EGLSurface GetEGLSurface() const;

@@ -10,6 +10,7 @@
 
 #include "cores/GameSettings.h"
 #include "cores/RetroPlayer/rendering/RenderSettings.h"
+#include "cores/RetroPlayer/rendering/RenderUtils.h"
 #include "utils/Geometry.h"
 
 extern "C"
@@ -17,12 +18,16 @@ extern "C"
 #include <libavutil/pixfmt.h>
 }
 
-#include <array>
 #include <memory>
 #include <stdint.h>
 
 namespace KODI
 {
+namespace SHADER
+{
+class IShaderPreset;
+}
+
 namespace RETRO
 {
 class CRenderContext;
@@ -45,11 +50,8 @@ public:
   // Player functions
   bool Configure(AVPixelFormat format);
   void FrameMove();
-  /*!
-   * \brief Performs whatever necessary before rendering the frame
-   */
-  void PreRender(bool clear);
   void SetBuffer(IRenderBuffer* buffer);
+  void SetSpeed(double speed);
   void RenderFrame(bool clear, uint8_t alpha);
 
   // Feature support
@@ -67,13 +69,33 @@ public:
   void SetScalingMethod(SCALINGMETHOD method);
   void SetStretchMode(STRETCHMODE stretchMode);
   void SetRenderRotation(unsigned int rotationDegCCW);
+  void SetShaderPreset(const std::string& presetPath);
 
+  // Rendering properties
   bool IsVisible() const;
+  IRenderBuffer* GetRenderBuffer() const;
+
+  /*!
+   * \brief Record that the renderer was asked for in the current frame
+   */
+  void SetUsed();
+
+  /*!
+   * \brief Check if the renderer wasn't asked for in the last frame, so its
+   * textures can be released
+   */
+  bool IsUnused() const;
+
+  /*!
+   * \brief Release the frame and textures of a renderer that isn't being drawn,
+   * keeping its compiled shaders for when it's drawn again
+   */
+  void ReleaseTextures();
 
 protected:
   // Protected renderer interface
   virtual bool ConfigureInternal() { return true; }
-  virtual void RenderInternal(bool clear, uint8_t alpha) = 0;
+  virtual void RenderInternal(uint8_t alpha) = 0;
   virtual void FlushInternal() {}
 
   // Construction parameters
@@ -90,7 +112,18 @@ protected:
 
   // Geometry properties
   CRect m_sourceRect;
-  std::array<CPoint, 4> m_rotatedDestCoords{};
+  float m_fullDestWidth{0.0f};
+  float m_fullDestHeight{0.0f};
+  float m_lastTargetWidth{0.0f};
+  float m_lastTargetHeight{0.0f};
+  ViewportCoordinates m_rotatedDestCoords{};
+
+  // Video shaders
+  void UpdateShaders();
+  std::unique_ptr<SHADER::IShaderPreset> m_shaderPreset;
+
+  bool m_bShadersNeedUpdate = true;
+  bool m_bUseShaderPreset = false;
 
 private:
   /*!
@@ -98,18 +131,25 @@ private:
    */
   virtual void ManageRenderArea(const IRenderBuffer& renderBuffer);
 
+  void MarkDirty();
+
+  /*!
+   * \brief Performs whatever necessary before rendering the frame
+   */
+  void PreRender(bool clear);
+
   /*!
    * \brief Performs whatever necessary after a frame has been rendered
    */
   void PostRender();
-
-  void MarkDirty();
 
   // Utility functions
   void GetScreenDimensions(float& screenWidth, float& screenHeight, float& screenPixelRatio);
 
   uint64_t m_renderFrameCount = 0;
   uint64_t m_lastRender = 0;
+  uint64_t m_lastUse = 0;
+  bool m_texturesReleased = false;
 };
 } // namespace RETRO
 } // namespace KODI

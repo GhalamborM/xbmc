@@ -9,6 +9,7 @@
 #pragma once
 
 #include "MediaSource.h"
+#include "media/MediaSection.h"
 #include "utils/LabelFormatter.h"
 #include "utils/SortUtils.h"
 
@@ -16,6 +17,11 @@
 
 class CViewState; // forward
 class CFileItemList;
+
+namespace KODI::PLAYLIST
+{
+enum class Id;
+} // namespace KODI::PLAYLIST
 
 class CGUIViewState
 {
@@ -36,6 +42,8 @@ public:
   int GetSortOrderLabel() const;
   void GetSortMethodLabelMasks(LABEL_MASKS& masks) const;
 
+  std::vector<SortDescription> GetSortDescriptions() const;
+
   SortOrder SetNextSortOrder();
   SortOrder GetSortOrder() const;
 
@@ -43,15 +51,16 @@ public:
   virtual bool HideParentDirItems();
   virtual bool DisableAddSourceButtons();
 
-  virtual int GetPlaylist() const;
+  virtual KODI::PLAYLIST::Id GetPlaylist() const;
   const std::string& GetPlaylistDirectory();
   void SetPlaylistDirectory(const std::string& strDirectory);
   bool IsCurrentPlaylistDirectory(const std::string& strDirectory);
   virtual bool AutoPlayNextItem();
 
-  virtual std::string GetLockType();
+  //! The section whose source locks apply in this view, if any
+  virtual std::optional<KODI::MEDIA::MediaSection> GetLockType();
   virtual std::string GetExtensions();
-  virtual VECSOURCES& GetSources();
+  virtual std::vector<CMediaSource>& GetSources();
 
 protected:
   explicit CGUIViewState(const CFileItemList& items);  // no direct object creation, use GetViewState()
@@ -60,12 +69,6 @@ protected:
   virtual void SaveViewToDb(const std::string &path, int windowID, CViewState *viewState = NULL);
   void LoadViewState(const std::string &path, int windowID);
 
-  /*! \brief Add the addons source for the given content type, if the user has suitable addons
-   \param content the type of addon content desired
-   \param label the name of the addons source
-   \param thumb the skin image to use as the icon
-   */
-  void AddAddonsSource(const std::string &content, const std::string &label, const std::string& thumb);
   void AddLiveTVSources();
 
   /*! \brief Add the sort order defined in a smartplaylist
@@ -75,11 +78,21 @@ protected:
    */
   void AddPlaylistOrder(const CFileItemList& items, const LABEL_MASKS& label_masks);
 
-  void AddSortMethod(SortBy sortBy, int buttonLabel, const LABEL_MASKS &labelMasks, SortAttribute sortAttributes = SortAttributeNone, SortOrder sortOrder = SortOrderNone);
-  void AddSortMethod(SortBy sortBy, SortAttribute sortAttributes, int buttonLabel, const LABEL_MASKS &labelMasks, SortOrder sortOrder = SortOrderNone);
-  void AddSortMethod(SortDescription sortDescription, int buttonLabel, const LABEL_MASKS &labelMasks);
-  void SetSortMethod(SortBy sortBy, SortOrder sortOrder = SortOrderNone);
-  void SetSortMethod(SortDescription sortDescription);
+  void AddSortMethod(SortBy sortBy,
+                     int buttonLabel,
+                     const LABEL_MASKS& labelMasks,
+                     SortAttribute sortAttributes = SortAttributeNone,
+                     SortOrder sortOrder = SortOrder::NONE);
+  void AddSortMethod(SortBy sortBy,
+                     SortAttribute sortAttributes,
+                     int buttonLabel,
+                     const LABEL_MASKS& labelMasks,
+                     SortOrder sortOrder = SortOrder::NONE);
+  void AddSortMethod(const SortDescription& sortDescription,
+                     int buttonLabel,
+                     const LABEL_MASKS& labelMasks);
+  void SetSortMethod(SortBy sortBy, SortOrder sortOrder = SortOrder::NONE);
+  void SetSortMethod(const SortDescription& sortDescription);
   void SetSortOrder(SortOrder sortOrder);
 
   bool AutoPlayNextVideoItem() const;
@@ -87,12 +100,12 @@ protected:
   const CFileItemList& m_items;
 
   int m_currentViewAsControl;
-  int m_playlist;
+  KODI::PLAYLIST::Id m_playlist;
 
   std::vector<GUIViewSortDetails> m_sortMethods;
   int m_currentSortMethod;
 
-  static VECSOURCES m_sources;
+  static std::vector<CMediaSource> m_sources;
   static std::string m_strPlaylistDirectory;
 };
 

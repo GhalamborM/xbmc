@@ -1,0 +1,22 @@
+set(SOURCES TestGUIColorManager.cpp
+            TestGUIControlFactory.cpp
+            TestGUIControlProfiler.cpp
+            TestGUIControlGroup.cpp
+            TestGUIControlGroupMask.cpp
+            TestGUIControlGroupMaskD3D.cpp
+            TestGUIControlGroupMaskGLES.cpp
+            TestGamesGUIInfo.cpp
+            TestGUIFixedListContainer.cpp
+            TestGUIFontManager.cpp
+            TestGUIFontTTF.cpp
+            TestGUIImage.cpp
+            TestGUIPanelContainer.cpp
+            TestGUILabel.cpp
+            TestGUIListItemLayout.cpp
+            TestGUITextLayout.cpp
+            TestGUITexture.cpp
+            TestGUIWindowOnAction.cpp
+            TestSkinMapManager.cpp
+)
+
+core_add_test_library(guilib_test)

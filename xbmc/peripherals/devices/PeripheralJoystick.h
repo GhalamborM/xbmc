@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2014-2018 Team Kodi
+ *  Copyright (C) 2014-2024 Team Kodi
  *  This file is part of Kodi - https://kodi.tv
  *
  *  SPDX-License-Identifier: GPL-2.0-or-later
@@ -9,33 +9,41 @@
 #pragma once
 
 #include "Peripheral.h"
+#include "XBDateTime.h"
+#include "games/controllers/ControllerTypes.h"
 #include "input/joysticks/JoystickTypes.h"
 #include "input/joysticks/interfaces/IDriverReceiver.h"
 #include "threads/CriticalSection.h"
 
+#include <future>
 #include <memory>
 #include <string>
 #include <vector>
-
-#define JOYSTICK_PORT_UNKNOWN (-1)
 
 namespace KODI
 {
 namespace JOYSTICK
 {
 class CDeadzoneFilter;
-class CKeymapHandling;
 class CRumbleGenerator;
 class IButtonMap;
 class IDriverHandler;
 class IInputHandler;
 } // namespace JOYSTICK
+
+namespace KEYMAP
+{
+class CKeymapHandling;
+} // namespace KEYMAP
 } // namespace KODI
 
 namespace PERIPHERALS
 {
 class CPeripherals;
 
+/*!
+ * \ingroup peripherals
+ */
 class CPeripheralJoystick : public CPeripheral, //! @todo extend CPeripheralHID
                             public KODI::JOYSTICK::IDriverReceiver
 {
@@ -50,17 +58,21 @@ public:
   bool InitialiseFeature(const PeripheralFeature feature) override;
   void OnUserNotification() override;
   bool TestFeature(PeripheralFeature feature) override;
+  void ResetDefaultSettings() override;
   void RegisterJoystickDriverHandler(KODI::JOYSTICK::IDriverHandler* handler,
                                      bool bPromiscuous) override;
   void UnregisterJoystickDriverHandler(KODI::JOYSTICK::IDriverHandler* handler) override;
   KODI::JOYSTICK::IDriverReceiver* GetDriverReceiver() override { return this; }
-  IKeymap* GetKeymap(const std::string& controllerId) override;
-  CDateTime LastActive() override { return m_lastActive; }
+  KODI::KEYMAP::IKeymap* GetKeymap(const std::string& controllerId) override;
+  CDateTime LastActive() const override { return m_lastActive; }
+  void SetLastActive(const CDateTime& lastActive) override;
+  KODI::GAME::ControllerPtr ControllerProfile() const override;
+  void SetControllerProfile(const KODI::GAME::ControllerPtr& controller) override;
 
   bool OnButtonMotion(unsigned int buttonIndex, bool bPressed);
   bool OnHatMotion(unsigned int hatIndex, KODI::JOYSTICK::HAT_STATE state);
   bool OnAxisMotion(unsigned int axisIndex, float position);
-  void ProcessAxisMotions(void);
+  void OnInputFrame(void);
 
   // implementation of IDriverReceiver
   bool SetMotorState(unsigned int motorIndex, float magnitude) override;
@@ -102,7 +114,8 @@ public:
   void SetSupportsPowerOff(bool bSupportsPowerOff); // specialized to update m_features
 
 protected:
-  void InitializeDeadzoneFiltering();
+  void InitializeDeadzoneFiltering(KODI::JOYSTICK::IButtonMap& buttonMap);
+  void InitializeControllerProfile(KODI::JOYSTICK::IButtonMap& buttonMap);
 
   void PowerOff();
 
@@ -114,16 +127,16 @@ protected:
 
   // State parameters
   std::string m_strProvider;
-  int m_requestedPort;
-  unsigned int m_buttonCount;
-  unsigned int m_hatCount;
-  unsigned int m_axisCount;
-  unsigned int m_motorCount;
-  bool m_supportsPowerOff;
+  int m_requestedPort{JOYSTICK_NO_PORT_REQUESTED};
+  unsigned int m_buttonCount = 0;
+  unsigned int m_hatCount = 0;
+  unsigned int m_axisCount = 0;
+  unsigned int m_motorCount = 0;
+  bool m_supportsPowerOff = false;
   CDateTime m_lastActive;
 
   // Input clients
-  std::unique_ptr<KODI::JOYSTICK::CKeymapHandling> m_appInput;
+  std::unique_ptr<KODI::KEYMAP::CKeymapHandling> m_appInput;
   std::unique_ptr<KODI::JOYSTICK::CRumbleGenerator> m_rumbleGenerator;
   std::unique_ptr<KODI::JOYSTICK::IInputHandler> m_joystickMonitor;
   std::unique_ptr<KODI::JOYSTICK::IButtonMap> m_buttonMap;

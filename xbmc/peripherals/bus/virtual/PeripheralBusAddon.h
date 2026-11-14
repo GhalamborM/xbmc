@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2014-2018 Team Kodi
+ *  Copyright (C) 2014-2024 Team Kodi
  *  This file is part of Kodi - https://kodi.tv
  *
  *  SPDX-License-Identifier: GPL-2.0-or-later
@@ -8,7 +8,6 @@
 
 #pragma once
 
-#include "addons/AddonManager.h"
 #include "peripherals/PeripheralTypes.h"
 #include "peripherals/bus/PeripheralBus.h"
 
@@ -16,8 +15,16 @@
 #include <string>
 #include <vector>
 
+namespace ADDON
+{
+class CAddonInfo;
+} // namespace ADDON
+
 namespace PERIPHERALS
 {
+/*!
+ * \ingroup peripherals
+ */
 class CPeripheralBusAddon : public CPeripheralBus
 {
 public:
@@ -77,10 +84,9 @@ protected:
   void UnregisterRemovedDevices(const PeripheralScanResults& results) override;
 
 private:
-  void OnEvent(const ADDON::AddonEvent& event);
   void UnRegisterAddon(const std::string& addonId);
 
-  void PromptEnableAddons(const std::vector<ADDON::AddonInfoPtr>& disabledAddons);
+  void PromptEnableAddons(const std::vector<std::shared_ptr<ADDON::CAddonInfo>>& disabledAddons);
 
   PeripheralAddonVector m_addons;
   PeripheralAddonVector m_failedAddons;

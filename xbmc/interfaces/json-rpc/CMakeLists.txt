@@ -1,6 +1,8 @@
-set(SOURCES AddonsOperations.cpp
+set(SOURCES AddonsExecuteAddon.cpp
+            AddonsOperations.cpp
             ApplicationOperations.cpp
             AudioLibrary.cpp
+            DatabaseOperations.cpp
             FavouritesOperations.cpp
             FileItemHandler.cpp
             FileOperations.cpp
@@ -8,19 +10,24 @@ set(SOURCES AddonsOperations.cpp
             InputOperations.cpp
             JSONRPC.cpp
             JSONServiceDescription.cpp
+            JSONUtils.cpp
             PlayerOperations.cpp
             PlaylistOperations.cpp
             ProfilesOperations.cpp
+            PVREpgFields.cpp
             PVROperations.cpp
             SettingsOperations.cpp
             SystemOperations.cpp
             TextureOperations.cpp
             VideoLibrary.cpp
+            VideoLibrarySetSourceContent.cpp
             XBMCOperations.cpp)
 
-set(HEADERS AddonsOperations.h
+set(HEADERS AddonsExecuteAddon.h
+            AddonsOperations.h
             ApplicationOperations.h
             AudioLibrary.h
+            DatabaseOperations.h
             FavouritesOperations.h
             FileItemHandler.h
             FileOperations.h
@@ -36,11 +43,13 @@ set(HEADERS AddonsOperations.h
             PlayerOperations.h
             PlaylistOperations.h
             ProfilesOperations.h
+            PVREpgFields.h
             PVROperations.h
             SettingsOperations.h
             SystemOperations.h
             TextureOperations.h
             VideoLibrary.h
+            VideoLibrarySetSourceContent.h
             XBMCOperations.h)
 
 core_add_library(jsonrpc_interface)

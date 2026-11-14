@@ -11,6 +11,7 @@
 
 #include "ConvolutionKernels.h"
 #include "ServiceBroker.h"
+#include "rendering/GLExtensions.h"
 #include "rendering/gles/RenderSystemGLES.h"
 #include "utils/GLUtils.h"
 #include "utils/log.h"
@@ -28,21 +29,11 @@ BaseVideoFilterShader::BaseVideoFilterShader()
 {
   m_width = 1;
   m_height = 1;
-  m_hStepXY = 0;
   m_stepX = 0;
   m_stepY = 0;
-  m_sourceTexUnit = 0;
-  m_hSourceTex = 0;
-
-  m_hVertex = -1;
-  m_hcoord = -1;
-  m_hProj = -1;
-  m_hModel = -1;
-  m_hAlpha = -1;
 
   m_proj = nullptr;
   m_model = nullptr;
-  m_alpha = -1;
 
   VertexShader()->LoadSource("gles_videofilter.vert");
 
@@ -56,6 +47,8 @@ void BaseVideoFilterShader::OnCompiledAndLinked()
   m_hAlpha  = glGetUniformLocation(ProgramHandle(), "m_alpha");
   m_hProj  = glGetUniformLocation(ProgramHandle(), "m_proj");
   m_hModel = glGetUniformLocation(ProgramHandle(), "m_model");
+  m_hQuad = glGetUniformLocation(ProgramHandle(), "m_quad");
+  m_hTexRect = glGetUniformLocation(ProgramHandle(), "m_texRect");
 }
 
 bool BaseVideoFilterShader::OnEnabled()
@@ -63,19 +56,20 @@ bool BaseVideoFilterShader::OnEnabled()
   glUniformMatrix4fv(m_hProj,  1, GL_FALSE, m_proj);
   glUniformMatrix4fv(m_hModel, 1, GL_FALSE, m_model);
   glUniform1f(m_hAlpha, m_alpha);
+  glUniformMatrix4fv(m_hQuad, 1, GL_FALSE, m_quad.data());
+  glUniform4f(m_hTexRect, m_texRect.x1, m_texRect.y1, m_texRect.Width(), m_texRect.Height());
   return true;
 }
 
-ConvolutionFilterShader::ConvolutionFilterShader(ESCALINGMETHOD method)
+ConvolutionFilterShader::ConvolutionFilterShader(ESCALINGMETHOD method, bool dither)
 {
   m_method = method;
-  m_kernelTex1 = 0;
-  m_hKernTex = -1;
+  m_dither = dither;
 
   std::string shadername;
   std::string defines;
 
-  if (CServiceBroker::GetRenderSystem()->IsExtSupported("GL_EXT_color_buffer_float"))
+  if (CGLExtensions::IsExtensionSupported(CGLExtensions::EXT_color_buffer_float))
   {
     m_floattex = true;
   }
@@ -111,8 +105,16 @@ ConvolutionFilterShader::ConvolutionFilterShader(ESCALINGMETHOD method)
     m_internalformat = GL_RGBA;
   }
 
-  CLog::Log(LOGDEBUG, "GL: ConvolutionFilterShader: using {} defines:\n{}", shadername, defines);
+  if (m_dither)
+    defines += "#define XBMC_DITHER\n";
+
+  CLog::Log(LOGDEBUG, "GLES: using scaling method: {}",
+            fmt::formatter<ESCALINGMETHOD>::ToString(m_method));
+  CLog::Log(LOGDEBUG, "GLES: using shader: {}", shadername);
+
   PixelShader()->LoadSource(shadername, defines);
+  PixelShader()->InsertSource("gles_dither_uniforms.frag", "void main()");
+  PixelShader()->InsertSource("gles_dither_body.frag", "gl_FragColor");
 }
 
 ConvolutionFilterShader::~ConvolutionFilterShader()
@@ -128,6 +130,14 @@ void ConvolutionFilterShader::OnCompiledAndLinked()
   m_hSourceTex = glGetUniformLocation(ProgramHandle(), "img");
   m_hStepXY    = glGetUniformLocation(ProgramHandle(), "stepxy");
   m_hKernTex   = glGetUniformLocation(ProgramHandle(), "kernelTex");
+
+  if (m_dither)
+  {
+    m_hDitherEnabled = glGetUniformLocation(ProgramHandle(), "m_ditherEnabled");
+    m_hDither = glGetUniformLocation(ProgramHandle(), "m_dither");
+    m_hDitherQuant = glGetUniformLocation(ProgramHandle(), "m_ditherquant");
+    m_hDitherSize = glGetUniformLocation(ProgramHandle(), "m_dithersize");
+  }
 
   CConvolutionKernel kernel(m_method, 256);
 
@@ -176,6 +186,17 @@ void ConvolutionFilterShader::OnCompiledAndLinked()
   VerifyGLState();
 }
 
+void ConvolutionFilterShader::SetDitherUniforms(bool enabled,
+                                                GLuint ditherTex,
+                                                unsigned int ditherDepth,
+                                                int ditherSize)
+{
+  m_ditherEnabled = enabled;
+  m_ditherTex = ditherTex;
+  m_ditherDepth = ditherDepth;
+  m_ditherSize = ditherSize;
+}
+
 bool ConvolutionFilterShader::OnEnabled()
 {
   BaseVideoFilterShader::OnEnabled();
@@ -190,11 +211,29 @@ bool ConvolutionFilterShader::OnEnabled()
   glUniform2f(m_hStepXY, m_stepX, m_stepY);
   VerifyGLState();
 
+  if (m_dither && m_ditherTex)
+  {
+    glUniform1f(m_hDitherEnabled, m_ditherEnabled ? 1.0f : 0.0f);
+    glUniform1i(m_hDither, 3);
+    glActiveTexture(GL_TEXTURE3);
+    glBindTexture(GL_TEXTURE_2D, m_ditherTex);
+    glActiveTexture(GL_TEXTURE0);
+    glUniform1f(m_hDitherQuant, (1 << m_ditherDepth) - 1.0f);
+    glUniform2f(m_hDitherSize, static_cast<float>(m_ditherSize), static_cast<float>(m_ditherSize));
+    VerifyGLState();
+  }
+
   return true;
 }
 
 void ConvolutionFilterShader::OnDisabled()
 {
+  if (m_dither && m_ditherTex)
+  {
+    glActiveTexture(GL_TEXTURE3);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glActiveTexture(GL_TEXTURE0);
+  }
 }
 
 void ConvolutionFilterShader::Free()

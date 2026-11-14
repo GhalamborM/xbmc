@@ -11,6 +11,7 @@
 #include "AddonsOperations.h"
 #include "ApplicationOperations.h"
 #include "AudioLibrary.h"
+#include "DatabaseOperations.h"
 #include "FavouritesOperations.h"
 #include "FileOperations.h"
 #include "GUIOperations.h"
@@ -30,12 +31,17 @@
 #include "utils/StringUtils.h"
 #include "utils/log.h"
 
+#include <algorithm>
+#include <memory>
+
 using namespace JSONRPC;
 
 std::map<std::string, CVariant> CJSONServiceDescription::m_notifications = std::map<std::string, CVariant>();
 CJSONServiceDescription::CJsonRpcMethodMap CJSONServiceDescription::m_actionMap;
 std::map<std::string, JSONSchemaTypeDefinitionPtr> CJSONServiceDescription::m_types = std::map<std::string, JSONSchemaTypeDefinitionPtr>();
 CJSONServiceDescription::IncompleteSchemaDefinitionMap CJSONServiceDescription::m_incompleteDefinitions = CJSONServiceDescription::IncompleteSchemaDefinitionMap();
+
+// clang-format off
 
 JsonRpcMethodMap CJSONServiceDescription::m_methodMaps[] = {
 // JSON-RPC
@@ -55,7 +61,11 @@ JsonRpcMethodMap CJSONServiceDescription::m_methodMaps[] = {
 
   { "Player.PlayPause",                             CPlayerOperations::PlayPause },
   { "Player.Stop",                                  CPlayerOperations::Stop },
+  { "Player.GetAudioDelay",                         CPlayerOperations::GetAudioDelay },
+  { "Player.SetAudioDelay",                         CPlayerOperations::SetAudioDelay },
+  { "Player.NotifyAudioChainReady",                 CPlayerOperations::NotifyAudioChainReady },
   { "Player.SetSpeed",                              CPlayerOperations::SetSpeed },
+  { "Player.SetTempo",                              CPlayerOperations::SetTempo },
   { "Player.Seek",                                  CPlayerOperations::Seek },
   { "Player.Move",                                  CPlayerOperations::Move },
   { "Player.Zoom",                                  CPlayerOperations::Zoom },
@@ -73,6 +83,8 @@ JsonRpcMethodMap CJSONServiceDescription::m_methodMaps[] = {
   { "Player.AddSubtitle",                           CPlayerOperations::AddSubtitle },
   { "Player.SetSubtitle",                           CPlayerOperations::SetSubtitle },
   { "Player.SetVideoStream",                        CPlayerOperations::SetVideoStream },
+
+  { "Player.GetChapters",                           CPlayerOperations::GetChapters },
 
 // Playlist
   { "Playlist.GetPlaylists",                        CPlaylistOperations::GetPlaylists },
@@ -112,6 +124,8 @@ JsonRpcMethodMap CJSONServiceDescription::m_methodMaps[] = {
   { "AudioLibrary.SetArtistDetails",                CAudioLibrary::SetArtistDetails },
   { "AudioLibrary.SetAlbumDetails",                 CAudioLibrary::SetAlbumDetails },
   { "AudioLibrary.SetSongDetails",                  CAudioLibrary::SetSongDetails },
+  { "AudioLibrary.RefreshArtist",                   CAudioLibrary::RefreshArtist },
+  { "AudioLibrary.RefreshAlbum",                    CAudioLibrary::RefreshAlbum },
   { "AudioLibrary.Scan",                            CAudioLibrary::Scan },
   { "AudioLibrary.Export",                          CAudioLibrary::Export },
   { "AudioLibrary.Clean",                           CAudioLibrary::Clean },
@@ -152,6 +166,7 @@ JsonRpcMethodMap CJSONServiceDescription::m_methodMaps[] = {
   { "VideoLibrary.RemoveEpisode",                   CVideoLibrary::RemoveEpisode },
   { "VideoLibrary.RemoveMusicVideo",                CVideoLibrary::RemoveMusicVideo },
   { "VideoLibrary.Scan",                            CVideoLibrary::Scan },
+  { "VideoLibrary.SetSourceContent",                CVideoLibrary::SetSourceContent },
   { "VideoLibrary.Export",                          CVideoLibrary::Export },
   { "VideoLibrary.Clean",                           CVideoLibrary::Clean },
 
@@ -168,6 +183,8 @@ JsonRpcMethodMap CJSONServiceDescription::m_methodMaps[] = {
   { "GUI.SetFullscreen",                            CGUIOperations::SetFullscreen },
   { "GUI.SetStereoscopicMode",                      CGUIOperations::SetStereoscopicMode },
   { "GUI.GetStereoscopicModes",                     CGUIOperations::GetStereoscopicModes },
+  { "GUI.ActivateScreenSaver",                      CGUIOperations::ActivateScreenSaver},
+  { "GUI.TakeScreenshot",                           CGUIOperations::TakeScreenshot },
 
 // PVR operations
   { "PVR.GetProperties",                            CPVROperations::GetProperties },
@@ -179,6 +196,7 @@ JsonRpcMethodMap CJSONServiceDescription::m_methodMaps[] = {
   { "PVR.GetBroadcasts",                            CPVROperations::GetBroadcasts },
   { "PVR.GetBroadcastDetails",                      CPVROperations::GetBroadcastDetails },
   { "PVR.GetBroadcastIsPlayable",                   CPVROperations::GetBroadcastIsPlayable },
+  { "PVR.GetPlayableBroadcasts",                    CPVROperations::GetPlayableBroadcasts },
   { "PVR.GetTimers",                                CPVROperations::GetTimers },
   { "PVR.GetTimerDetails",                          CPVROperations::GetTimerDetails },
   { "PVR.GetRecordings",                            CPVROperations::GetRecordings },
@@ -240,11 +258,19 @@ JsonRpcMethodMap CJSONServiceDescription::m_methodMaps[] = {
   { "Settings.GetSettingValue",                     CSettingsOperations::GetSettingValue },
   { "Settings.SetSettingValue",                     CSettingsOperations::SetSettingValue },
   { "Settings.ResetSettingValue",                   CSettingsOperations::ResetSettingValue },
+  { "Settings.GetSkinSettings",                     CSettingsOperations::GetSkinSettings },
+  { "Settings.GetSkinSettingValue",                 CSettingsOperations::GetSkinSettingValue },
+  { "Settings.SetSkinSettingValue",                 CSettingsOperations::SetSkinSettingValue },
 
 // XBMC operations
   { "XBMC.GetInfoLabels",                           CXBMCOperations::GetInfoLabels },
-  { "XBMC.GetInfoBooleans",                         CXBMCOperations::GetInfoBooleans }
+  { "XBMC.GetInfoBooleans",                         CXBMCOperations::GetInfoBooleans },
+
+// Database operations
+  { "Database.GetDatabaseName",                     CDatabaseOperations::GetDatabaseNameByType },
 };
+
+// clang-format on
 
 JSONSchemaTypeDefinition::JSONSchemaTypeDefinition()
   : missingReference(),
@@ -276,7 +302,7 @@ bool JSONSchemaTypeDefinition::Parse(const CVariant &value, bool isParameter /* 
     std::string refType = value["$ref"].asString();
     // Check if the referenced type exists
     JSONSchemaTypeDefinitionPtr referencedTypeDef = CJSONServiceDescription::GetType(refType);
-    if (refType.length() <= 0 || referencedTypeDef.get() == NULL)
+    if (refType.empty() || referencedTypeDef.get() == NULL)
     {
       CLog::Log(LOGDEBUG, "JSONRPC: JSON schema type {} references an unknown type {}", name,
                 refType);
@@ -307,7 +333,7 @@ bool JSONSchemaTypeDefinition::Parse(const CVariant &value, bool isParameter /* 
     if (value.isMember("default") && IsType(value["default"], type))
     {
       bool ok = false;
-      if (enums.size() <= 0)
+      if (enums.empty())
         ok = true;
       // If the type has an enum definition we must make
       // sure that the default value is a valid enum value
@@ -391,7 +417,7 @@ bool JSONSchemaTypeDefinition::Parse(const CVariant &value, bool isParameter /* 
 
   // Only read the "type" attribute if it's
   // not an extending type
-  if (extends.size() <= 0)
+  if (extends.empty())
   {
     // Get the defined type of the parameter
     if (!CJSONServiceDescription::parseJSONSchemaType(value["type"], unionTypes, type, missingReference))
@@ -413,7 +439,7 @@ bool JSONSchemaTypeDefinition::Parse(const CVariant &value, bool isParameter /* 
         // of the current property into it, parse it
         // recursively and add its default value
         // to the current type's default value
-        JSONSchemaTypeDefinitionPtr propertyType = JSONSchemaTypeDefinitionPtr(new JSONSchemaTypeDefinition());
+        JSONSchemaTypeDefinitionPtr propertyType = std::make_shared<JSONSchemaTypeDefinition>();
         propertyType->name = itr->first;
         if (!propertyType->Parse(itr->second))
         {
@@ -426,7 +452,7 @@ bool JSONSchemaTypeDefinition::Parse(const CVariant &value, bool isParameter /* 
     }
 
     hasAdditionalProperties = true;
-    additionalProperties = JSONSchemaTypeDefinitionPtr(new JSONSchemaTypeDefinition());
+    additionalProperties = std::make_shared<JSONSchemaTypeDefinition>();
     if (value.isMember("additionalProperties"))
     {
       if (value["additionalProperties"].isBoolean())
@@ -475,7 +501,7 @@ bool JSONSchemaTypeDefinition::Parse(const CVariant &value, bool isParameter /* 
       // If it is an object, there is only one schema for it
       if (value["additionalItems"].isObject())
       {
-        JSONSchemaTypeDefinitionPtr additionalItem = JSONSchemaTypeDefinitionPtr(new JSONSchemaTypeDefinition());
+        JSONSchemaTypeDefinitionPtr additionalItem = std::make_shared<JSONSchemaTypeDefinition>();
         if (additionalItem->Parse(value["additionalItems"]))
           additionalItems.push_back(additionalItem);
         else
@@ -490,7 +516,7 @@ bool JSONSchemaTypeDefinition::Parse(const CVariant &value, bool isParameter /* 
       {
         for (unsigned int itemIndex = 0; itemIndex < value["additionalItems"].size(); itemIndex++)
         {
-          JSONSchemaTypeDefinitionPtr additionalItem = JSONSchemaTypeDefinitionPtr(new JSONSchemaTypeDefinition());
+          JSONSchemaTypeDefinitionPtr additionalItem = std::make_shared<JSONSchemaTypeDefinition>();
 
           if (additionalItem->Parse(value["additionalItems"][itemIndex]))
             additionalItems.push_back(additionalItem);
@@ -518,7 +544,7 @@ bool JSONSchemaTypeDefinition::Parse(const CVariant &value, bool isParameter /* 
     {
       if (value["items"].isObject())
       {
-        JSONSchemaTypeDefinitionPtr item = JSONSchemaTypeDefinitionPtr(new JSONSchemaTypeDefinition());
+        JSONSchemaTypeDefinitionPtr item = std::make_shared<JSONSchemaTypeDefinition>();
         if (!item->Parse(value["items"]))
         {
           CLog::Log(LOGDEBUG, "Invalid item definition in \"items\" for type {}", name);
@@ -533,7 +559,7 @@ bool JSONSchemaTypeDefinition::Parse(const CVariant &value, bool isParameter /* 
       {
         for (CVariant::const_iterator_array itemItr = value["items"].begin_array(); itemItr != value["items"].end_array(); ++itemItr)
         {
-          JSONSchemaTypeDefinitionPtr item = JSONSchemaTypeDefinitionPtr(new JSONSchemaTypeDefinition());
+          JSONSchemaTypeDefinitionPtr item = std::make_shared<JSONSchemaTypeDefinition>();
           if (!item->Parse(*itemItr))
           {
             CLog::Log(LOGDEBUG, "Invalid item definition in \"items\" array for type {}", name);
@@ -606,7 +632,7 @@ bool JSONSchemaTypeDefinition::Parse(const CVariant &value, bool isParameter /* 
     bool ok = false;
     if (value.isMember("default") && IsType(value["default"], type))
     {
-      if (enums.size() <= 0)
+      if (enums.empty())
         ok = true;
       // If the type has an enum definition we must make
       // sure that the default value is a valid enum value
@@ -634,7 +660,7 @@ bool JSONSchemaTypeDefinition::Parse(const CVariant &value, bool isParameter /* 
 
       // If the type contains an "enum" we need to get the
       // default value from the first enum value
-      if (enums.size() > 0)
+      if (!enums.empty())
         defaultValue = enums.at(0);
       // otherwise set a default value instead
       else
@@ -668,7 +694,7 @@ JSONRPC_STATUS JSONSchemaTypeDefinition::Check(const CVariant& value,
   }
 
   // Let's check if we have to handle a union type
-  if (unionTypes.size() > 0)
+  if (!unionTypes.empty())
   {
     bool ok = false;
     for (unsigned int unionIndex = 0; unionIndex < unionTypes.size(); unionIndex++)
@@ -693,7 +719,7 @@ JSONRPC_STATUS JSONSchemaTypeDefinition::Check(const CVariant& value,
   // First we need to check if this type extends another
   // type and if so we need to check against the extended
   // type first
-  if (extends.size() > 0)
+  if (!extends.empty())
   {
     for (unsigned int extendsIndex = 0; extendsIndex < extends.size(); extendsIndex++)
     {
@@ -737,7 +763,7 @@ JSONRPC_STATUS JSONSchemaTypeDefinition::Check(const CVariant& value,
       return InvalidParams;
     }
 
-    if (items.size() == 0)
+    if (items.empty())
       outputValue = value;
     else if (items.size() == 1)
     {
@@ -771,7 +797,7 @@ JSONRPC_STATUS JSONSchemaTypeDefinition::Check(const CVariant& value,
       // does not match the number of elements in the
       // "items" array and additional items are not
       // allowed there is no need to check every element
-      if (value.size() < items.size() || (value.size() != items.size() && additionalItems.size() == 0))
+      if (value.size() < items.size() || (value.size() != items.size() && additionalItems.empty()))
       {
         CLog::Log(LOGDEBUG, "JSONRPC: One of the array elements does not match in type {}", name);
         errorMessage = StringUtils::Format("{0} array elements expected but {1} received", items.size(), value.size());
@@ -796,7 +822,7 @@ JSONRPC_STATUS JSONSchemaTypeDefinition::Check(const CVariant& value,
         }
       }
 
-      if (additionalItems.size() > 0)
+      if (!additionalItems.empty())
       {
         // Loop through the rest of the elements
         // in the array and check them against the
@@ -893,7 +919,7 @@ JSONRPC_STATUS JSONSchemaTypeDefinition::Check(const CVariant& value,
       {
         CVariant::const_iterator_map iter;
         CVariant::const_iterator_map iterEnd = value.end_map();
-        for (iter = value.begin_map(); iter != iterEnd; iter++)
+        for (iter = value.begin_map(); iter != iterEnd; ++iter)
         {
           if (properties.find(iter->first) != properties.end())
             continue;
@@ -933,7 +959,7 @@ JSONRPC_STATUS JSONSchemaTypeDefinition::Check(const CVariant& value,
 
   // If it can only take certain values ("enum")
   // we need to check against those
-  if (enums.size() > 0)
+  if (!enums.empty())
   {
     bool valid = false;
     for (const auto& enumItr : enums)
@@ -1060,7 +1086,7 @@ void JSONSchemaTypeDefinition::Print(bool isParameter, bool isGlobal, bool print
       for (unsigned int extendsIndex = 0; extendsIndex < extends.size(); extendsIndex++)
         output["extends"].append(extends.at(extendsIndex)->ID);
     }
-    else if (unionTypes.size() > 0)
+    else if (!unionTypes.empty())
     {
       output["type"] = CVariant(CVariant::VariantTypeArray);
       for (unsigned int unionIndex = 0; unionIndex < unionTypes.size(); unionIndex++)
@@ -1074,7 +1100,7 @@ void JSONSchemaTypeDefinition::Print(bool isParameter, bool isGlobal, bool print
       CJSONUtils::SchemaValueTypeToJson(type, output["type"]);
 
     // Printing enum field
-    if (enums.size() > 0)
+    if (!enums.empty())
     {
       output["enums"] = CVariant(CVariant::VariantTypeArray);
       for (unsigned int enumIndex = 0; enumIndex < enums.size(); enumIndex++)
@@ -1296,12 +1322,32 @@ bool JsonRpcMethod::Parse(const CVariant &value)
   {
     int permissions = 0;
     for (unsigned int index = 0; index < value["permission"].size(); index++)
-      permissions |= StringToPermission(value["permission"][index].asString());
+    {
+      const auto parsed = StringToPermission(value["permission"][index].asString());
+      if (!parsed)
+      {
+        CLog::Log(LOGERROR, "JSONRPC: Unknown permission \"{}\" in method \"{}\"",
+                  value["permission"][index].asString(), name);
+        return false;
+      }
+      permissions |= *parsed;
+    }
 
     permission = (OperationPermission)permissions;
   }
+  else if (value.isMember("permission"))
+  {
+    const auto parsed = StringToPermission(value["permission"].asString());
+    if (!parsed)
+    {
+      CLog::Log(LOGERROR, "JSONRPC: Unknown permission \"{}\" in method \"{}\"",
+                value["permission"].asString(), name);
+      return false;
+    }
+    permission = *parsed;
+  }
   else
-    permission = StringToPermission(value.isMember("permission") ? value["permission"].asString() : "");
+    permission = ReadData;
 
   description = GetString(value["description"], "");
 
@@ -1326,7 +1372,7 @@ bool JsonRpcMethod::Parse(const CVariant &value)
 
       // Parse the parameter and add it to the list
       // of defined parameters
-      JSONSchemaTypeDefinitionPtr param = JSONSchemaTypeDefinitionPtr(new JSONSchemaTypeDefinition());
+      JSONSchemaTypeDefinitionPtr param = std::make_shared<JSONSchemaTypeDefinition>();
       if (!parseParameter(parameter, param))
       {
         missingReference = param->missingReference;
@@ -1597,7 +1643,7 @@ bool CJSONServiceDescription::AddType(const std::string &jsonType)
     return false;
   }
 
-  if (m_types.find(typeName) != m_types.end())
+  if (m_types.contains(typeName))
   {
     CLog::Log(LOGERROR, "JSONRPC: There already is a type with the name \"{}\"", typeName);
     return false;
@@ -1606,7 +1652,7 @@ bool CJSONServiceDescription::AddType(const std::string &jsonType)
   // Make sure the "id" attribute is correctly populated
   descriptionObject[typeName]["id"] = typeName;
 
-  JSONSchemaTypeDefinitionPtr globalType = JSONSchemaTypeDefinitionPtr(new JSONSchemaTypeDefinition());
+  JSONSchemaTypeDefinitionPtr globalType = std::make_shared<JSONSchemaTypeDefinition>();
   globalType->name = typeName;
   globalType->ID = typeName;
   CJSONServiceDescription::addReferenceTypeDefinition(globalType);
@@ -1670,7 +1716,7 @@ bool CJSONServiceDescription::AddNotification(const std::string &jsonNotificatio
     return false;
   }
 
-  if (m_notifications.find(notificationName) != m_notifications.end())
+  if (m_notifications.contains(notificationName))
   {
     CLog::Log(LOGERROR, "JSONRPC: There already is a notification with the name \"{}\"",
               notificationName);
@@ -1691,11 +1737,10 @@ bool CJSONServiceDescription::AddNotification(const std::string &jsonNotificatio
 
 bool CJSONServiceDescription::AddEnum(const std::string &name, const std::vector<CVariant> &values, CVariant::VariantType type /* = CVariant::VariantTypeNull */, const CVariant &defaultValue /* = CVariant::ConstNullVariant */)
 {
-  if (name.empty() || m_types.find(name) != m_types.end() ||
-      values.size() == 0)
+  if (name.empty() || m_types.contains(name) || values.empty())
     return false;
 
-  JSONSchemaTypeDefinitionPtr definition = JSONSchemaTypeDefinitionPtr(new JSONSchemaTypeDefinition());
+  JSONSchemaTypeDefinitionPtr definition = std::make_shared<JSONSchemaTypeDefinition>();
   definition->ID = name;
 
   std::vector<CVariant::VariantType> types;
@@ -1796,11 +1841,12 @@ JSONRPC_STATUS CJSONServiceDescription::Print(CVariant &result, ITransportLayer 
   std::map<std::string, JSONSchemaTypeDefinitionPtr> types;
   CJsonRpcMethodMap methods;
   std::map<std::string, CVariant> notifications;
+  std::vector<const JsonRpcStatusDescription*> errors;
 
   int clientPermissions = client->GetPermissionFlags();
   int transportCapabilities = transport->GetCapabilities();
 
-  if (filterByName.size() > 0)
+  if (!filterByName.empty())
   {
     std::string name = filterByName;
 
@@ -1850,6 +1896,17 @@ JSONRPC_STATUS CJSONServiceDescription::Print(CVariant &result, ITransportLayer 
       else
         return InvalidParams;
     }
+    else if (filterByType == "error")
+    {
+      const auto errorIterator =
+          std::find_if(JSONRPC_STATUS_DESCRIPTIONS.begin(), JSONRPC_STATUS_DESCRIPTIONS.end(),
+                       [&name](const JsonRpcStatusDescription& description)
+                       { return name == description.name; });
+      if (errorIterator != JSONRPC_STATUS_DESCRIPTIONS.end())
+        errors.push_back(&(*errorIterator));
+      else
+        return InvalidParams;
+    }
     else
       return InvalidParams;
 
@@ -1888,6 +1945,10 @@ JSONRPC_STATUS CJSONServiceDescription::Print(CVariant &result, ITransportLayer 
     types = m_types;
     methods = m_actionMap;
     notifications = m_notifications;
+
+    errors.reserve(JSONRPC_STATUS_DESCRIPTIONS.size());
+    for (const auto& description : JSONRPC_STATUS_DESCRIPTIONS)
+      errors.push_back(&description);
   }
 
   // Print the header
@@ -1952,6 +2013,20 @@ JSONRPC_STATUS CJSONServiceDescription::Print(CVariant &result, ITransportLayer 
   for (notificationIterator = notifications.begin(); notificationIterator != notificationIteratorEnd; ++notificationIterator)
     result["notifications"][notificationIterator->first] = notificationIterator->second[notificationIterator->first];
 
+  // Print the error taxonomy
+  for (const auto* status : errors)
+  {
+    CVariant currentError = CVariant(CVariant::VariantTypeObject);
+
+    currentError["code"] = status->status;
+    currentError["message"] = status->message;
+    if (printDescriptions)
+      currentError["description"] = status->description;
+    currentError["hasdata"] = status->hasData;
+
+    result["errors"][status->name] = currentError;
+  }
+
   return OK;
 }
 
@@ -1985,7 +2060,7 @@ bool CJSONServiceDescription::parseJSONSchemaType(const CVariant &value, std::ve
     // to handle a union type
     for (unsigned int typeIndex = 0; typeIndex < value.size(); typeIndex++)
     {
-      JSONSchemaTypeDefinitionPtr definition = JSONSchemaTypeDefinitionPtr(new JSONSchemaTypeDefinition());
+      JSONSchemaTypeDefinitionPtr definition = std::make_shared<JSONSchemaTypeDefinition>();
       // If the type is a string try to parse it
       if (value[typeIndex].isString())
         definition->type = StringToSchemaValueType(value[typeIndex].asString());
@@ -2034,7 +2109,7 @@ void CJSONServiceDescription::addReferenceTypeDefinition(
     return;
 
   // If the id has already been defined we ignore the type definition
-  if (m_types.find(typeDefinition->ID) != m_types.end())
+  if (m_types.contains(typeDefinition->ID))
     return;
 
   // Add the type to the list of type definitions
@@ -2071,7 +2146,7 @@ void CJSONServiceDescription::getReferencedTypes(const JSONSchemaTypeDefinitionP
                                                  std::vector<std::string>& referencedTypes)
 {
   // If the current type is a referenceable object, we can add it to the list
-  if (type->ID.size() > 0)
+  if (!type->ID.empty())
   {
     for (unsigned int index = 0; index < referencedTypes.size(); index++)
     {

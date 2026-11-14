@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2007-2018 Team Kodi
+ *  Copyright (C) 2007-2026 Team Kodi
  *  This file is part of Kodi - https://kodi.tv
  *
  *  SPDX-License-Identifier: GPL-2.0-or-later
@@ -14,6 +14,7 @@
 #include "utils/Geometry.h"
 
 #include <array>
+#include <span>
 #include <vector>
 
 #include <DirectXMath.h>
@@ -27,11 +28,21 @@ class CRenderBuffer;
 
 using namespace DirectX;
 
-class CWinShader
+class CWinShader : ID3DResource
 {
+public:
+  /*!
+   * Set to true for the shader at the end of the chain that outputs to the back buffer.
+   * This will ensure that the depth buffer is bound.
+   */
+  void SetFinalShader(bool final) { m_isFinalShader = final; }
+
+  void OnDestroyDevice(bool fatal) override;
+  void OnCreateDevice() override;
+
 protected:
   CWinShader() = default;
-  virtual ~CWinShader() = default;
+  virtual ~CWinShader();
 
   virtual bool CreateVertexBuffer(unsigned int vertCount, unsigned int vertSize);
   virtual bool LockVertexBuffer(void **data);
@@ -39,19 +50,29 @@ protected:
   virtual bool LoadEffect(const std::string& filename, DefinesMap* defines);
   virtual bool Execute(const std::vector<CD3DTexture*>& targets, unsigned int vertexIndexStep);
   virtual void SetStepParams(unsigned stepIndex) { }
-  virtual bool CreateInputLayout(D3D11_INPUT_ELEMENT_DESC *layout, unsigned numElements);
+
+  /*!
+   * \brief Create the input layout of the shader.
+   * \param[in] elementDesc Descriptions of the input layout element. They are expected to live at
+   *                        least as long as this object.
+   * \return true for success, false otherwise.
+   */
+  virtual bool CreateInputLayout(std::span<const D3D11_INPUT_ELEMENT_DESC> elementDesc);
 
   CD3DEffect m_effect;
   CD3DTexture* m_target = nullptr;
 
 private:
-  void SetTarget(CD3DTexture* target);
+  void SetTarget(CD3DTexture* target, ID3D11DepthStencilView* dsv);
+  bool CreateInputLayoutResources(std::span<const D3D11_INPUT_ELEMENT_DESC> elementDesc);
 
   CD3DBuffer m_vb;
   CD3DBuffer m_ib;
   unsigned int m_vbsize = 0;
   unsigned int m_vertsize = 0;
-  Microsoft::WRL::ComPtr<ID3D11InputLayout> m_inputLayout = nullptr;
+  Microsoft::WRL::ComPtr<ID3D11InputLayout> m_inputLayout;
+  std::span<const D3D11_INPUT_ELEMENT_DESC> m_inputLayoutElementDesc;
+  bool m_isFinalShader{false};
 };
 
 class COutputShader : public CWinShader
@@ -62,7 +83,14 @@ public:
 
   void ApplyEffectParameters(CD3DEffect &effect, unsigned sourceWidth, unsigned sourceHeight);
   void GetDefines(DefinesMap &map) const;
-  bool Create(bool useLUT, bool useDithering, int ditherDepth, bool toneMapping, int toneMethod, bool HLGtoPQ);
+  bool Create(bool useLUT,
+              bool useDithering,
+              int ditherDepth,
+              bool toneMapping,
+              ETONEMAPMETHOD toneMethod,
+              bool HLGtoPQ,
+              AVColorTransferCharacteristic hueSatTransfer = AVCOL_TRC_UNSPECIFIED,
+              bool gamma = false);
   void Render(CD3DTexture& sourceTexture, CRect sourceRect, const CPoint points[4]
             , CD3DTexture& target, unsigned range = 0, float contrast = 0.5f, float brightness = 0.5f);
   void Render(CD3DTexture& sourceTexture, CRect sourceRect, CRect destRect
@@ -70,7 +98,9 @@ public:
   void SetLUT(int lutSize, ID3D11ShaderResourceView *pLUTView);
   void SetDisplayMetadata(bool hasDisplayMetadata, AVMasteringDisplayMetadata displayMetadata,
                           bool hasLightMetadata, AVContentLightMetadata lightMetadata);
-  void SetToneMapParam(int method, float param);
+  void SetToneMapParam(ETONEMAPMETHOD method, float param);
+  void SetHueSaturation(float hue, float saturation);
+  void SetGamma(float exponent) { m_gammaExponent = exponent; }
   std::string GetDebugInfo();
 
   static bool CreateLUTView(int lutSize, uint16_t* lutData, bool isRGB, ID3D11ShaderResourceView** ppLUTView);
@@ -86,12 +116,16 @@ private:
   void PrepareParameters(unsigned sourceWidth, unsigned sourceHeight, CRect sourceRect, const CPoint points[4]);
   void SetShaderParameters(CD3DTexture &sourceTexture, unsigned range, float contrast, float brightness);
   void CreateDitherView();
-  float GetLuminanceValue() const;
 
   bool m_useLut = false;
   bool m_useDithering = false;
   bool m_toneMapping = false;
   bool m_useHLGtoPQ = false;
+  AVColorTransferCharacteristic m_hueSatTransfer = AVCOL_TRC_UNSPECIFIED;
+  bool m_useGamma = false;
+  float m_gammaExponent = 1.0f;
+  float m_hue = 0.0f;
+  float m_saturation = 1.0f;
 
   bool m_hasDisplayMetadata = false;
   bool m_hasLightMetadata = false;
@@ -99,7 +133,7 @@ private:
   unsigned m_sourceHeight = 0;
   int m_lutSize = 0;
   int m_ditherDepth = 0;
-  int m_toneMappingMethod = 0;
+  ETONEMAPMETHOD m_toneMappingMethod = VS_TONEMAPMETHOD_OFF;
   float m_toneMappingParam = 1.0f;
   float m_toneMappingDebug = .0f;
 
@@ -121,9 +155,14 @@ public:
   bool Create(AVPixelFormat fmt,
               AVColorPrimaries dstPrimaries,
               AVColorPrimaries srcPrimaries,
-              const std::shared_ptr<COutputShader>& pOutShader = nullptr);
+              const std::shared_ptr<COutputShader>& pOutShader = nullptr,
+              AVColorTransferCharacteristic hueSatTransfer = AVCOL_TRC_UNSPECIFIED);
   void Render(CRect sourceRect, CPoint dest[], CRenderBuffer* videoBuffer, CD3DTexture& target);
-  void SetParams(float contrast, float black, bool limited);
+  void SetParams(float contrast, float black, float hue, float saturation, bool limited);
+  /*!
+   * \brief HDR hue and saturation in linear light, used when created with a PQ or HLG transfer.
+   */
+  void SetHueSaturation(float hue, float saturation, float peakLuminance);
   void SetColParams(AVColorSpace colSpace, int bits, bool limited, int texBits);
 
 protected:
@@ -146,6 +185,11 @@ private:
   std::shared_ptr<COutputShader> m_pOutShader = nullptr;
   CConvertMatrix m_convMatrix;
   bool m_colorConversion{false};
+  bool m_limited{false};
+  AVColorTransferCharacteristic m_hueSatTransfer{AVCOL_TRC_UNSPECIFIED};
+  float m_hue{0.0f};
+  float m_saturation{1.0f};
+  float m_peakLuminance{1000.0f};
 };
 
 class CConvolutionShader : public CWinShader

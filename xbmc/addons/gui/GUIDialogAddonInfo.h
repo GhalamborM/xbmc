@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include "addons/IAddon.h"
+#include "addons/addoninfo/AddonInfo.h"
 #include "guilib/GUIDialog.h"
 
 #include <memory>
@@ -16,19 +16,26 @@
 #include <utility>
 #include <vector>
 
-enum class Reactivate
+namespace ADDON
 {
-  YES,
-  NO,
+class IAddon;
+using AddonPtr = std::shared_ptr<IAddon>;
+
+} // namespace ADDON
+
+enum class Reactivate : bool
+{
+  CHOICE_YES = true,
+  CHOICE_NO = false,
 };
 
-enum class PerformButtonFocus
+enum class PerformButtonFocus : bool
 {
-  YES,
-  NO,
+  CHOICE_YES = true,
+  CHOICE_NO = false,
 };
 
-enum class EntryPoint
+enum class EntryPoint : int
 {
   INSTALL,
   UPDATE,
@@ -85,10 +92,11 @@ private:
   void OnInstall();
   void OnUninstall();
   void OnEnableDisable();
-  void OnSettings();
+  void OnSettings() const;
   void OnSelect();
   void OnToggleAutoUpdates();
-  int AskForVersion(std::vector<std::pair<ADDON::AddonVersion, std::string>>& versions);
+  int AskForVersion(
+      const std::vector<std::pair<ADDON::CAddonVersion, std::string>>& versions) const;
 
   /*!
    * @brief Returns true if current addon can be opened (i.e is a plugin)
@@ -118,7 +126,7 @@ private:
    * @param[in] line2 the action that could not be completed.
    * @return true if prompted, false otherwise.
    */
-  bool PromptIfDependency(int heading, int line2);
+  bool PromptIfDependency(int heading, int line2) const;
 
   /*!
    * @brief Show a dialog with the addon's dependencies.
@@ -132,7 +140,7 @@ private:
   /*!
    * @brief Show a dialog with the addon's supported extensions and mimetypes.
    */
-  void ShowSupportList();
+  void ShowSupportList() const;
 
   /*!
    * @brief Used to build up the dependency list shown by @ref ShowDependencyList()

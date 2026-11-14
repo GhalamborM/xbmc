@@ -71,6 +71,7 @@ public:
   bool DestroyWindowSystem() override;
   bool ResizeWindow(int newWidth, int newHeight, int newLeft, int newTop) override;
   void FinishWindowResize(int newWidth, int newHeight) override;
+  void ForceFullScreen(const RESOLUTION_INFO& resInfo) override;
   void UpdateResolutions() override;
   void NotifyAppFocusChange(bool bGaining) override;
   void ShowOSMouse(bool show) override;
@@ -81,9 +82,13 @@ public:
   bool Show(bool raise = true) override;
   std::string GetClipboardText() override;
   bool UseLimitedColor() override;
+  float GetGuiSdrPeakLuminance() const override;
+  bool HasSystemSdrPeakLuminance() override;
+  CHDRCapabilities GetDisplayHDRCapabilities() const override;
+  bool SetDolbyVisionOutput(bool enabled);
 
   // videosync
-  std::unique_ptr<CVideoSync> GetVideoSync(void *clock) override;
+  std::unique_ptr<CVideoSync> GetVideoSync(CVideoReferenceClock* clock) override;
 
   bool WindowedMode() const { return m_state != WINDOW_STATE_FULLSCREEN; }
   bool SetFullScreen(bool fullScreen, RESOLUTION_INFO& res, bool blankOtherDisplays) override;
@@ -91,9 +96,12 @@ public:
   // CWinSystemWin10
   bool IsAlteringWindow() const { return m_IsAlteringWindow; }
   void SetAlteringWindow(bool altering) { m_IsAlteringWindow = altering; }
+  bool IsTogglingHDR() const { return false; }
+  void SetTogglingHDR(bool toggling) {}
   virtual bool DPIChanged(WORD dpi, RECT windowRect) const;
   bool IsMinimized() const { return m_bMinimized; }
   void SetMinimized(bool minimized) { m_bMinimized = minimized; }
+  void CacheSystemSdrPeakLuminance();
 
   bool CanDoWindowed() override;
 
@@ -137,7 +145,7 @@ protected:
   CCriticalSection m_resourceSection;
   std::vector<IDispResource*> m_resources;
   bool m_delayDispReset;
-  XbmcThreads::EndTime m_dispResetTimer;
+  XbmcThreads::EndTime<> m_dispResetTimer;
 
   WINDOW_STATE m_state;                       // the state of the window
   WINDOW_FULLSCREEN_STATE m_fullscreenState;  // the state of the window when in fullscreen
@@ -147,6 +155,21 @@ protected:
   bool m_bFirstResChange = true;
 
   winrt::Windows::UI::Core::CoreWindow m_coreWindow = nullptr;
+
+  bool m_validSystemSdrPeakLuminance{false};
+  float m_systemSdrPeakLuminance{.0f};
+
+  DWORD m_uiThreadId{0};
+  HDR_STATUS m_cachedHdrStatus{HDR_STATUS::HDR_UNSUPPORTED};
+  bool m_cachedHasSystemSdrPeakLum{false};
+  bool m_dolbyVisionPreviousHdrState{false};
+  // display mode without Dolby Vision output, not retried until the mode changes
+  struct UnsupportedDolbyVisionMode
+  {
+    uint32_t width{0};
+    uint32_t height{0};
+    double refreshRate{0.0};
+  } m_unsupportedDolbyVisionMode;
 };
 
 #pragma pack(pop)

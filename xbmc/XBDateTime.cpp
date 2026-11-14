@@ -8,14 +8,21 @@
 
 #include "XBDateTime.h"
 
-#include "LangInfo.h"
-#include "guilib/LocalizeStrings.h"
+#include "ServiceBroker.h"
+#include "language/LangInfo.h"
+#include "resources/LocalizeStrings.h"
+#include "resources/ResourcesComponent.h"
+#include "threads/CriticalSection.h"
+#include "threads/SystemClock.h"
 #include "utils/Archive.h"
 #include "utils/StringUtils.h"
 #include "utils/XTimeUtils.h"
 #include "utils/log.h"
 
+#include <charconv>
+#include <cstdint>
 #include <cstdlib>
+#include <mutex>
 
 #define SECONDS_PER_DAY 86400L
 #define SECONDS_PER_HOUR 3600L
@@ -24,6 +31,8 @@
 
 static const char *DAY_NAMES[] = { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
 static const char *MONTH_NAMES[] = { "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec" };
+
+using namespace std::chrono_literals;
 
 /////////////////////////////////////////////////
 //
@@ -42,7 +51,7 @@ CDateTimeSpan::CDateTimeSpan(const CDateTimeSpan& span)
   m_timeSpan.lowDateTime = span.m_timeSpan.lowDateTime;
 }
 
-CDateTimeSpan::CDateTimeSpan(int day, int hour, int minute, int second)
+CDateTimeSpan::CDateTimeSpan(int day, int hour, int minute, int second) : CDateTimeSpan()
 {
   SetDateTimeSpan(day, hour, minute, second);
 }
@@ -238,6 +247,51 @@ void CDateTimeSpan::SetFromPeriod(const std::string &period)
 // CDateTime
 //
 
+namespace
+{
+CDateTimeSpan GetTimezoneBiasForSystemTime(const KODI::TIME::SystemTime& time)
+{
+  CDateTimeSpan timezoneBias;
+
+  const auto [success, bias] = KODI::TIME::GetTimezoneBias(time);
+  if (success)
+    timezoneBias = CDateTimeSpan(0, 0, static_cast<int>(bias), 0);
+  else
+    CLog::Log(LOGERROR, "Unable to obtain time zone bias!");
+
+  return timezoneBias;
+}
+
+CDateTimeSpan GetCurrentTimezoneBias()
+{
+  static CCriticalSection critSection;
+  static CDateTimeSpan timezoneBias;
+
+  std::unique_lock lock(critSection);
+
+  // This method gets called very often and is expensive, so refresh info only every 5 mins.
+  if (static XbmcThreads::EndTime<> biasRefreshTimeout(0s); biasRefreshTimeout.IsTimePast())
+  {
+    KODI::TIME::SystemTime now;
+    KODI::TIME::GetLocalTime(&now);
+
+    const CDateTimeSpan oldTimezoneBias{timezoneBias};
+    timezoneBias = GetTimezoneBiasForSystemTime(now);
+
+    if (oldTimezoneBias != timezoneBias)
+    {
+      CLog::Log(LOGINFO,
+                "Time zone bias changed from {} mins to {} mins (due to time zone or DST change).",
+                oldTimezoneBias.GetSecondsTotal() / 60, timezoneBias.GetSecondsTotal() / 60);
+    }
+
+    biasRefreshTimeout.Set(5min); // Arm for next refresh.
+  }
+
+  return timezoneBias;
+}
+} // unnamed namespace
+
 CDateTime::CDateTime()
 {
   Reset();
@@ -246,29 +300,24 @@ CDateTime::CDateTime()
 CDateTime::CDateTime(const KODI::TIME::SystemTime& time)
 {
   // we store internally as a FileTime
-  m_state = ToFileTime(time, m_time) ? valid : invalid;
+  m_state = ToFileTime(time, m_time) ? State::VALID : State::INVALID;
 }
 
-CDateTime::CDateTime(const KODI::TIME::FileTime& time)
+CDateTime::CDateTime(const KODI::TIME::FileTime& time) : m_time(time)
 {
-  m_time=time;
   SetValid(true);
 }
 
-CDateTime::CDateTime(const CDateTime& time)
-{
-  m_time=time.m_time;
-  m_state=time.m_state;
-}
+CDateTime::CDateTime(const CDateTime& time) = default;
 
 CDateTime::CDateTime(const time_t& time)
 {
-  m_state = ToFileTime(time, m_time) ? valid : invalid;
+  m_state = ToFileTime(time, m_time) ? State::VALID : State::INVALID;
 }
 
 CDateTime::CDateTime(const tm& time)
 {
-  m_state = ToFileTime(time, m_time) ? valid : invalid;
+  m_state = ToFileTime(time, m_time) ? State::VALID : State::INVALID;
 }
 
 CDateTime::CDateTime(int year, int month, int day, int hour, int minute, int second)
@@ -288,14 +337,14 @@ CDateTime CDateTime::GetCurrentDateTime()
 CDateTime CDateTime::GetUTCDateTime()
 {
   CDateTime time(GetCurrentDateTime());
-  time += GetTimezoneBias();
+  time += GetCurrentTimezoneBias();
   return time;
 }
 
 const CDateTime& CDateTime::operator=(const KODI::TIME::SystemTime& right)
 {
-  m_state = ToFileTime(right, m_time) ? valid : invalid;
-
+  m_state = ToFileTime(right, m_time) ? State::VALID : State::INVALID;
+  m_timeZoneBias.reset();
   return *this;
 }
 
@@ -309,15 +358,15 @@ const CDateTime& CDateTime::operator=(const KODI::TIME::FileTime& right)
 
 const CDateTime& CDateTime::operator =(const time_t& right)
 {
-  m_state = ToFileTime(right, m_time) ? valid : invalid;
-
+  m_state = ToFileTime(right, m_time) ? State::VALID : State::INVALID;
+  m_timeZoneBias.reset();
   return *this;
 }
 
 const CDateTime& CDateTime::operator =(const tm& right)
 {
-  m_state = ToFileTime(right, m_time) ? valid : invalid;
-
+  m_state = ToFileTime(right, m_time) ? State::VALID : State::INVALID;
+  m_timeZoneBias.reset();
   return *this;
 }
 
@@ -591,8 +640,8 @@ void CDateTime::Archive(CArchive& ar)
 {
   if (ar.IsStoring())
   {
-    ar<<(int)m_state;
-    if (m_state==valid)
+    ar << static_cast<int>(m_state);
+    if (m_state == State::VALID)
     {
       KODI::TIME::SystemTime st;
       GetAsSystemTime(st);
@@ -604,8 +653,8 @@ void CDateTime::Archive(CArchive& ar)
     Reset();
     int state;
     ar >> state;
-    m_state = CDateTime::STATE(state);
-    if (m_state==valid)
+    m_state = static_cast<State>(state);
+    if (m_state == State::VALID)
     {
       KODI::TIME::SystemTime st;
       ar>>st;
@@ -616,18 +665,19 @@ void CDateTime::Archive(CArchive& ar)
 
 void CDateTime::Reset()
 {
-  SetDateTime(1601, 1, 1, 0, 0, 0);
+  m_time = {0, 0}; // Windows epoch 1601-01-01
+  m_timeZoneBias.reset();
   SetValid(false);
 }
 
 void CDateTime::SetValid(bool yesNo)
 {
-  m_state=yesNo ? valid : invalid;
+  m_state = yesNo ? State::VALID : State::INVALID;
 }
 
 bool CDateTime::IsValid() const
 {
-  return m_state==valid;
+  return m_state == State::VALID;
 }
 
 bool CDateTime::ToFileTime(const KODI::TIME::SystemTime& time, KODI::TIME::FileTime& fileTime) const
@@ -788,8 +838,9 @@ bool CDateTime::SetDateTime(int year, int month, int day, int hour, int minute, 
   st.minute = minute;
   st.second = second;
 
-  m_state = ToFileTime(st, m_time) ? valid : invalid;
-  return m_state == valid;
+  m_state = ToFileTime(st, m_time) ? State::VALID : State::INVALID;
+  m_timeZoneBias.reset();
+  return m_state == State::VALID;
 }
 
 bool CDateTime::SetDate(int year, int month, int day)
@@ -815,11 +866,18 @@ void CDateTime::GetAsTime(time_t& time) const
   time=(time_t)((ll - UNIX_BASE_TIME) / 10000000);
 }
 
+int64_t CDateTime::GetAsSecondsSinceEpoch() const
+{
+  const int64_t ll{(static_cast<int64_t>(m_time.highDateTime) << 32) + m_time.lowDateTime};
+  return (ll - UNIX_BASE_TIME) / 10000000;
+}
+
 void CDateTime::GetAsTm(tm& time) const
 {
   KODI::TIME::SystemTime st;
   GetAsSystemTime(st);
 
+  time = {};
   time.tm_year = st.year - 1900;
   time.tm_mon = st.month - 1;
   time.tm_wday = st.dayOfWeek;
@@ -827,6 +885,7 @@ void CDateTime::GetAsTm(tm& time) const
   time.tm_hour = st.hour;
   time.tm_min = st.minute;
   time.tm_sec = st.second;
+  time.tm_isdst = -1;
 
   mktime(&time);
 }
@@ -873,43 +932,12 @@ std::string CDateTime::GetAsSaveString() const
 bool CDateTime::SetFromUTCDateTime(const CDateTime &dateTime)
 {
   CDateTime tmp(dateTime);
-  tmp -= GetTimezoneBias();
+  tmp -= tmp.GetTimezoneBias();
 
   m_time = tmp.m_time;
   m_state = tmp.m_state;
-  return m_state == valid;
-}
-
-static bool bGotTimezoneBias = false;
-
-void CDateTime::ResetTimezoneBias(void)
-{
-  bGotTimezoneBias = false;
-}
-
-CDateTimeSpan CDateTime::GetTimezoneBias(void)
-{
-  static CDateTimeSpan timezoneBias;
-
-  if (!bGotTimezoneBias)
-  {
-    bGotTimezoneBias = true;
-    KODI::TIME::TimeZoneInformation tz;
-    switch (KODI::TIME::GetTimeZoneInformation(&tz))
-    {
-      case KODI::TIME::KODI_TIME_ZONE_ID_DAYLIGHT:
-        timezoneBias = CDateTimeSpan(0, 0, tz.bias + tz.daylightBias, 0);
-        break;
-      case KODI::TIME::KODI_TIME_ZONE_ID_STANDARD:
-        timezoneBias = CDateTimeSpan(0, 0, tz.bias + tz.standardBias, 0);
-        break;
-      case KODI::TIME::KODI_TIME_ZONE_ID_UNKNOWN:
-        timezoneBias = CDateTimeSpan(0, 0, tz.bias, 0);
-        break;
-    }
-  }
-
-  return timezoneBias;
+  m_timeZoneBias = tmp.GetTimezoneBias();
+  return m_state == State::VALID;
 }
 
 bool CDateTime::SetFromUTCDateTime(const time_t &dateTime)
@@ -917,6 +945,20 @@ bool CDateTime::SetFromUTCDateTime(const time_t &dateTime)
   CDateTime tmp(dateTime);
   return SetFromUTCDateTime(tmp);
 }
+
+namespace
+{
+//! \brief Whether broken-down date/time fields are in range for a valid date.
+//!
+//! The POSIX implementation of KODI::TIME::SystemTimeToFileTime() normalizes
+//! out-of-range fields instead of failing, so parsers have to reject them
+//! explicitly to behave the same on every platform.
+bool IsValidDateTimeRange(int year, int month, int day, int hour, int minute, int second)
+{
+  return year >= 1601 && month >= 1 && month <= 12 && day >= 1 && day <= 31 && hour >= 0 &&
+         hour <= 23 && minute >= 0 && minute <= 59 && second >= 0 && second <= 59;
+}
+} // namespace
 
 bool CDateTime::SetFromW3CDate(const std::string &dateTime)
 {
@@ -938,6 +980,9 @@ bool CDateTime::SetFromW3CDate(const std::string &dateTime)
     month = atoi(date.substr(5, 2).c_str());
     day   = atoi(date.substr(8, 2).c_str());
   }
+
+  if (!IsValidDateTimeRange(year, month, day, 0, 0, 0))
+    return false;
 
   CDateTime tmpDateTime(year, month, day, 0, 0, 0);
   if (tmpDateTime.IsValid())
@@ -985,6 +1030,9 @@ bool CDateTime::SetFromW3CDateTime(const std::string &dateTime, bool ignoreTimez
 
   if (time.length() >= 8)
     sec  = atoi(time.substr(6, 2).c_str());
+
+  if (!IsValidDateTimeRange(year, month, day, hour, min, sec))
+    return false;
 
   CDateTime tmpDateTime(year, month, day, hour, min, sec);
   if (!tmpDateTime.IsValid())
@@ -1103,6 +1151,47 @@ bool CDateTime::SetFromRFC1123DateTime(const std::string &dateTime)
   return SetDateTime(year, month, day, hour, min, sec);
 }
 
+namespace
+{
+template<typename T>
+std::optional<T> ToNumeric(std::string_view str)
+{
+  const char* end{str.data() + str.size()};
+  T result{};
+
+  auto [ptr, ec] = std::from_chars(str.data(), end, result);
+
+  if (ec != std::errc{} || ptr != end || result < 0)
+    return std::nullopt;
+
+  return result;
+}
+} // namespace
+
+bool CDateTime::SetFromRFC3339FullDate(std::string_view date)
+{
+  // The date format must be YYYY-MM-DD
+  if (date.size() != 10)
+    return false;
+
+  if (date[4] != '-' || date[7] != '-')
+    return false;
+
+  const auto year{ToNumeric<int>(date.substr(0, 4))};
+  if (!year.has_value())
+    return false;
+
+  const auto month{ToNumeric<int>(date.substr(5, 2))};
+  if (!month.has_value())
+    return false;
+
+  const auto day{ToNumeric<int>(date.substr(8, 2))};
+  if (!day.has_value())
+    return false;
+
+  return SetDate(year.value(), month.value(), day.value());
+}
+
 CDateTime CDateTime::FromDateString(const std::string &date)
 {
   CDateTime dt;
@@ -1159,6 +1248,25 @@ CDateTime CDateTime::FromUTCDateTime(const time_t &dateTime)
   return dt;
 }
 
+CDateTime CDateTime::FromSecondsSinceEpoch(int64_t seconds)
+{
+  constexpr int64_t FIRST_SECOND{-11644473600}; // 1601-01-01, where a FileTime starts counting
+  constexpr int64_t LAST_SECOND{910692730085}; // 30828-09-14, where the 100ns count leaves int64
+
+  // a count read out of a database column can be anything, and the multiply below overflows
+  // outside this range
+  if (seconds < FIRST_SECOND || seconds > LAST_SECOND)
+    return {};
+
+  const int64_t ll{seconds * 10000000LL + UNIX_BASE_TIME};
+
+  KODI::TIME::FileTime fileTime{};
+  fileTime.lowDateTime = static_cast<uint32_t>(ll & 0xFFFFFFFF);
+  fileTime.highDateTime = static_cast<uint32_t>(ll >> 32);
+
+  return CDateTime(fileTime);
+}
+
 CDateTime CDateTime::FromRFC1123DateTime(const std::string &dateTime)
 {
   CDateTime dt;
@@ -1175,8 +1283,8 @@ std::string CDateTime::GetAsLocalizedTime(const std::string &format, bool withSe
   GetAsSystemTime(dateTime);
 
   // Prefetch meridiem symbol
-  const std::string& strMeridiem =
-      CLangInfo::MeridiemSymbolToString(dateTime.hour > 11 ? MeridiemSymbolPM : MeridiemSymbolAM);
+  const std::string& strMeridiem = CLangInfo::MeridiemSymbolToString(
+      dateTime.hour > 11 ? MeridiemSymbol::PM : MeridiemSymbol::AM);
 
   size_t length = strFormat.size();
   for (size_t i=0; i < length; ++i)
@@ -1332,7 +1440,14 @@ std::string CDateTime::GetAsLocalizedDate(bool longDate/*=false*/) const
 
 std::string CDateTime::GetAsLocalizedDate(const std::string &strFormat) const
 {
+  return GetAsLocalizedDate(strFormat, ReturnFormat::CHOICE_NO);
+}
+
+std::string CDateTime::GetAsLocalizedDate(const std::string& strFormat,
+                                          ReturnFormat returnFormat) const
+{
   std::string strOut;
+  std::string fmtOut;
 
   KODI::TIME::SystemTime dateTime;
   GetAsSystemTime(dateTime);
@@ -1364,6 +1479,7 @@ std::string CDateTime::GetAsLocalizedDate(const std::string &strFormat) const
       }
       StringUtils::Replace(strPart, "''", "'");
       strOut+=strPart;
+      fmtOut += strPart;
     }
     else if (c=='D' || c=='d') // parse days
     {
@@ -1386,14 +1502,24 @@ std::string CDateTime::GetAsLocalizedDate(const std::string &strFormat) const
       // Format string with the length of the mask
       std::string str;
       if (partLength==1) // single-digit number
+      {
         str = std::to_string(dateTime.day);
+        fmtOut += "%-d";
+      }
       else if (partLength==2) // two-digit number
+      {
         str = StringUtils::Format("{:02}", dateTime.day);
+        fmtOut += "%d";
+      }
       else // Day of week string
       {
         int wday = dateTime.dayOfWeek;
         if (wday < 1 || wday > 7) wday = 7;
-        str = g_localizeStrings.Get((c =='d' ? 40 : 10) + wday);
+        {
+          str = CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(
+              (c == 'd' ? 40 : 10) + wday);
+          fmtOut += (c == 'd' ? "%a" : "%A");
+        }
       }
       strOut+=str;
     }
@@ -1418,14 +1544,24 @@ std::string CDateTime::GetAsLocalizedDate(const std::string &strFormat) const
       // Format string with the length of the mask
       std::string str;
       if (partLength==1) // single-digit number
+      {
         str = std::to_string(dateTime.month);
+        fmtOut += "%-m";
+      }
       else if (partLength==2) // two-digit number
+      {
         str = StringUtils::Format("{:02}", dateTime.month);
+        fmtOut += "%m";
+      }
       else // Month string
       {
         int wmonth = dateTime.month;
         if (wmonth < 1 || wmonth > 12) wmonth = 12;
-        str = g_localizeStrings.Get((c =='m' ? 50 : 20) + wmonth);
+        {
+          str = CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(
+              (c == 'm' ? 50 : 20) + wmonth);
+          fmtOut += (c == 'm' ? "%b" : "%B");
+        }
       }
       strOut+=str;
     }
@@ -1450,15 +1586,25 @@ std::string CDateTime::GetAsLocalizedDate(const std::string &strFormat) const
       // Format string with the length of the mask
       std::string str = std::to_string(dateTime.year); // four-digit number
       if (partLength <= 2)
+      {
         str.erase(0, 2); // two-digit number
+        fmtOut += "%y";
+      }
+      else
+      {
+        fmtOut += "%Y";
+      }
 
-      strOut+=str;
+      strOut += str;
     }
     else // everything else pass to output
+    {
       strOut+=c;
+      fmtOut += c;
+    }
   }
 
-  return strOut;
+  return (returnFormat == ReturnFormat::CHOICE_YES ? fmtOut : strOut);
 }
 
 std::string CDateTime::GetAsLocalizedDateTime(bool longDate/*=false*/, bool withSeconds/*=true*/) const
@@ -1577,4 +1723,18 @@ int CDateTime::MonthStringToMonthNum(const std::string& month)
   i++;
 
   return i;
+}
+
+CDateTimeSpan CDateTime::GetTimezoneBias() const
+{
+  if (!m_timeZoneBias.has_value())
+  {
+    if (!IsValid())
+      return {};
+
+    KODI::TIME::SystemTime time{};
+    GetAsSystemTime(time);
+    m_timeZoneBias = GetTimezoneBiasForSystemTime(time);
+  }
+  return m_timeZoneBias.value();
 }

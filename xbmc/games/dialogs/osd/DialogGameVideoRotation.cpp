@@ -9,8 +9,11 @@
 #include "DialogGameVideoRotation.h"
 
 #include "FileItem.h"
-#include "guilib/LocalizeStrings.h"
+#include "FileItemList.h"
+#include "ServiceBroker.h"
 #include "guilib/WindowIDs.h"
+#include "resources/LocalizeStrings.h"
+#include "resources/ResourcesComponent.h"
 #include "settings/GameSettings.h"
 #include "settings/MediaSettings.h"
 #include "utils/Variant.h"
@@ -25,7 +28,7 @@ CDialogGameVideoRotation::CDialogGameVideoRotation()
 
 std::string CDialogGameVideoRotation::GetHeading()
 {
-  return g_localizeStrings.Get(35227); // "Rotation"
+  return CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(35227); // "Rotation"
 }
 
 void CDialogGameVideoRotation::PreInit()
@@ -83,18 +86,24 @@ void CDialogGameVideoRotation::PostExit()
   m_rotations.clear();
 }
 
+bool CDialogGameVideoRotation::OnClickAction()
+{
+  Close();
+  return true;
+}
+
 std::string CDialogGameVideoRotation::GetRotationLabel(unsigned int rotationDegCCW)
 {
   switch (rotationDegCCW)
   {
     case 0:
-      return g_localizeStrings.Get(35228); // 0
+      return CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(35228); // 0
     case 90:
-      return g_localizeStrings.Get(35231); // 270
+      return CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(35231); // 270
     case 180:
-      return g_localizeStrings.Get(35230); // 180
+      return CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(35230); // 180
     case 270:
-      return g_localizeStrings.Get(35229); // 90
+      return CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(35229); // 90
     default:
       break;
   }

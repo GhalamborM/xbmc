@@ -12,6 +12,7 @@
 #include "filesystem/File.h"
 #include "filesystem/XbtManager.h"
 #include "guilib/TextureBundleXBT.h"
+#include "guilib/TextureFormats.h"
 #include "guilib/XBTFReader.h"
 #include "utils/StringUtils.h"
 
@@ -112,7 +113,10 @@ int CXbtFile::Stat(struct __stat64 *buffer)
 
 int CXbtFile::Stat(const CURL& url, struct __stat64* buffer)
 {
-  memset(buffer, 0, sizeof(struct __stat64));
+  if (!buffer)
+    return -1;
+
+  *buffer = {};
 
   // check if the file exists
   CXBTFReaderPtr reader;
@@ -168,15 +172,14 @@ ssize_t CXbtFile::Read(void* lpBuf, size_t uiBufSize)
     if (m_unpackedFrames[m_frameIndex].empty())
     {
       // unpack the data from the current frame
-      std::vector<uint8_t> unpackedFrame =
-          CTextureBundleXBT::UnpackFrame(*m_xbtfReader.get(), frame);
-      if (unpackedFrame.empty())
+      auto unpackedFrame = CTextureBundleXBT::UnpackFrame(*m_xbtfReader.get(), frame);
+      if (!unpackedFrame)
       {
         Close();
         return -1;
       }
 
-      m_unpackedFrames[m_frameIndex] = std::move(unpackedFrame);
+      m_unpackedFrames[m_frameIndex] = std::move(*unpackedFrame);
     }
 
     // determine how many bytes we need to copy from the current frame
@@ -248,15 +251,14 @@ int64_t CXbtFile::Seek(int64_t iFilePosition, int iWhence)
     if (m_unpackedFrames[m_frameIndex].empty())
     {
       // unpack the data from the current frame
-      std::vector<uint8_t> unpackedFrame =
-          CTextureBundleXBT::UnpackFrame(*m_xbtfReader.get(), frame);
-      if (unpackedFrame.empty())
+      auto unpackedFrame = CTextureBundleXBT::UnpackFrame(*m_xbtfReader.get(), frame);
+      if (!unpackedFrame)
       {
         Close();
         return -1;
       }
 
-      m_unpackedFrames[m_frameIndex] = std::move(unpackedFrame);
+      m_unpackedFrames[m_frameIndex] = std::move(*unpackedFrame);
     }
 
     int64_t remainingBytesToSeek = newPosition - m_positionTotal;
@@ -302,13 +304,49 @@ uint32_t CXbtFile::GetImageHeight() const
   return frame.GetHeight();
 }
 
-uint32_t CXbtFile::GetImageFormat() const
+XB_FMT CXbtFile::GetImageFormat() const
 {
   CXBTFFrame frame;
   if (!GetFirstFrame(frame))
-    return false;
+    return XB_FMT_UNKNOWN;
 
   return frame.GetFormat();
+}
+
+KD_TEX_FMT CXbtFile::GetKDFormat() const
+{
+  CXBTFFrame frame;
+  if (!GetFirstFrame(frame))
+    return KD_TEX_FMT_UNKNOWN;
+
+  return frame.GetKDFormat();
+}
+
+KD_TEX_FMT CXbtFile::GetKDFormatType() const
+{
+  CXBTFFrame frame;
+  if (!GetFirstFrame(frame))
+    return KD_TEX_FMT_UNKNOWN;
+
+  return frame.GetKDFormatType();
+}
+
+KD_TEX_ALPHA CXbtFile::GetKDAlpha() const
+{
+  CXBTFFrame frame;
+  if (!GetFirstFrame(frame))
+    return KD_TEX_ALPHA_OPAQUE;
+
+  return frame.GetKDAlpha();
+}
+
+KD_TEX_SWIZ CXbtFile::GetKDSwizzle() const
+{
+  CXBTFFrame frame;
+  if (!GetFirstFrame(frame))
+    return KD_TEX_SWIZ_RGBA;
+
+  return frame.GetKDSwizzle();
 }
 
 bool CXbtFile::HasImageAlpha() const

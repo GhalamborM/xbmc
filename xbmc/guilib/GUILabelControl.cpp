@@ -8,10 +8,13 @@
 
 #include "GUILabelControl.h"
 
+#include "GUIFont.h"
 #include "GUIMessage.h"
+#include "ServiceBroker.h"
 #include "utils/CharsetConverter.h"
 #include "utils/ColorUtils.h"
 #include "utils/StringUtils.h"
+#include "windowing/WinSystem.h"
 
 using namespace KODI::GUILIB;
 
@@ -74,28 +77,34 @@ void CGUILabelControl::UpdateInfo(const CGUIListItem *item)
     std::wstring utf16;
     g_charsetConverter.utf8ToW(label, utf16);
     vecText text; text.reserve(utf16.size()+1);
-    std::vector<UTILS::COLOR::Color> colors;
+    std::vector<KODI::UTILS::COLOR::Color> colors;
     colors.push_back(m_label.GetLabelInfo().textColor);
     colors.push_back(m_label.GetLabelInfo().disabledColor);
-    UTILS::COLOR::Color select = m_label.GetLabelInfo().selectedColor;
+    KODI::UTILS::COLOR::Color select = m_label.GetLabelInfo().selectedColor;
     if (!select)
       select = 0xFFFF0000;
     colors.push_back(select);
     colors.push_back(0xFF000000);
+
+    CGUIFont* font = m_label.GetLabelInfo().font;
+    character_t style =
+        static_cast<character_t>(font ? font->GetStyle() : (FONT_STYLE_NORMAL & FONT_STYLE_MASK))
+        << 40;
+
     for (unsigned int i = 0; i < utf16.size(); i++)
     {
-      unsigned int ch = utf16[i];
+      character_t ch = utf16[i] | style;
       if ((m_startSelection < m_endSelection) && (m_startSelection <= i && i < m_endSelection))
-        ch |= (2 << 16);
+        ch |= (character_t{2} << 32);
       else if ((m_startHighlight < m_endHighlight) && (i < m_startHighlight || i >= m_endHighlight))
-        ch |= (1 << 16);
+        ch |= (character_t{1} << 32);
       text.push_back(ch);
     }
     if (m_bShowCursor && m_iCursorPos >= 0 && (unsigned int)m_iCursorPos <= utf16.size())
     {
-      unsigned int ch = L'|';
+      character_t ch = L'|' | style;
       if ((++m_dwCounter % 50) <= 25)
-        ch |= (3 << 16);
+        ch |= (character_t{3} << 32);
       text.insert(text.begin() + m_iCursorPos, ch);
     }
     changed |= m_label.SetMaxRect(m_posX, m_posY, GetMaxWidth(), m_height);
@@ -134,6 +143,9 @@ CRect CGUILabelControl::CalcRenderRegion() const
 
 void CGUILabelControl::Render()
 {
+  if (CServiceBroker::GetWinSystem()->GetGfxContext().GetRenderOrder() ==
+      RENDER_ORDER_FRONT_TO_BACK)
+    return;
   m_label.Render();
   CGUIControl::Render();
 }
@@ -203,7 +215,13 @@ bool CGUILabelControl::OnMessage(CGUIMessage& message)
     }
   }
   if (message.GetMessage() == GUI_MSG_REFRESH_TIMER && IsVisible())
+  {
     UpdateInfo();
+  }
+  else if (message.GetMessage() == GUI_MSG_WINDOW_RESIZE && IsVisible())
+  {
+    m_label.SetInvalid();
+  }
 
   return CGUIControl::OnMessage(message);
 }

@@ -8,13 +8,15 @@
 
 #include "ViewStateSettings.h"
 
-#include "threads/SingleLock.h"
+#include "SortFileItem.h"
 #include "utils/SortUtils.h"
 #include "utils/XBMCTinyXML.h"
 #include "utils/XMLUtils.h"
 #include "utils/log.h"
+#include "view/ViewStateNames.h"
 
 #include <cstring>
+#include <mutex>
 #include <utility>
 
 #define XML_VIEWSTATESETTINGS       "viewstates"
@@ -28,26 +30,36 @@
 #define XML_EVENTLOG_LEVEL          "level"
 #define XML_EVENTLOG_LEVEL_HIGHER   "showhigherlevels"
 
+namespace
+{
+// Games' entry from before Name was one of its sorts, when Label was only ever its untouched
+// default
+constexpr char OLD_GAMES[] = "games";
+} // namespace
+
 CViewStateSettings::CViewStateSettings()
 {
-  AddViewState("musicnavartists");
-  AddViewState("musicnavalbums");
-  AddViewState("musicnavsongs", DEFAULT_VIEW_LIST, SortByTrackNumber);
-  AddViewState("musiclastfm");
-  AddViewState("videonavactors");
-  AddViewState("videonavyears");
-  AddViewState("videonavgenres");
-  AddViewState("videonavtitles");
-  AddViewState("videonavepisodes", DEFAULT_VIEW_AUTO, SortByEpisodeNumber);
-  AddViewState("videonavtvshows");
-  AddViewState("videonavseasons");
-  AddViewState("videonavmusicvideos");
+  AddViewState(KODI::VIEW::STATE::MUSIC_NAV_ARTISTS);
+  AddViewState(KODI::VIEW::STATE::MUSIC_NAV_ALBUMS);
+  AddViewState(KODI::VIEW::STATE::MUSIC_NAV_SONGS, DEFAULT_VIEW_LIST, SortBy::TRACK_NUMBER);
+  AddViewState(KODI::VIEW::STATE::MUSIC_LASTFM);
+  AddViewState(KODI::VIEW::STATE::VIDEO_NAV_ACTORS);
+  AddViewState(KODI::VIEW::STATE::VIDEO_NAV_YEARS);
+  AddViewState(KODI::VIEW::STATE::VIDEO_NAV_GENRES);
+  AddViewState(KODI::VIEW::STATE::VIDEO_NAV_TITLES);
+  AddViewState(KODI::VIEW::STATE::VIDEO_NAV_EPISODES, DEFAULT_VIEW_AUTO, SortBy::EPISODE_NUMBER);
+  AddViewState(KODI::VIEW::STATE::VIDEO_NAV_TVSHOWS);
+  AddViewState(KODI::VIEW::STATE::VIDEO_NAV_SEASONS);
+  AddViewState(KODI::VIEW::STATE::VIDEO_NAV_MUSICVIDEOS);
+  AddViewState(KODI::VIEW::STATE::VIDEO_NAV_ASSETS);
+  AddViewState(KODI::VIEW::STATE::VIDEO_NAV_VERSIONS);
+  AddViewState(KODI::VIEW::STATE::VIDEO_NAV_EXTRAS);
 
-  AddViewState("programs", DEFAULT_VIEW_AUTO);
-  AddViewState("pictures", DEFAULT_VIEW_AUTO);
-  AddViewState("videofiles", DEFAULT_VIEW_AUTO);
-  AddViewState("musicfiles", DEFAULT_VIEW_AUTO);
-  AddViewState("games", DEFAULT_VIEW_AUTO);
+  AddViewState(KODI::VIEW::STATE::PROGRAMS, DEFAULT_VIEW_AUTO);
+  AddViewState(KODI::VIEW::STATE::PICTURES, DEFAULT_VIEW_AUTO);
+  AddViewState(KODI::VIEW::STATE::VIDEO_FILES, DEFAULT_VIEW_AUTO);
+  AddViewState(KODI::VIEW::STATE::MUSIC_FILES, DEFAULT_VIEW_AUTO);
+  AddViewState(KODI::VIEW::STATE::GAMES, DEFAULT_VIEW_AUTO, SortBy::FILE);
 
   Clear();
 }
@@ -70,7 +82,7 @@ bool CViewStateSettings::Load(const TiXmlNode *settings)
   if (settings == NULL)
     return false;
 
-  CSingleLock lock(m_critical);
+  std::unique_lock lock(m_critical);
   const TiXmlNode *pElement = settings->FirstChildElement(XML_VIEWSTATESETTINGS);
   if (pElement == NULL)
   {
@@ -81,6 +93,9 @@ bool CViewStateSettings::Load(const TiXmlNode *settings)
   for (std::map<std::string, CViewState*>::iterator viewState = m_viewStates.begin(); viewState != m_viewStates.end(); ++viewState)
   {
     const TiXmlNode* pViewState = pElement->FirstChildElement(viewState->first);
+    const bool oldGames = pViewState == nullptr && viewState->first == KODI::VIEW::STATE::GAMES;
+    if (oldGames)
+      pViewState = pElement->FirstChildElement(OLD_GAMES);
     if (pViewState == NULL)
       continue;
 
@@ -90,21 +105,29 @@ bool CViewStateSettings::Load(const TiXmlNode *settings)
     if (pViewState->FirstChild(XML_SORTATTRIBUTES) == NULL)
     {
       int sortMethod;
-      if (XMLUtils::GetInt(pViewState, XML_SORTMETHOD, sortMethod, SORT_METHOD_NONE, SORT_METHOD_MAX))
-        viewState->second->m_sortDescription = SortUtils::TranslateOldSortMethod((SORT_METHOD)sortMethod);
+      if (XMLUtils::GetInt(pViewState, XML_SORTMETHOD, sortMethod,
+                           static_cast<int>(SortMethod::NONE),
+                           static_cast<int>(SortMethod::SM_MAX)))
+        viewState->second->m_sortDescription =
+            SortUtils::TranslateOldSortMethod(static_cast<SortMethod>(sortMethod));
     }
     else
     {
       int sortMethod;
-      if (XMLUtils::GetInt(pViewState, XML_SORTMETHOD, sortMethod, SortByNone, SortByLastUsed))
+      if (XMLUtils::GetInt(pViewState, XML_SORTMETHOD, sortMethod, static_cast<int>(SortBy::NONE),
+                           static_cast<int>(SortBy::LAST_USED)))
         viewState->second->m_sortDescription.sortBy = (SortBy)sortMethod;
       if (XMLUtils::GetInt(pViewState, XML_SORTATTRIBUTES, sortMethod, SortAttributeNone, SortAttributeIgnoreFolders))
         viewState->second->m_sortDescription.sortAttributes = (SortAttribute)sortMethod;
     }
 
     int sortOrder;
-    if (XMLUtils::GetInt(pViewState, XML_SORTORDER, sortOrder, SortOrderNone, SortOrderDescending))
+    if (XMLUtils::GetInt(pViewState, XML_SORTORDER, sortOrder, static_cast<int>(SortOrder::NONE),
+                         static_cast<int>(SortOrder::DESCENDING)))
       viewState->second->m_sortDescription.sortOrder = (SortOrder)sortOrder;
+
+    if (oldGames && viewState->second->m_sortDescription.sortBy == SortBy::LABEL)
+      viewState->second->m_sortDescription.sortBy = SortBy::FILE;
   }
 
   pElement = settings->FirstChild(XML_GENERAL);
@@ -138,7 +161,7 @@ bool CViewStateSettings::Save(TiXmlNode *settings) const
   if (settings == NULL)
     return false;
 
-  CSingleLock lock(m_critical);
+  std::unique_lock lock(m_critical);
   // add the <viewstates> tag
   TiXmlElement xmlViewStateElement(XML_VIEWSTATESETTINGS);
   TiXmlNode *pViewStateNode = settings->InsertEndChild(xmlViewStateElement);
@@ -194,7 +217,7 @@ void CViewStateSettings::Clear()
 
 const CViewState* CViewStateSettings::Get(const std::string &viewState) const
 {
-  CSingleLock lock(m_critical);
+  std::unique_lock lock(m_critical);
   std::map<std::string, CViewState*>::const_iterator view = m_viewStates.find(viewState);
   if (view != m_viewStates.end())
     return view->second;
@@ -204,7 +227,7 @@ const CViewState* CViewStateSettings::Get(const std::string &viewState) const
 
 CViewState* CViewStateSettings::Get(const std::string &viewState)
 {
-  CSingleLock lock(m_critical);
+  std::unique_lock lock(m_critical);
   std::map<std::string, CViewState*>::iterator view = m_viewStates.find(viewState);
   if (view != m_viewStates.end())
     return view->second;
@@ -239,7 +262,7 @@ void CViewStateSettings::SetEventLevel(EventLevel eventLevel)
 {
   if (eventLevel < EventLevel::Basic)
     m_eventLevel = EventLevel::Basic;
-  if (eventLevel > EventLevel::Error)
+  else if (eventLevel > EventLevel::Error)
     m_eventLevel = EventLevel::Error;
   else
     m_eventLevel = eventLevel;
@@ -258,12 +281,14 @@ EventLevel CViewStateSettings::GetNextEventLevel() const
   return level;
 }
 
-void CViewStateSettings::AddViewState(const std::string& strTagName, int defaultView /* = DEFAULT_VIEW_LIST */, SortBy defaultSort /* = SortByLabel */)
+void CViewStateSettings::AddViewState(const std::string& strTagName,
+                                      int defaultView /* = DEFAULT_VIEW_LIST */,
+                                      SortBy defaultSort /* = SortBy::LABEL */)
 {
-  if (strTagName.empty() || m_viewStates.find(strTagName) != m_viewStates.end())
+  if (strTagName.empty() || m_viewStates.contains(strTagName))
     return;
 
-  CViewState *viewState = new CViewState(defaultView, defaultSort, SortOrderAscending);
+  CViewState* viewState = new CViewState(defaultView, defaultSort, SortOrder::ASCENDING);
   if (viewState == NULL)
     return;
 

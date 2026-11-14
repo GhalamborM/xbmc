@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2005-2018 Team Kodi
+ *  Copyright (C) 2005-2024 Team Kodi
  *  This file is part of Kodi - https://kodi.tv
  *
  *  SPDX-License-Identifier: GPL-2.0-or-later
@@ -8,27 +8,29 @@
 
 #include "InputManager.h"
 
-#include "AppInboundProtocol.h"
-#include "AppParamParser.h"
-#include "Application.h"
-#include "ButtonTranslator.h"
-#include "CustomControllerTranslator.h"
-#include "IRTranslator.h"
-#include "JoystickMapper.h"
-#include "KeymapEnvironment.h"
 #include "ServiceBroker.h"
-#include "TouchTranslator.h"
-#include "Util.h"
-#include "XBMC_vkeys.h"
+#include "application/AppInboundProtocol.h"
+#include "application/Application.h"
+#include "application/ApplicationComponents.h"
+#include "application/ApplicationPowerHandling.h"
 #include "guilib/GUIAudioManager.h"
 #include "guilib/GUIComponent.h"
 #include "guilib/GUIControl.h"
-#include "guilib/GUIMessage.h"
 #include "guilib/GUIWindow.h"
 #include "guilib/GUIWindowManager.h"
-#include "input/Key.h"
+#include "input/actions/Action.h"
+#include "input/actions/ActionIDs.h"
+#include "input/cec/ICecInputProvider.h"
+#include "input/keyboard/Key.h"
 #include "input/keyboard/KeyboardEasterEgg.h"
+#include "input/keyboard/XBMC_vkeys.h"
 #include "input/keyboard/interfaces/IKeyboardDriverHandler.h"
+#include "input/keymaps/ButtonTranslator.h"
+#include "input/keymaps/KeymapEnvironment.h"
+#include "input/keymaps/joysticks/JoystickMapper.h"
+#include "input/keymaps/keyboard/KeyIDs.h"
+#include "input/keymaps/remote/CustomControllerTranslator.h"
+#include "input/keymaps/touch/TouchTranslator.h"
 #include "input/mouse/MouseTranslator.h"
 #include "input/mouse/interfaces/IMouseDriverHandler.h"
 #include "messaging/ApplicationMessenger.h"
@@ -37,26 +39,37 @@
 #include "settings/Settings.h"
 #include "settings/SettingsComponent.h"
 #include "settings/lib/Setting.h"
+#include "utils/ExecString.h"
 #include "utils/Geometry.h"
+#include "utils/Map.h"
 #include "utils/StringUtils.h"
 #include "utils/log.h"
 
 #include <algorithm>
 #include <math.h>
+#include <mutex>
 
 using EVENTSERVER::CEventServer;
 
 using namespace KODI;
-using namespace MESSAGING;
 
 const std::string CInputManager::SETTING_INPUT_ENABLE_CONTROLLER = "input.enablejoystick";
 
-CInputManager::CInputManager(const CAppParamParser& params)
-  : m_keymapEnvironment(new CKeymapEnvironment),
-    m_buttonTranslator(new CButtonTranslator),
-    m_customControllerTranslator(new CCustomControllerTranslator),
-    m_touchTranslator(new CTouchTranslator),
-    m_joystickTranslator(new CJoystickMapper),
+namespace
+{
+constexpr auto keyComposeactionEventMap = make_map<uint8_t, int>({
+    {XBMC_KEYCOMPOSING_COMPOSING, ACTION_KEYBOARD_COMPOSING_KEY},
+    {XBMC_KEYCOMPOSING_CANCELLED, ACTION_KEYBOARD_COMPOSING_KEY_CANCELLED},
+    {XBMC_KEYCOMPOSING_FINISHED, ACTION_KEYBOARD_COMPOSING_KEY_FINISHED},
+});
+}
+
+CInputManager::CInputManager()
+  : m_keymapEnvironment(new KEYMAP::CKeymapEnvironment),
+    m_buttonTranslator(new KEYMAP::CButtonTranslator),
+    m_customControllerTranslator(new KEYMAP::CCustomControllerTranslator),
+    m_touchTranslator(new KEYMAP::CTouchTranslator),
+    m_joystickTranslator(new KEYMAP::CJoystickMapper),
     m_keyboardEasterEgg(new KEYBOARD::CKeyboardEasterEgg)
 {
   m_buttonTranslator->RegisterMapper("touch", m_touchTranslator.get());
@@ -65,11 +78,8 @@ CInputManager::CInputManager(const CAppParamParser& params)
 
   RegisterKeyboardDriverHandler(m_keyboardEasterEgg.get());
 
-  // Register settings
-  std::set<std::string> settingSet;
-  settingSet.insert(CSettings::SETTING_INPUT_ENABLEMOUSE);
-  settingSet.insert(SETTING_INPUT_ENABLE_CONTROLLER);
-  CServiceBroker::GetSettingsComponent()->GetSettings()->RegisterCallback(this, settingSet);
+  CServiceBroker::GetSettingsComponent()->GetSettings()->RegisterCallback(
+      this, {CSettings::SETTING_INPUT_ENABLEMOUSE, SETTING_INPUT_ENABLE_CONTROLLER});
 }
 
 CInputManager::~CInputManager()
@@ -102,14 +112,6 @@ void CInputManager::Deinitialize()
 {
 }
 
-bool CInputManager::ProcessPeripherals(float frameTime)
-{
-  CKey key;
-  if (CServiceBroker::GetPeripherals().GetNextKeypress(frameTime, key))
-    return OnKey(key);
-  return false;
-}
-
 bool CInputManager::ProcessMouse(int windowId)
 {
   if (!m_Mouse.IsActive() || !g_application.IsAppFocused())
@@ -121,10 +123,12 @@ bool CInputManager::ProcessMouse(int windowId)
     return true;
 
   // Reset the screensaver and idle timers
-  g_application.ResetSystemIdleTimer();
-  g_application.ResetScreenSaver();
+  auto& components = CServiceBroker::GetAppComponents();
+  const auto appPower = components.GetComponent<CApplicationPowerHandling>();
+  appPower->ResetSystemIdleTimer();
+  appPower->ResetScreenSaver();
 
-  if (g_application.WakeUpScreenSaverAndDPMS())
+  if (appPower->WakeUpScreenSaverAndDPMS())
     return true;
 
   // Retrieve the corresponding action
@@ -160,10 +164,11 @@ bool CInputManager::ProcessMouse(int windowId)
     return g_application.OnAction(mouseaction);
 
   // This is a mouse action so we need to record the mouse position
-  return g_application.OnAction(CAction(mouseaction.GetID(), m_Mouse.GetHold(MOUSE_LEFT_BUTTON),
-                                        (float)m_Mouse.GetX(), (float)m_Mouse.GetY(),
-                                        (float)m_Mouse.GetDX(), (float)m_Mouse.GetDY(), 0.0f, 0.0f,
-                                        mouseaction.GetName()));
+  return g_application.OnAction(
+      CAction(mouseaction.GetID(), static_cast<uint32_t>(m_Mouse.GetHold(MOUSE_LEFT_BUTTON)),
+              static_cast<float>(m_Mouse.GetX()), static_cast<float>(m_Mouse.GetY()),
+              static_cast<float>(m_Mouse.GetDX()), static_cast<float>(m_Mouse.GetDY()), 0.0f, 0.0f,
+              mouseaction.GetName()));
 }
 
 bool CInputManager::ProcessEventServer(int windowId, float frameTime)
@@ -176,9 +181,11 @@ bool CInputManager::ProcessEventServer(int windowId, float frameTime)
   if (es->ExecuteNextAction())
   {
     // reset idle timers
-    g_application.ResetSystemIdleTimer();
-    g_application.ResetScreenSaver();
-    g_application.WakeUpScreenSaverAndDPMS();
+    auto& components = CServiceBroker::GetAppComponents();
+    const auto appPower = components.GetComponent<CApplicationPowerHandling>();
+    appPower->ResetSystemIdleTimer();
+    appPower->ResetScreenSaver();
+    appPower->WakeUpScreenSaverAndDPMS();
   }
 
   // now handle any buttons or axis
@@ -196,7 +203,7 @@ bool CInputManager::ProcessEventServer(int windowId, float frameTime)
 
   if (wKeyID)
   {
-    if (strMapName.length() > 0)
+    if (!strMapName.empty())
     {
       // joysticks are not supported via eventserver
       if (isJoystick)
@@ -213,18 +220,20 @@ bool CInputManager::ProcessEventServer(int windowId, float frameTime)
                 windowId, strMapName, wKeyID, actionID, actionName))
         {
           // break screensaver
-          g_application.ResetSystemIdleTimer();
-          g_application.ResetScreenSaver();
+          auto& components = CServiceBroker::GetAppComponents();
+          const auto appPower = components.GetComponent<CApplicationPowerHandling>();
+          appPower->ResetSystemIdleTimer();
+          appPower->ResetScreenSaver();
 
           // in case we wokeup the screensaver or screen - eat that action...
-          if (g_application.WakeUpScreenSaverAndDPMS())
+          if (appPower->WakeUpScreenSaverAndDPMS())
             return true;
 
           m_Mouse.SetActive(false);
 
           CLog::Log(LOGDEBUG, "EventServer: key {} translated to action {}", wKeyID, actionName);
 
-          return ExecuteInputAction(CAction(actionID, fAmount, 0.0f, actionName));
+          return ExecuteInputAction(CAction(actionID, fAmount, 0.0f, actionName, 0, wKeyID));
         }
         else
         {
@@ -264,7 +273,7 @@ bool CInputManager::ProcessEventServer(int windowId, float frameTime)
         key = CKey(wKeyID, 0, 0, 0.0, 0.0, 0.0, -fAmount, frameTime);
       else
         key = CKey(wKeyID);
-      key.SetFromService(true);
+      key.SetFromEventServer(true);
       return OnKey(key);
     }
   }
@@ -286,40 +295,67 @@ bool CInputManager::ProcessEventServer(int windowId, float frameTime)
   return false;
 }
 
+void CInputManager::ProcessCec()
+{
+  std::unique_lock lock(m_cecHandlingMutex);
+
+  for (auto* handler : m_cecInputProviders)
+  {
+    std::optional<CKey> key = handler->GetCecKey();
+    if (key)
+      QueueCecKey(*key);
+  }
+}
+
 void CInputManager::ProcessQueuedActions()
 {
+  // Process actions
   std::vector<CAction> queuedActions;
   {
-    CSingleLock lock(m_actionMutex);
+    std::unique_lock lock(m_actionMutex);
     queuedActions.swap(m_queuedActions);
   }
 
   for (const CAction& action : queuedActions)
-    g_application.OnAction(action);
+    ExecuteInputAction(action);
+
+  // Process CEC keys
+  std::vector<CKey> queuedCecKeys;
+  {
+    std::unique_lock lock(m_cecKeyMutex);
+    queuedCecKeys.swap(m_queuedCecKeys);
+  }
+
+  for (const CKey& key : queuedCecKeys)
+    OnKey(key);
 }
 
 void CInputManager::QueueAction(const CAction& action)
 {
-  CSingleLock lock(m_actionMutex);
+  std::unique_lock lock(m_actionMutex);
 
   // Avoid dispatching multiple analog actions per frame with the same ID
   if (action.IsAnalog())
   {
     m_queuedActions.erase(std::remove_if(m_queuedActions.begin(), m_queuedActions.end(),
-                                         [&action](const CAction& queuedAction) {
-                                           return action.GetID() == queuedAction.GetID();
-                                         }),
+                                         [&action](const CAction& queuedAction)
+                                         { return action.GetID() == queuedAction.GetID(); }),
                           m_queuedActions.end());
   }
 
   m_queuedActions.push_back(action);
 }
 
+void CInputManager::QueueCecKey(const CKey& key)
+{
+  std::unique_lock lock(m_cecKeyMutex);
+  m_queuedCecKeys.emplace_back(key);
+}
+
 bool CInputManager::Process(int windowId, float frameTime)
 {
   // process input actions
   ProcessEventServer(windowId, frameTime);
-  ProcessPeripherals(frameTime);
   ProcessQueuedActions();
 
   // Inform the environment of the new active window ID
@@ -343,6 +379,15 @@ bool CInputManager::OnEvent(XBMC_Event& newEvent)
       m_Keyboard.ProcessKeyUp();
       OnKeyUp(m_Keyboard.TranslateKey(newEvent.key.keysym));
       break;
+    case XBMC_KEYCOMPOSING_COMPOSING:
+    case XBMC_KEYCOMPOSING_CANCELLED:
+    case XBMC_KEYCOMPOSING_FINISHED:
+    {
+      const CAction action = CAction(keyComposeactionEventMap.find(newEvent.type)->second,
+                                     static_cast<wchar_t>(newEvent.key.keysym.unicode));
+      ExecuteInputAction(action);
+      break;
+    }
     case XBMC_MOUSEBUTTONDOWN:
     case XBMC_MOUSEBUTTONUP:
     case XBMC_MOUSEMOTION:
@@ -420,18 +465,18 @@ bool CInputManager::OnEvent(XBMC_Event& newEvent)
         auto action =
             new CAction(actionId, 0, newEvent.touch.x, newEvent.touch.y, newEvent.touch.x2,
                         newEvent.touch.y2, newEvent.touch.x3, newEvent.touch.y3);
-        CApplicationMessenger::GetInstance().PostMsg(TMSG_GUI_ACTION, WINDOW_INVALID, -1,
-                                                     static_cast<void*>(action));
+        CServiceBroker::GetAppMessenger()->PostMsg(TMSG_GUI_ACTION, WINDOW_INVALID, -1,
+                                                   static_cast<void*>(action));
       }
       else
       {
         if (actionId == ACTION_BUILT_IN_FUNCTION && !actionString.empty())
-          CApplicationMessenger::GetInstance().PostMsg(
+          CServiceBroker::GetAppMessenger()->PostMsg(
               TMSG_GUI_ACTION, WINDOW_INVALID, -1,
               static_cast<void*>(new CAction(actionId, actionString)));
         else
-          CApplicationMessenger::GetInstance().PostMsg(TMSG_GUI_ACTION, WINDOW_INVALID, -1,
-                                                       static_cast<void*>(new CAction(actionId)));
+          CServiceBroker::GetAppMessenger()->PostMsg(TMSG_GUI_ACTION, WINDOW_INVALID, -1,
+                                                     static_cast<void*>(new CAction(actionId)));
       }
 
       break;
@@ -480,7 +525,7 @@ bool CInputManager::OnKey(const CKey& key)
     {
       // Event server keyboard doesn't give normal key up and key down, so don't
       // process for long press if that is the source
-      if (key.GetFromService() ||
+      if (key.GetFromEventServer() ||
           !m_buttonTranslator->HasLongpressMapping(
               CServiceBroker::GetGUI()->GetWindowManager().GetActiveWindowOrDialog(), key))
       {
@@ -518,7 +563,9 @@ bool CInputManager::HandleKey(const CKey& key)
 
   // a key has been pressed.
   // reset Idle Timer
-  g_application.ResetSystemIdleTimer();
+  auto& components = CServiceBroker::GetAppComponents();
+  const auto appPower = components.GetComponent<CApplicationPowerHandling>();
+  appPower->ResetSystemIdleTimer();
   bool processKey = AlwaysProcess(action);
 
   if (StringUtils::StartsWithNoCase(action.GetName(), "CECToggleState") ||
@@ -530,25 +577,25 @@ bool CInputManager::HandleKey(const CKey& key)
       CLog::LogF(LOGDEBUG, "action {} [{}], toggling state of playing device", action.GetName(),
                  action.GetID());
       bool result;
-      CApplicationMessenger::GetInstance().SendMsg(TMSG_CECTOGGLESTATE, 0, 0,
-                                                   static_cast<void*>(&result));
+      CServiceBroker::GetAppMessenger()->SendMsg(TMSG_CECTOGGLESTATE, 0, 0,
+                                                 static_cast<void*>(&result));
       if (!result)
         return true;
     }
     else
     {
-      CApplicationMessenger::GetInstance().PostMsg(TMSG_CECSTANDBY);
+      CServiceBroker::GetAppMessenger()->PostMsg(TMSG_CECSTANDBY);
       return true;
     }
   }
 
-  g_application.ResetScreenSaver();
+  appPower->ResetScreenSaver();
 
   // allow some keys to be processed while the screensaver is active
-  if (g_application.WakeUpScreenSaverAndDPMS(processKey) && !processKey)
+  if (appPower->WakeUpScreenSaverAndDPMS(processKey) && !processKey)
   {
     CLog::LogF(LOGDEBUG, "{} pressed, screen saver/dpms woken up",
-               m_Keyboard.GetKeyName((int)key.GetButtonCode()));
+               m_Keyboard.GetKeyName(key.GetButtonCode()));
     return true;
   }
 
@@ -601,7 +648,7 @@ bool CInputManager::HandleKey(const CKey& key)
       // else pass the keys through directly
       if (!action.GetID())
       {
-        if (key.GetFromService())
+        if (key.GetFromEventServer())
           action = CAction(key.GetButtonCode() != KEY_INVALID ? key.GetButtonCode() : 0,
                            key.GetUnicode());
         else
@@ -631,13 +678,13 @@ bool CInputManager::HandleKey(const CKey& key)
       }
 
       CLog::LogF(LOGDEBUG, "{} pressed, trying keyboard action {:x}",
-                 m_Keyboard.GetKeyName((int)key.GetButtonCode()), action.GetID());
+                 m_Keyboard.GetKeyName(key.GetButtonCode()), action.GetID());
 
       if (g_application.OnAction(action))
         return true;
       // failed to handle the keyboard action, drop down through to standard action
     }
-    if (key.GetFromService())
+    if (key.GetFromEventServer())
     {
       if (key.GetButtonCode() != KEY_INVALID)
         action = m_buttonTranslator->GetAction(iWin, key);
@@ -647,7 +694,7 @@ bool CInputManager::HandleKey(const CKey& key)
   }
   if (!key.IsAnalogButton())
     CLog::LogF(LOGDEBUG, "{} pressed, window {}, action is {}",
-               m_Keyboard.GetKeyName((int)key.GetButtonCode()), iWin, action.GetName());
+               m_Keyboard.GetKeyName(key.GetButtonCode()), iWin, action.GetName());
 
   return ExecuteInputAction(action);
 }
@@ -673,20 +720,24 @@ bool CInputManager::AlwaysProcess(const CAction& action)
   // check if this button is mapped to a built-in function
   if (!action.GetName().empty())
   {
-    std::string builtInFunction;
-    std::vector<std::string> params;
-    CUtil::SplitExecFunction(action.GetName(), builtInFunction, params);
-    StringUtils::ToLower(builtInFunction);
-
-    // should this button be handled normally or just cancel the screensaver?
-    if (builtInFunction == "powerdown" || builtInFunction == "reboot" ||
-        builtInFunction == "restart" || builtInFunction == "restartapp" ||
-        builtInFunction == "suspend" || builtInFunction == "hibernate" ||
-        builtInFunction == "quit" || builtInFunction == "shutdown" ||
-        builtInFunction == "volumeup" || builtInFunction == "volumedown" ||
-        builtInFunction == "mute")
+    const CExecString exec(action.GetName());
+    if (exec.IsValid())
     {
-      return true;
+      const std::string& builtInFunction = exec.GetFunction();
+
+      // should this button be handled normally or just cancel the screensaver?
+      if (builtInFunction == "powerdown" || builtInFunction == "reboot" ||
+          builtInFunction == "restart" || builtInFunction == "restartapp" ||
+          builtInFunction == "suspend" || builtInFunction == "hibernate" ||
+          builtInFunction == "quit" || builtInFunction == "shutdown" ||
+          builtInFunction == "volumeup" || builtInFunction == "volumedown" ||
+          builtInFunction == "mute" || builtInFunction == "runapplescript" ||
+          builtInFunction == "runaddon" || builtInFunction == "runplugin" ||
+          builtInFunction == "runscript" || builtInFunction == "system.exec" ||
+          builtInFunction == "system.execwait")
+      {
+        return true;
+      }
     }
   }
 
@@ -872,6 +923,11 @@ void CInputManager::RemoveKeymap(const std::string& keymap)
   }
 }
 
+const KEYMAP::IKeymapEnvironment* CInputManager::KeymapEnvironment() const
+{
+  return m_keymapEnvironment.get();
+}
+
 CAction CInputManager::GetAction(int window, const CKey& key, bool fallback /* = true */)
 {
   return m_buttonTranslator->GetAction(window, key, fallback);
@@ -894,15 +950,14 @@ bool CInputManager::TranslateTouchAction(
                                                  actionString);
 }
 
-std::vector<std::shared_ptr<const IWindowKeymap>> CInputManager::GetJoystickKeymaps() const
+std::vector<std::shared_ptr<const KEYMAP::IWindowKeymap>> CInputManager::GetJoystickKeymaps() const
 {
   return m_joystickTranslator->GetJoystickKeymaps();
 }
 
 void CInputManager::RegisterKeyboardDriverHandler(KEYBOARD::IKeyboardDriverHandler* handler)
 {
-  if (std::find(m_keyboardHandlers.begin(), m_keyboardHandlers.end(), handler) ==
-      m_keyboardHandlers.end())
+  if (std::ranges::find(m_keyboardHandlers, handler) == m_keyboardHandlers.end())
     m_keyboardHandlers.insert(m_keyboardHandlers.begin(), handler);
 }
 
@@ -915,7 +970,7 @@ void CInputManager::UnregisterKeyboardDriverHandler(KEYBOARD::IKeyboardDriverHan
 
 void CInputManager::RegisterMouseDriverHandler(MOUSE::IMouseDriverHandler* handler)
 {
-  if (std::find(m_mouseHandlers.begin(), m_mouseHandlers.end(), handler) == m_mouseHandlers.end())
+  if (std::ranges::find(m_mouseHandlers, handler) == m_mouseHandlers.end())
     m_mouseHandlers.insert(m_mouseHandlers.begin(), handler);
 }
 
@@ -923,4 +978,19 @@ void CInputManager::UnregisterMouseDriverHandler(MOUSE::IMouseDriverHandler* han
 {
   m_mouseHandlers.erase(std::remove(m_mouseHandlers.begin(), m_mouseHandlers.end(), handler),
                         m_mouseHandlers.end());
+}
+
+void CInputManager::RegisterCecInputProvider(CEC::ICecInputProvider* handler)
+{
+  std::unique_lock lock(m_cecHandlingMutex);
+
+  if (std::ranges::find(m_cecInputProviders, handler) == m_cecInputProviders.end())
+    m_cecInputProviders.emplace_back(handler);
+}
+
+void CInputManager::UnregisterCecInputProvider(CEC::ICecInputProvider* handler)
+{
+  std::unique_lock lock(m_cecHandlingMutex);
+
+  std::erase(m_cecInputProviders, handler);
 }

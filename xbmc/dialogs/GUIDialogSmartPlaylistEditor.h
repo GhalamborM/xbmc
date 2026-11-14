@@ -41,6 +41,7 @@ protected:
   void OnOrderDirection();
   void OnGroupBy();
   void OnGroupMixed();
+  void OnWatchedMode();
   void OnOK();
   void OnCancel();
   void OnPopupMenu(int item);
@@ -53,7 +54,7 @@ protected:
   std::string ConvertType(PLAYLIST_TYPE type);
   std::string GetLocalizedType(PLAYLIST_TYPE type);
 
-  CSmartPlaylist m_playlist;
+  KODI::PLAYLIST::CSmartPlaylist m_playlist;
 
   // our list of rules for display purposes
   CFileItemList* m_ruleLabels;

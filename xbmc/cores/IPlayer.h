@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2005-2018 Team Kodi
+ *  Copyright (C) 2005-2026 Team Kodi
  *  This file is part of Kodi - https://kodi.tv
  *
  *  SPDX-License-Identifier: GPL-2.0-or-later
@@ -8,24 +8,33 @@
 
 #pragma once
 
+#include "Direction.h"
 #include "IPlayerCallback.h"
 #include "Interface/StreamInfo.h"
+#include "MenuType.h"
 #include "VideoSettings.h"
 
+#include <chrono>
 #include <memory>
 #include <string>
 #include <vector>
 
 #define CURRENT_STREAM -1
-#define CAPTUREFLAG_CONTINUOUS  0x01 //after a render is done, render a new one immediately
-#define CAPTUREFLAG_IMMEDIATELY 0x02 //read out immediately after render, this can cause a busy wait
-#define CAPTUREFORMAT_BGRA 0x01
 
 struct TextCacheStruct_t;
-class TiXmlElement;
 class CStreamDetails;
 class CAction;
 class IPlayerCallback;
+
+namespace KODI::RENDERING::CAPTURE
+{
+struct CaptureResult;
+} // namespace KODI::RENDERING::CAPTURE
+
+namespace tinyxml2
+{
+class XMLElement;
+} // namespace tinyxml2
 
 class CPlayerOptions
 {
@@ -48,22 +57,24 @@ public:
 
 class CFileItem;
 
-enum IPlayerAudioCapabilities
+// \brief Player Audio capabilities
+enum class IPlayerAudioCaps
 {
-  IPC_AUD_ALL,
-  IPC_AUD_OFFSET,
-  IPC_AUD_AMP,
-  IPC_AUD_SELECT_STREAM,
-  IPC_AUD_OUTPUT_STEREO,
-  IPC_AUD_SELECT_OUTPUT
+  ALL, // All capabilities supported
+  SELECT_STREAM, // Support to change stream
+  SELECT_OUTPUT, // Support to select an output device
+  OUTPUT_STEREO, // Support output in stereo mode
+  OFFSET, // Support to change sync offset
+  VOLUME_AMP, // Support volume amplification
 };
 
-enum IPlayerSubtitleCapabilities
+// \brief Player Subtitle capabilities
+enum class IPlayerSubtitleCaps
 {
-  IPC_SUBS_ALL,
-  IPC_SUBS_SELECT,
-  IPC_SUBS_EXTERNAL,
-  IPC_SUBS_OFFSET
+  ALL, // All capabilities supported
+  SELECT_STREAM, // Support to change stream
+  EXTERNAL, // Support to load external subtitles
+  OFFSET, // Support to change sync offset
 };
 
 enum ERENDERFEATURE
@@ -80,7 +91,9 @@ enum ERENDERFEATURE
   RENDERFEATURE_VERTICAL_SHIFT,
   RENDERFEATURE_PIXEL_RATIO,
   RENDERFEATURE_POSTPROCESS,
-  RENDERFEATURE_TONEMAP
+  RENDERFEATURE_TONEMAP,
+  RENDERFEATURE_HUE,
+  RENDERFEATURE_SATURATION
 };
 
 class IPlayer
@@ -88,39 +101,60 @@ class IPlayer
 public:
   explicit IPlayer(IPlayerCallback& callback) : m_callback(callback) {}
   virtual ~IPlayer() = default;
-  virtual bool Initialize(TiXmlElement* pConfig) { return true; }
+  virtual bool Initialize(tinyxml2::XMLElement* pConfig) { return true; }
   virtual bool OpenFile(const CFileItem& file, const CPlayerOptions& options){ return false;}
   virtual bool QueueNextFile(const CFileItem &file) { return false; }
   virtual void OnNothingToQueueNotify() {}
   virtual bool CloseFile(bool reopen = false) = 0;
   virtual bool IsPlaying() const { return false;}
-  virtual bool CanPause() { return true; }
+  virtual bool CanPause() const { return true; }
   virtual void Pause() = 0;
   virtual bool HasVideo() const = 0;
   virtual bool HasAudio() const = 0;
   virtual bool HasGame() const { return false; }
   virtual bool HasRDS() const { return false; }
+  virtual bool HasID3() const { return false; }
   virtual bool IsPassthrough() const { return false;}
-  virtual bool CanSeek() {return true;}
+  virtual bool CanSeek() const { return true; }
   virtual void Seek(bool bPlus = true, bool bLargeStep = false, bool bChapterOverride = false) = 0;
-  virtual bool SeekScene(bool bPlus = true) {return false;}
+  virtual bool SeekScene(Direction seekDirection) { return false; }
+  virtual void SeekChapterOrSceneOrBigStep(Direction direction)
+  {
+    Seek(direction == Direction::FORWARD, true, true);
+  }
   virtual void SeekPercentage(float fPercent = 0){}
-  virtual float GetCachePercentage(){ return 0;}
+  virtual float GetCachePercentage() const { return 0; }
   virtual void SetMute(bool bOnOff){}
   virtual void SetVolume(float volume){}
   virtual void SetDynamicRangeCompression(long drc){}
+
+  /*!
+   \brief Report that the downstream audio chain has finished settling
+
+   Ends a pass-through hold early. The player cannot see the chain, so this is
+   for an add-on that can - one per device. Ignored when nothing is holding.
+   */
+  virtual void NotifyAudioChainReady() {}
 
   virtual void SetAVDelay(float fValue = 0.0f) {}
   virtual float GetAVDelay() { return 0.0f; }
 
   virtual void SetSubTitleDelay(float fValue = 0.0f) {}
   virtual float GetSubTitleDelay()    { return 0.0f; }
-  virtual int  GetSubtitleCount()     { return 0; }
+  virtual int GetSubtitleCount() const { return 0; }
   virtual int  GetSubtitle()          { return -1; }
-  virtual void GetSubtitleStreamInfo(int index, SubtitleStreamInfo& info) {}
+  virtual void GetSubtitleStreamInfo(int index, SubtitleStreamInfo& info) const {}
   virtual void SetSubtitle(int iStream) {}
-  virtual bool GetSubtitleVisible() { return false; }
+  virtual bool GetSubtitleVisible() const { return false; }
   virtual void SetSubtitleVisible(bool bVisible) {}
+
+  /*!
+   * \brief Set the subtitle vertical position,
+   * it depends on current screen resolution
+   * \param value The subtitle position in pixels
+   * \param save If true, the value will be saved to resolution info
+   */
+  virtual void SetSubtitleVerticalPosition(int value, bool save) {}
 
   /** \brief Adds the subtitle(s) provided by the given file to the available player streams
   *          and actives the first of the added stream(s). E.g., vob subs can contain multiple streams.
@@ -128,31 +162,32 @@ public:
   */
   virtual void AddSubtitle(const std::string& strSubPath) {}
 
-  virtual int  GetAudioStreamCount()  { return 0; }
+  virtual int GetAudioStreamCount() const { return 0; }
   virtual int  GetAudioStream()       { return -1; }
   virtual void SetAudioStream(int iStream) {}
-  virtual void GetAudioStreamInfo(int index, AudioStreamInfo& info) {}
+  virtual void GetAudioStreamInfo(int index, AudioStreamInfo& info) const {}
 
   virtual int GetVideoStream() const { return -1; }
   virtual int GetVideoStreamCount() const { return 0; }
-  virtual void GetVideoStreamInfo(int streamId, VideoStreamInfo &info) {}
+  virtual void GetVideoStreamInfo(int streamId, VideoStreamInfo& info) const {}
   virtual void SetVideoStream(int iStream) {}
 
   virtual int GetPrograms(std::vector<ProgramInfo>& programs) { return 0; }
   virtual void SetProgram(int progId) {}
-  virtual int GetProgramsCount() { return 0; }
+  virtual int GetProgramsCount() const { return 0; }
 
-  virtual std::shared_ptr<TextCacheStruct_t> GetTeletextCache() { return NULL; }
+  virtual bool HasTeletextCache() const { return false; }
+  virtual std::shared_ptr<TextCacheStruct_t> GetTeletextCache() { return nullptr; }
   virtual void LoadPage(int p, int sp, unsigned char* buffer) {}
 
-  virtual std::string GetRadioText(unsigned int line) { return ""; }
-
-  virtual int  GetChapterCount()                               { return 0; }
-  virtual int  GetChapter()                                    { return -1; }
-  virtual void GetChapterName(std::string& strChapterName, int chapterIdx = -1) {}
-  virtual int64_t GetChapterPos(int chapterIdx=-1)             { return 0; }
+  virtual int GetChapterCount() const { return 0; }
+  virtual int GetChapter() const { return -1; }
+  virtual void GetChapterName(std::string& strChapterName, int chapterIdx = -1) const {}
+  virtual int64_t GetChapterPos(int chapterIdx = -1) const { return 0; }
   virtual int  SeekChapter(int iChapter)                       { return -1; }
 //  virtual bool GetChapterInfo(int chapter, SChapterInfo &info) { return false; }
+  virtual std::vector<std::chrono::milliseconds> GetBookmarks() const { return {}; }
+  virtual void SetBookmarks(const std::vector<std::chrono::milliseconds>& bookmarks) {}
 
   virtual void SeekTime(int64_t iTime = 0) {}
   /*
@@ -172,14 +207,14 @@ public:
   virtual void SetTime(int64_t time) { }
 
   /*!
-   \brief Set the total time  in milliseconds
+   \brief Set the total time in milliseconds
    this can be used for injecting the duration in case
-   its not available in the underlaying decoder (airtunes for example)
+   it's not available in the underlying decoder (airtunes for example)
    */
   virtual void SetTotalTime(int64_t time) { }
   virtual void SetSpeed(float speed) = 0;
   virtual void SetTempo(float tempo) {}
-  virtual bool SupportsTempo() { return false; }
+  virtual bool SupportsTempo() const { return false; }
   virtual void FrameAdvance(int frames) {}
 
   //Returns true if not playback (paused or stopped being filled)
@@ -187,61 +222,79 @@ public:
   //Cache filled in Percent
   virtual int GetCacheLevel() const { return -1; }
 
-  virtual bool IsInMenu() const { return false; }
-  virtual bool HasMenu() const { return false; }
+  //! True while playback is held for an audio format change to settle downstream
+  virtual bool IsWaitingForAudio() const { return false; }
+  //! Time left of that hold in percent, from 100 when it starts to 0 when it runs out
+  virtual int GetWaitingForAudioRemaining() const { return 0; }
 
-  virtual void DoAudioWork() {}
+  virtual bool IsInMenu() const { return false; }
+
+  /*!
+   * \brief Get the supported menu type
+   * \return The supported menu type
+  */
+  virtual MenuType GetSupportedMenuType() const { return MenuType::NONE; }
+
   virtual bool OnAction(const CAction& action) { return false; }
 
   //returns a state that is needed for resuming from a specific time
   virtual std::string GetPlayerState() { return ""; }
   virtual bool SetPlayerState(const std::string& state) { return false; }
 
-  virtual void GetAudioCapabilities(std::vector<int>& audioCaps)
-  {
-    audioCaps.assign(1, IPC_AUD_ALL);
-  }
   /*!
-   \brief define the subtitle capabilities of the player
+   * \brief Define the audio capabilities of the player
    */
-  virtual void GetSubtitleCapabilities(std::vector<int>& subCaps)
+  virtual void GetAudioCapabilities(std::vector<IPlayerAudioCaps>& caps) const
   {
-    subCaps.assign(1, IPC_SUBS_ALL);
+    caps.assign(1, IPlayerAudioCaps::ALL);
+  }
+
+  /*!
+   * \brief Define the subtitle capabilities of the player
+   */
+  virtual void GetSubtitleCapabilities(std::vector<IPlayerSubtitleCaps>& caps) const
+  {
+    caps.assign(1, IPlayerSubtitleCaps::ALL);
   }
 
   /*!
    \brief hook into render loop of render thread
    */
   virtual void Render(bool clear, uint32_t alpha = 255, bool gui = true) {}
+  virtual bool CompositeVideoCapture(KODI::RENDERING::CAPTURE::CaptureResult& result)
+  {
+    return true;
+  }
   virtual void FlushRenderer() {}
   virtual void SetRenderViewMode(int mode, float zoom, float par, float shift, bool stretch) {}
-  virtual float GetRenderAspectRatio() { return 1.0; }
+  virtual float GetRenderAspectRatio() const { return 1.0; }
   virtual void TriggerUpdateResolution() {}
-  virtual bool IsRenderingVideo() { return false; }
-
-  virtual bool Supports(EINTERLACEMETHOD method) { return false; }
-  virtual EINTERLACEMETHOD GetDeinterlacingMethodDefault() { return EINTERLACEMETHOD::VS_INTERLACEMETHOD_NONE; }
-  virtual bool Supports(ESCALINGMETHOD method) { return false; }
-  virtual bool Supports(ERENDERFEATURE feature) { return false; }
-
-  virtual unsigned int RenderCaptureAlloc() { return 0; }
-  virtual void RenderCaptureRelease(unsigned int captureId) {}
-  virtual void RenderCapture(unsigned int captureId,
-                             unsigned int width,
-                             unsigned int height,
-                             int flags)
+  virtual bool IsRenderingVideo() const { return false; }
+  /*!
+   * \brief True if any subtitle/overlay is actually visible on the current
+   *  presented frame. Per-frame accurate. Default false for players that
+   *  do not render overlays (e.g. retro, paplayer, external).
+   */
+  virtual bool HasVisibleOverlay() const { return false; }
+  virtual bool IsLiveStream() const { return false; }
+  virtual bool IsStreaming() const { return false; }
+  virtual void GetRects(CRect& source, CRect& dest, CRect& view) const
   {
+    source = {};
+    dest = {};
+    view = {};
   }
-  virtual bool RenderCaptureGetPixels(unsigned int captureId,
-                                      unsigned int millis,
-                                      uint8_t* buffer,
-                                      unsigned int size)
+  virtual unsigned int GetOrientation() const { return 0; }
+  virtual bool Supports(EINTERLACEMETHOD method) const { return false; }
+  virtual EINTERLACEMETHOD GetDeinterlacingMethodDefault() const
   {
-    return false;
+    return EINTERLACEMETHOD::VS_INTERLACEMETHOD_NONE;
   }
+  virtual bool Supports(ESCALINGMETHOD method) const { return false; }
+  virtual bool Supports(ERENDERFEATURE feature) const { return false; }
 
   // video and audio settings
-  virtual CVideoSettings GetVideoSettings() { return CVideoSettings(); }
+  virtual CVideoSettings GetVideoSettings() const { return CVideoSettings(); }
   virtual void SetVideoSettings(CVideoSettings& settings) {}
 
   /*!
@@ -250,7 +303,43 @@ public:
    * \return True if at least one player has an input device attached to the
    * game, false otherwise
    */
-  virtual bool HasGameAgent() { return false; }
+  virtual bool HasGameAgent() const { return false; }
+
+  /*!
+   * \brief Check if disc for the currently playing item can be ejected or
+   * swapped
+   *
+   * \return True if the media is disc-based and can be ejected or swapped,
+   * false if the currently playing item isn't disc-based or disc control isn't
+   * supported
+   */
+  virtual bool SupportsDiscControl() const { return false; }
+
+  /*!
+   * \brief Check if disc for the currently playing item is ejected
+   *
+   * \return True if the disc is ejected (tray is open), false if the currently
+   * playing item isn't disc-based or the tray is closed
+   */
+  virtual bool IsDiscEjected() const { return false; }
+
+  /*!
+   * \brief Get the human-readable label of the currently playing disc, if the
+   * media is disc-based
+   *
+   * \return The disc label, or an empty string if the currently playing item
+   * isn't disc-based or the label isn't available
+   */
+  virtual std::string DiscLabel() const { return ""; }
+
+  /*!
+   * \brief Check if the virtual disc tray for the currently playing item is
+   * empty
+   *
+   * \return True if no disc is selected in the tray, false if a disc is
+   * selected or the currently playing item isn't disc-based
+   */
+  virtual bool IsTrayEmpty() const { return false; }
 
   std::string m_name;
   std::string m_type;

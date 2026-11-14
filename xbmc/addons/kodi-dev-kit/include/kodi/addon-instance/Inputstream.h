@@ -152,10 +152,7 @@ public:
   std::string GetMimeType() const { return m_cStructure->m_mimeType; }
 
   /// @brief Amount of available properties.
-  unsigned int GetPropertiesAmount() const
-  {
-    return m_cStructure->m_nCountInfoValues;
-  }
+  unsigned int GetPropertiesAmount() const { return m_cStructure->m_nCountInfoValues; }
 
   /// @brief List of available properties-
   const std::map<std::string, std::string> GetProperties() const
@@ -269,6 +266,8 @@ public:
   /*! \cond PRIVATE */
   InputstreamMasteringMetadata() = default;
   InputstreamMasteringMetadata(const InputstreamMasteringMetadata& stream) : CStructHdl(stream) {}
+  InputstreamMasteringMetadata& operator=(const InputstreamMasteringMetadata&) = default;
+
   /*! \endcond */
 
   /// @defgroup cpp_kodi_addon_inputstream_Defs_Interface_InputstreamMasteringMetadata_Help Value Help
@@ -435,6 +434,7 @@ public:
     : CStructHdl(stream)
   {
   }
+  InputstreamContentlightMetadata& operator=(const InputstreamContentlightMetadata&) = default;
   /*! \endcond */
 
   /// @defgroup cpp_kodi_addon_inputstream_Defs_Interface_InputstreamContentlightMetadata_Help Value Help
@@ -487,6 +487,95 @@ private:
   {
   }
   InputstreamContentlightMetadata(INPUTSTREAM_CONTENTLIGHT_METADATA* stream) : CStructHdl(stream) {}
+};
+///@}
+//------------------------------------------------------------------------------
+
+//==============================================================================
+/// @defgroup cpp_kodi_addon_inputstream_Defs_Interface_InputstreamDvccMetadata class InputstreamDvccMetadata
+/// @ingroup cpp_kodi_addon_inputstream_Defs_Interface
+/// @brief **Dolby Vision Configuration Constraint (DVCC) metadata**\n
+/// Describes the metadata used for Dolby Vision stream configuration.
+///
+/// Used on @ref kodi::addon::InputstreamInfo::SetDvccMetadata and @ref kodi::addon::InputstreamInfo::GetDvccMetadata.
+///
+/// ----------------------------------------------------------------------------
+///
+/// @copydetails cpp_kodi_addon_inputstream_Defs_Interface_InputstreamDvccMetadata_Help
+///
+///@{
+class ATTR_DLL_LOCAL InputstreamDvccMetadata
+  : public CStructHdl<InputstreamDvccMetadata, INPUTSTREAM_DVCC_METADATA>
+{
+  /*! \cond PRIVATE */
+  friend class CInstanceInputStream;
+  friend class InputstreamInfo;
+  /*! \endcond */
+
+public:
+  InputstreamDvccMetadata() = default;
+
+  InputstreamDvccMetadata(const InputstreamDvccMetadata& stream) = default;
+
+  InputstreamDvccMetadata& operator=(const InputstreamDvccMetadata&) = default;
+
+  /// @defgroup cpp_kodi_addon_inputstream_Defs_Interface_InputstreamDvccMetadata_Help Value Help
+  /// @ingroup cpp_kodi_addon_inputstream_Defs_Interface_InputstreamDvccMetadata
+  ///
+  /// <b>The following table contains values that can be set with @ref cpp_kodi_addon_inputstream_Defs_Interface_InputstreamDvccMetadata :</b>
+  /// | Name | Type | Set call | Get call
+  /// |------|------|----------|----------
+  /// | **DVCC version major** | `uint8_t` | SetDvVersionMajor | GetDvVersionMajor
+  /// | **DVCC version minor** | `uint8_t` | SetDvVersionMinor | GetDvVersionMinor
+  /// | **Dolby Vision profile** | `uint8_t` | SetDvProfile | GetDvProfile
+  /// | **Dolby Vision level** | `uint8_t` | SetDvLevel | GetDvLevel
+  /// | **RPU present flag** | `bool` | SetRpuPresentFlag | GetRpuPresentFlag
+  /// | **Enhancement Layer present flag** | `bool` | SetElPresentFlag | GetElPresentFlag
+  /// | **Base Layer present flag** | `bool` | SetBlPresentFlag | GetBlPresentFlag
+  /// | **BL signal compatibility ID** | `uint8_t` | SetBlSignalCompatibilityId | GetBlSignalCompatibilityId
+  /// | **Compression method** | `uint8_t` | SetMdCompression | GetMdCompression
+
+  bool operator==(const kodi::addon::InputstreamDvccMetadata& right) const
+  {
+    if (memcmp(m_cStructure, right.m_cStructure, sizeof(INPUTSTREAM_DVCC_METADATA)) == 0)
+      return true;
+    return false;
+  }
+
+  void SetDvVersionMajor(uint8_t value) { m_cStructure->m_dvVersionMajor = value; }
+  uint8_t GetDvVersionMajor() const { return m_cStructure->m_dvVersionMajor; }
+
+  void SetDvVersionMinor(uint8_t value) { m_cStructure->m_dvVersionMinor = value; }
+  uint8_t GetDvVersionMinor() const { return m_cStructure->m_dvVersionMinor; }
+
+  void SetDvProfile(uint8_t value) { m_cStructure->m_dvProfile = value; }
+  uint8_t GetDvProfile() const { return m_cStructure->m_dvProfile; }
+
+  void SetDvLevel(uint8_t value) { m_cStructure->m_dvLevel = value; }
+  uint8_t GetDvLevel() const { return m_cStructure->m_dvLevel; }
+
+  void SetRpuPresentFlag(bool value) { m_cStructure->m_rpuPresentFlag = value; }
+  bool GetRpuPresentFlag() const { return m_cStructure->m_rpuPresentFlag; }
+
+  void SetElPresentFlag(bool value) { m_cStructure->m_elPresentFlag = value; }
+  bool GetElPresentFlag() const { return m_cStructure->m_elPresentFlag; }
+
+  void SetBlPresentFlag(bool value) { m_cStructure->m_blPresentFlag = value; }
+  bool GetBlPresentFlag() const { return m_cStructure->m_blPresentFlag; }
+
+  void SetBlSignalCompatibilityId(uint8_t value)
+  {
+    m_cStructure->m_dvBlSignalCompatibilityId = value;
+  }
+  uint8_t GetBlSignalCompatibilityId() const { return m_cStructure->m_dvBlSignalCompatibilityId; }
+
+  void SetMdCompression(uint8_t value) { m_cStructure->m_dvMdCompression = value; }
+  uint8_t GetMdCompression() const { return m_cStructure->m_dvMdCompression; }
+
+private:
+  explicit InputstreamDvccMetadata(const INPUTSTREAM_DVCC_METADATA* stream) : CStructHdl(stream) {}
+
+  explicit InputstreamDvccMetadata(INPUTSTREAM_DVCC_METADATA* stream) : CStructHdl(stream) {}
 };
 ///@}
 //------------------------------------------------------------------------------
@@ -554,6 +643,7 @@ public:
   /// | **Color transfer characteristic** |  | no | @ref InputstreamInfo::SetColorTransferCharacteristic "SetColorTransferCharacteristic" | @ref InputstreamInfo::GetColorTransferCharacteristic "GetColorTransferCharacteristic"
   /// | **Mastering metadata** |  | no | @ref InputstreamInfo::SetMasteringMetadata "SetMasteringMetadata" | @ref InputstreamInfo::GetMasteringMetadata "GetMasteringMetadata"
   /// | **Content light metadata** |  | no | @ref InputstreamInfo::SetContentLightMetadata "SetContentLightMetadata" | @ref InputstreamInfo::GetContentLightMetadata "GetContentLightMetadata"
+  /// | **DVCC metadata** |  | no | @ref InputstreamInfo::SetDVCCMetadata "SetDVCCMetadata" | @ref InputstreamInfo::GetDVCCMetadata "GetDVCCMetadata"
   ///
 
   /// @addtogroup cpp_kodi_addon_inputstream_Defs_Interface_InputstreamInfo
@@ -599,8 +689,8 @@ public:
   /// See https://github.com/FFmpeg/FFmpeg/blob/master/libavcodec/codec_desc.c about
   /// available names.
   ///
-  /// @remark On @ref INPUTSTREAM_TYPE_TELETEXT and @ref INPUTSTREAM_TYPE_RDS
-  /// this can be ignored and leaved empty.
+  /// @remark On @ref INPUTSTREAM_TYPE_TELETEXT, @ref INPUTSTREAM_TYPE_RDS, and
+  /// @ref INPUTSTREAM_TYPE_ID3 this can be ignored and leaved empty.
   ///
   /// @param[in] codeName Codec name
   void SetCodecName(const std::string& codecName)
@@ -649,7 +739,7 @@ public:
   {
     m_extraData = extraData;
     m_cStructure->m_ExtraData = m_extraData.data();
-    m_cStructure->m_ExtraSize = m_extraData.size();
+    m_cStructure->m_ExtraSize = static_cast<unsigned int>(m_extraData.size());
   }
 
   /// @brief Additional data where can needed on streams.
@@ -666,7 +756,7 @@ public:
     }
 
     m_cStructure->m_ExtraData = m_extraData.data();
-    m_cStructure->m_ExtraSize = m_extraData.size();
+    m_cStructure->m_ExtraSize = static_cast<unsigned int>(m_extraData.size());
   }
 
   /// @brief To get with @ref SetExtraData changed values.
@@ -697,7 +787,7 @@ public:
   {
     m_extraData.clear();
     m_cStructure->m_ExtraData = m_extraData.data();
-    m_cStructure->m_ExtraSize = m_extraData.size();
+    m_cStructure->m_ExtraSize = static_cast<unsigned int>(m_extraData.size());
   }
 
   /// @brief RFC 5646 language code (empty string if undefined).
@@ -902,6 +992,23 @@ public:
   /// @brief Clear content light static Metadata.
   void ClearContentLightMetadata() { m_cStructure->m_contentLightMetadata = nullptr; }
 
+  /// @brief Set Dolby Vision Configuration Constraint (DVCC) metadata.
+  ///
+  /// @param[in] dvccMetadata The settable metadata with @ref InputstreamDvccMetadata
+  void SetDvccMetadata(const kodi::addon::InputstreamDvccMetadata& dvccMetadata)
+  {
+    m_dvccMetadata = dvccMetadata;
+    m_cStructure->m_dvccMetadata = m_dvccMetadata;
+  }
+
+  /// @brief Get DVCC metadata previously set with @ref SetDvccMetadata.
+  ///
+  /// @return Reference to the DVCC metadata wrapper.
+  const kodi::addon::InputstreamDvccMetadata& GetDvccMetadata() const { return m_dvccMetadata; }
+
+  /// @brief Clear DVCC metadata.
+  void ClearDvccMetadata() { m_cStructure->m_dvccMetadata = nullptr; }
+
   ///@}
 
 private:
@@ -932,6 +1039,7 @@ private:
   StreamCryptoSession m_cryptoSession;
   InputstreamMasteringMetadata m_masteringMetadata;
   InputstreamContentlightMetadata m_contentLightMetadata;
+  InputstreamDvccMetadata m_dvccMetadata;
 };
 ///@}
 //------------------------------------------------------------------------------
@@ -1077,7 +1185,7 @@ private:
 /// class CMyInputstream : public kodi::addon::CInstanceInputStream
 /// {
 /// public:
-///   CMyInputstream(KODI_HANDLE instance, const std::string& kodiVersion);
+///   CMyInputstream(const kodi::addon::IInstanceInfo& instance);
 ///
 ///   void GetCapabilities(kodi::addon::InputstreamCapabilities& capabilities) override;
 ///   bool Open(const kodi::addon::InputstreamProperty& props) override;
@@ -1085,8 +1193,8 @@ private:
 ///   ...
 /// };
 ///
-/// CMyInputstream::CMyInputstream(KODI_HANDLE instance, const std::string& kodiVersion)
-///   : kodi::addon::CInstanceInputStream(instance, kodiVersion)
+/// CMyInputstream::CMyInputstream(const kodi::addon::IInstanceInfo& instance)
+///   : kodi::addon::CInstanceInputStream(instance)
 /// {
 ///   ...
 /// }
@@ -1115,25 +1223,19 @@ private:
 /// {
 /// public:
 ///   CMyAddon() = default;
-///   ADDON_STATUS CreateInstance(int instanceType,
-///                               std::string instanceID,
-///                               KODI_HANDLE instance,
-///                               const std::string& version,
-///                               KODI_HANDLE& addonInstance) override;
+///   ADDON_STATUS CreateInstance(const kodi::addon::IInstanceInfo& instance,
+///                               KODI_ADDON_INSTANCE_HDL& hdl) override;
 /// };
 ///
 /// // If you use only one instance in your add-on, can be instanceType and
 /// // instanceID ignored
-/// ADDON_STATUS CMyAddon::CreateInstance(int instanceType,
-///                                       std::string instanceID,
-///                                       KODI_HANDLE instance,
-///                                       const std::string& version,
-///                                       KODI_HANDLE& addonInstance)
+/// ADDON_STATUS CMyAddon::CreateInstance(const kodi::addon::IInstanceInfo& instance,
+///                                       KODI_ADDON_INSTANCE_HDL& hdl)
 /// {
-///   if (instanceType == ADDON_INSTANCE_INPUTSTREAM)
+///   if (instance.IsType(ADDON_INSTANCE_INPUTSTREAM))
 ///   {
 ///     kodi::Log(ADDON_LOG_NOTICE, "Creating my Inputstream");
-///     addonInstance = new CMyInputstream(instance, version);
+///     hdl = new CMyInputstream(instance);
 ///     return ADDON_STATUS_OK;
 ///   }
 ///   else if (...)
@@ -1164,16 +1266,13 @@ public:
   ///
   /// @warning Only use `instance` from the @ref CAddonBase::CreateInstance call.
   ///
-  explicit CInstanceInputStream(KODI_HANDLE instance, const std::string& kodiVersion = "")
-    : IAddonInstance(ADDON_INSTANCE_INPUTSTREAM,
-                     !kodiVersion.empty() ? kodiVersion
-                                          : GetKodiTypeVersion(ADDON_INSTANCE_INPUTSTREAM))
+  explicit CInstanceInputStream(const IInstanceInfo& instance) : IAddonInstance(instance)
   {
     if (CPrivateBase::m_interface->globalSingleInstance != nullptr)
       throw std::logic_error("kodi::addon::CInstanceInputStream: Creation of multiple together "
                              "with single instance way is not allowed!");
 
-    SetAddonStruct(instance, m_kodiVersion);
+    SetAddonStruct(instance);
   }
   //----------------------------------------------------------------------------
 
@@ -1561,12 +1660,28 @@ public:
   //----------------------------------------------------------------------------
 
   //============================================================================
-  /// @brief Sets desired width / height
+  /// @brief Notify current screen resolution
   ///
   /// @param[in] width Width to set
   /// @param[in] height Height to set
   ///
-  virtual void SetVideoResolution(int width, int height) {}
+  virtual void SetVideoResolution(unsigned int width, unsigned int height) {}
+  //----------------------------------------------------------------------------
+
+  //============================================================================
+  /// @brief Notify current screen resolution and max screen resolution allowed
+  ///
+  /// @param[in] width Width to set
+  /// @param[in] height Height to set
+  /// @param[in] maxWidth Max width allowed
+  /// @param[in] maxHeight Max height allowed
+  ///
+  virtual void SetVideoResolution(unsigned int width,
+                                  unsigned int height,
+                                  unsigned int maxWidth,
+                                  unsigned int maxHeight)
+  {
+  }
   //----------------------------------------------------------------------------
 
   //=============================================================================
@@ -1761,70 +1876,57 @@ public:
   ///@}
 
 private:
-  static int compareVersion(const int v1[3], const int v2[3])
+  void SetAddonStruct(KODI_ADDON_INSTANCE_STRUCT* instance)
   {
-    for (unsigned i(0); i < 3; ++i)
-      if (v1[i] != v2[i])
-        return v1[i] - v2[i];
-    return 0;
-  }
+    instance->hdl = this;
+    instance->inputstream->toAddon->open = ADDON_Open;
+    instance->inputstream->toAddon->close = ADDON_Close;
+    instance->inputstream->toAddon->get_capabilities = ADDON_GetCapabilities;
 
-  void SetAddonStruct(KODI_HANDLE instance, const std::string& kodiVersion)
-  {
-    if (instance == nullptr)
-      throw std::logic_error("kodi::addon::CInstanceInputStream: Creation with empty addon "
-                             "structure not allowed, table must be given from Kodi!");
-    int api[3] = { 0, 0, 0 };
-    sscanf(kodiVersion.c_str(), "%d.%d.%d", &api[0], &api[1], &api[2]);
+    instance->inputstream->toAddon->get_stream_ids = ADDON_GetStreamIds;
+    instance->inputstream->toAddon->get_stream = ADDON_GetStream;
+    instance->inputstream->toAddon->enable_stream = ADDON_EnableStream;
+    instance->inputstream->toAddon->open_stream = ADDON_OpenStream;
+    instance->inputstream->toAddon->demux_reset = ADDON_DemuxReset;
+    instance->inputstream->toAddon->demux_abort = ADDON_DemuxAbort;
+    instance->inputstream->toAddon->demux_flush = ADDON_DemuxFlush;
+    instance->inputstream->toAddon->demux_read = ADDON_DemuxRead;
+    instance->inputstream->toAddon->demux_seek_time = ADDON_DemuxSeekTime;
+    instance->inputstream->toAddon->demux_set_speed = ADDON_DemuxSetSpeed;
+    instance->inputstream->toAddon->set_video_resolution = ADDON_SetVideoResolution;
 
-    m_instanceData = static_cast<AddonInstance_InputStream*>(instance);
-    m_instanceData->toAddon->addonInstance = this;
-    m_instanceData->toAddon->open = ADDON_Open;
-    m_instanceData->toAddon->close = ADDON_Close;
-    m_instanceData->toAddon->get_capabilities = ADDON_GetCapabilities;
+    instance->inputstream->toAddon->get_total_time = ADDON_GetTotalTime;
+    instance->inputstream->toAddon->get_time = ADDON_GetTime;
 
-    m_instanceData->toAddon->get_stream_ids = ADDON_GetStreamIds;
-    m_instanceData->toAddon->get_stream = ADDON_GetStream;
-    m_instanceData->toAddon->enable_stream = ADDON_EnableStream;
-    m_instanceData->toAddon->open_stream = ADDON_OpenStream;
-    m_instanceData->toAddon->demux_reset = ADDON_DemuxReset;
-    m_instanceData->toAddon->demux_abort = ADDON_DemuxAbort;
-    m_instanceData->toAddon->demux_flush = ADDON_DemuxFlush;
-    m_instanceData->toAddon->demux_read = ADDON_DemuxRead;
-    m_instanceData->toAddon->demux_seek_time = ADDON_DemuxSeekTime;
-    m_instanceData->toAddon->demux_set_speed = ADDON_DemuxSetSpeed;
-    m_instanceData->toAddon->set_video_resolution = ADDON_SetVideoResolution;
+    instance->inputstream->toAddon->get_times = ADDON_GetTimes;
+    instance->inputstream->toAddon->pos_time = ADDON_PosTime;
 
-    m_instanceData->toAddon->get_total_time = ADDON_GetTotalTime;
-    m_instanceData->toAddon->get_time = ADDON_GetTime;
-
-    m_instanceData->toAddon->get_times = ADDON_GetTimes;
-    m_instanceData->toAddon->pos_time = ADDON_PosTime;
-
-    m_instanceData->toAddon->read_stream = ADDON_ReadStream;
-    m_instanceData->toAddon->seek_stream = ADDON_SeekStream;
-    m_instanceData->toAddon->position_stream = ADDON_PositionStream;
-    m_instanceData->toAddon->length_stream = ADDON_LengthStream;
-    m_instanceData->toAddon->is_real_time_stream = ADDON_IsRealTimeStream;
+    instance->inputstream->toAddon->read_stream = ADDON_ReadStream;
+    instance->inputstream->toAddon->seek_stream = ADDON_SeekStream;
+    instance->inputstream->toAddon->position_stream = ADDON_PositionStream;
+    instance->inputstream->toAddon->length_stream = ADDON_LengthStream;
+    instance->inputstream->toAddon->is_real_time_stream = ADDON_IsRealTimeStream;
 
     // Added on 2.0.10
-    m_instanceData->toAddon->get_chapter = ADDON_GetChapter;
-    m_instanceData->toAddon->get_chapter_count = ADDON_GetChapterCount;
-    m_instanceData->toAddon->get_chapter_name = ADDON_GetChapterName;
-    m_instanceData->toAddon->get_chapter_pos = ADDON_GetChapterPos;
-    m_instanceData->toAddon->seek_chapter = ADDON_SeekChapter;
+    instance->inputstream->toAddon->get_chapter = ADDON_GetChapter;
+    instance->inputstream->toAddon->get_chapter_count = ADDON_GetChapterCount;
+    instance->inputstream->toAddon->get_chapter_name = ADDON_GetChapterName;
+    instance->inputstream->toAddon->get_chapter_pos = ADDON_GetChapterPos;
+    instance->inputstream->toAddon->seek_chapter = ADDON_SeekChapter;
 
     // Added on 2.0.12
-    m_instanceData->toAddon->block_size_stream = ADDON_GetBlockSize;
+    instance->inputstream->toAddon->block_size_stream = ADDON_GetBlockSize;
 
     /*
     // Way to include part on new API version
-    int minPartVersion[3] = { 3, 0, 0 };
-    if (compareVersion(api, minPartVersion) >= 0)
+    if (IsInstanceAPIVersionAtLeast(3, 0, 0))
     {
 
     }
     */
+
+    m_instanceData = instance->inputstream;
+    m_instanceData->toAddon->addonInstance = this;
   }
 
   inline static bool ADDON_Open(const AddonInstance_InputStream* instance,
@@ -1844,7 +1946,6 @@ private:
     InputstreamCapabilities caps(capabilities);
     static_cast<CInstanceInputStream*>(instance->toAddon->addonInstance)->GetCapabilities(caps);
   }
-
 
   // IDemux
   inline static bool ADDON_GetStreamIds(const AddonInstance_InputStream* instance,
@@ -1934,13 +2035,16 @@ private:
   }
 
   inline static void ADDON_SetVideoResolution(const AddonInstance_InputStream* instance,
-                                              int width,
-                                              int height)
+                                              unsigned int width,
+                                              unsigned int height,
+                                              unsigned int maxWidth,
+                                              unsigned int maxHeight)
   {
     static_cast<CInstanceInputStream*>(instance->toAddon->addonInstance)
         ->SetVideoResolution(width, height);
+    static_cast<CInstanceInputStream*>(instance->toAddon->addonInstance)
+        ->SetVideoResolution(width, height, maxWidth, maxHeight);
   }
-
 
   // IDisplayTime
   inline static int ADDON_GetTotalTime(const AddonInstance_InputStream* instance)

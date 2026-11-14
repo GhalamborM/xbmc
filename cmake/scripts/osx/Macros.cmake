@@ -1,31 +1,33 @@
 function(core_link_library lib wraplib)
-  if(CMAKE_GENERATOR MATCHES "Unix Makefiles" OR CMAKE_GENERATOR STREQUAL Ninja)
-    set(wrapper_obj cores/dll-loader/exports/CMakeFiles/wrapper.dir/wrapper.c.o)
-  elseif(CMAKE_GENERATOR MATCHES "Xcode")
-    # CURRENT_VARIANT is an Xcode env var
-    # CPU is a project cmake var
-    # Xcode new build system (CMAKE_XCODE_BUILD_SYSTEM=12) requires the env var CURRENT_VARIANT to be passed WITHOUT brackets
-    # Xcode Legacy build system (CMAKE_XCODE_BUILD_SYSTEM=1) requires the env var CURRENT_VARIANT to be passed WITH brackets
-    if(CMAKE_XCODE_BUILD_SYSTEM STREQUAL 12)
-      set(wrapper_obj cores/dll-loader/exports/kodi.build/$(CONFIGURATION)$(EFFECTIVE_PLATFORM_NAME)/wrapper.build/Objects-$CURRENT_VARIANT/${CPU}/wrapper.o)
-    else()
-			set(wrapper_obj cores/dll-loader/exports/kodi.build/$(CONFIGURATION)$(EFFECTIVE_PLATFORM_NAME)/wrapper.build/Objects-$(CURRENT_VARIANT)/${CPU}/wrapper.o)
-    endif()
-  else()
-    message(FATAL_ERROR "Unsupported generator in core_link_library")
-  endif()
-
   set(export -bundle -undefined dynamic_lookup -read_only_relocs suppress
              -Wl,-alias_list,${CMAKE_BINARY_DIR}/${CORE_BUILD_DIR}/cores/dll-loader/exports/wrapper.def
-             ${CMAKE_BINARY_DIR}/${CORE_BUILD_DIR}/${wrapper_obj})
+             $<TARGET_OBJECTS:wrapper>)
   set(extension ${CMAKE_SHARED_MODULE_SUFFIX})
   set(check_arg "")
   if(TARGET ${lib})
     set(target ${lib})
-    set(link_lib $<TARGET_FILE:${lib}>)
+
+    get_target_property(_ALIASTARGET ${target} ALIASED_TARGET)
+    if(_ALIASTARGET)
+      set(LIB_TARGET ${_ALIASTARGET})
+    else()
+      set(LIB_TARGET ${target})
+    endif()
+
+    string(FIND "${LIB_TARGET}" "PkgConfig::" pclib_target_found)
+    if(${pclib_target_found} GREATER_EQUAL 0)
+      # PkgConfig targets are interface targets, and do not have the property to
+      # fulfill TARGET_FILE genex. Manually retrieve lib from pop front of INTERFACE_LINK_LIBRARIES
+
+      get_target_property(pc_link_libs_target ${LIB_TARGET} INTERFACE_LINK_LIBRARIES)
+      list(POP_FRONT pc_link_libs_target _lib_path)
+      set(link_lib ${_lib_path})
+    else()
+      set(link_lib $<TARGET_FILE:${LIB_TARGET}>)
+    endif()
+
     set(check_arg ${ARGV2})
     set(data_arg  ${ARGV3})
-
   else()
     set(target ${ARGV2})
     set(link_lib ${lib})
@@ -40,7 +42,30 @@ function(core_link_library lib wraplib)
       list(APPEND export ${arg})
     endforeach()
   elseif(check_arg STREQUAL archives)
-    set(extra_libs ${data_arg})
+    foreach(_data_arg ${data_arg})
+      if(TARGET ${_data_arg})
+        get_target_property(_extra_ALIASTARGET ${_data_arg} ALIASED_TARGET)
+        if(_extra_ALIASTARGET)
+          set(DATA_TARGET ${_extra_ALIASTARGET})
+        else()
+          set(DATA_TARGET ${_data_arg})
+        endif()
+
+        string(FIND "${DATA_TARGET}" "PkgConfig::" pctarget_found)
+        if(${pctarget_found} GREATER_EQUAL 0)
+          # PkgConfig targets are interface targets, and do not have the property to
+          # fulfill TARGET_FILE genex. Manually retrieve lib from pop front of INTERFACE_LINK_LIBRARIES
+
+          get_target_property(pc_link_libs ${DATA_TARGET} INTERFACE_LINK_LIBRARIES)
+          list(POP_FRONT pc_link_libs _data_lib_path)
+          list(APPEND extra_libs ${_data_lib_path})
+        else()
+          list(APPEND extra_libs $<TARGET_FILE:${DATA_TARGET}>)
+        endif()
+      else()
+        list(APPEND extra_libs ${_data_arg})
+      endif()
+    endforeach()
   endif()
   get_filename_component(dir ${wraplib} DIRECTORY)
 

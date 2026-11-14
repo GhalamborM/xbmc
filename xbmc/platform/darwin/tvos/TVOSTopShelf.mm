@@ -6,16 +6,19 @@
  *  See LICENSES/README.md for more information.
  */
 
-
 #import "TVOSTopShelf.h"
 
-#include "Application.h"
 #include "DatabaseManager.h"
 #include "FileItem.h"
+#include "FileItemList.h"
+#include "ServiceBroker.h"
+#include "application/Application.h"
 #include "filesystem/File.h"
 #include "guilib/GUIWindowManager.h"
-#include "guilib/LocalizeStrings.h"
+#include "media/MediaType.h"
 #include "messaging/ApplicationMessenger.h"
+#include "resources/LocalizeStrings.h"
+#include "resources/ResourcesComponent.h"
 #include "tvosShared.h"
 #include "utils/Base64.h"
 #include "utils/StringUtils.h"
@@ -157,8 +160,10 @@ void CTVOSTopShelf::SetTopShelfItems(CFileItemList& items, TVOSTopShelfItemsCate
     {
       case TVOSTopShelfItemsCategory::MOVIES:
         fillSharedDicts(
-            items, @"movies", @(g_localizeStrings.Get(20386).c_str()),
-            [](const CFileItemPtr& videoItem) {
+            items, @"movies",
+            @(CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(20386).c_str()),
+            [](const CFileItemPtr& videoItem)
+            {
               if (videoItem->HasArt("poster"))
                 return videoItem->GetArt("poster");
               else
@@ -170,11 +175,12 @@ void CTVOSTopShelf::SetTopShelfItems(CFileItemList& items, TVOSTopShelfItemsCate
         CVideoDatabase videoDb;
         videoDb.Open();
         fillSharedDicts(
-            items, @"tvshows", @(g_localizeStrings.Get(20387).c_str()),
+            items, @"tvshows",
+            @(CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(20387).c_str()),
             [&videoDb](const CFileItemPtr& videoItem)
             {
               int season = videoItem->GetVideoInfoTag()->m_iIdSeason;
-              return season > 0 ? videoDb.GetArtForItem(season, MediaTypeSeason, "poster")
+              return season > 0 ? videoDb.GetArtForItem(season, KODI::MEDIA::TYPE::SEASON, "poster")
                                 : std::string{};
             },
             [](const CFileItemPtr& videoItem)
@@ -213,8 +219,7 @@ void CTVOSTopShelf::RunTopShelf()
 
   // its a bit ugly, but only way to get resume window to show
   std::string cmd = StringUtils::Format("PlayMedia({})", StringUtils::Paramify(url));
-  KODI::MESSAGING::CApplicationMessenger::GetInstance().PostMsg(TMSG_EXECUTE_BUILT_IN, -1, -1,
-                                                                nullptr, cmd);
+  CServiceBroker::GetAppMessenger()->PostMsg(TMSG_EXECUTE_BUILT_IN, -1, -1, nullptr, cmd);
 }
 
 void CTVOSTopShelf::HandleTopShelfUrl(const std::string& url, const bool run)

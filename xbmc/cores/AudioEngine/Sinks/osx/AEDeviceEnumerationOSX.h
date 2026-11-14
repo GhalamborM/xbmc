@@ -90,7 +90,7 @@ public:
   * @brief Returns the device name which belongs to m_deviceID without any stream/source suffixes
   * @return the CA device name
   */
-  std::string   GetMasterDeviceName() const { return m_deviceName; }
+  const std::string& GetMasterDeviceName() const { return m_deviceName; }
 
   /*!
   * @brief Tries to return a proper channelmap from CA in a format AE understands
@@ -228,7 +228,7 @@ private:
   std::string       getExtraDisplayNameForStream(UInt32 streamIdx) const;
 
   AudioDeviceID     m_deviceID;
-  bool              m_isPlanar;
+  bool m_isPlanar = false;
   std::string       m_deviceName;
 
   typedef struct

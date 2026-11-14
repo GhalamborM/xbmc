@@ -12,6 +12,7 @@
 #include "GUIInfoManager.h"
 #include "ServiceBroker.h"
 #include "addons/Skin.h"
+#include "commons/ilog.h"
 #include "filesystem/SpecialProtocol.h"
 #include "guilib/GUIComponent.h"
 #include "guilib/GUIControlFactory.h"
@@ -26,7 +27,7 @@
 #include "utils/MemUtils.h"
 #include "utils/StringUtils.h"
 #include "utils/Variant.h"
-#include "utils/log.h"
+#include "windowing/WinSystem.h"
 
 #include <inttypes.h>
 
@@ -42,7 +43,10 @@ CGUIWindowDebugInfo::~CGUIWindowDebugInfo(void) = default;
 
 void CGUIWindowDebugInfo::UpdateVisibility()
 {
-  if (LOG_LEVEL_DEBUG_FREEMEM <= CServiceBroker::GetSettingsComponent()->GetAdvancedSettings()->m_logLevel || g_SkinInfo->IsDebugging())
+  auto skin = CServiceBroker::GetGUI()->GetSkinInfo();
+  if (LOG_LEVEL_DEBUG_FREEMEM <=
+          CServiceBroker::GetSettingsComponent()->GetAdvancedSettings()->m_logLevel ||
+      (skin && skin->IsDebugging()))
     Open();
   else
     Close();
@@ -132,7 +136,8 @@ void CGUIWindowDebugInfo::Process(unsigned int currentTime, CDirtyRegionList &di
   }
 
   // render the skin debug info
-  if (g_SkinInfo->IsDebugging())
+  auto skin = CServiceBroker::GetGUI()->GetSkinInfo();
+  if (skin && skin->IsDebugging())
   {
     if (!info.empty())
       info += "\n";
@@ -179,7 +184,13 @@ void CGUIWindowDebugInfo::Process(unsigned int currentTime, CDirtyRegionList &di
 
 void CGUIWindowDebugInfo::Render()
 {
+  RENDER_ORDER renderOrder = CServiceBroker::GetWinSystem()->GetGfxContext().GetRenderOrder();
+  if (renderOrder == RENDER_ORDER_FRONT_TO_BACK)
+    return;
+  else if (renderOrder == RENDER_ORDER_BACK_TO_FRONT)
+    CServiceBroker::GetWinSystem()->GetGfxContext().SetRenderOrder(RENDER_ORDER_ALL_BACK_TO_FRONT);
   CServiceBroker::GetWinSystem()->GetGfxContext().SetRenderingResolution(CServiceBroker::GetWinSystem()->GetGfxContext().GetResInfo(), false);
   if (m_layout)
     m_layout->RenderOutline(m_renderRegion.x1, m_renderRegion.y1, 0xffffffff, 0xff000000, 0, 0);
+  CServiceBroker::GetWinSystem()->GetGfxContext().SetRenderOrder(renderOrder);
 }

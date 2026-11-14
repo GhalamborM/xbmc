@@ -8,9 +8,9 @@
 
 #include "XBMCTinyXML.h"
 
-#include "LangInfo.h"
 #include "RegExp.h"
 #include "filesystem/File.h"
+#include "language/LangInfo.h"
 #include "utils/CharsetConverter.h"
 #include "utils/CharsetDetection.h"
 #include "utils/StringUtils.h"
@@ -72,7 +72,7 @@ bool CXBMCTinyXML::LoadFile(const std::string& _filename, TiXmlEncoding encoding
   buffer.clear(); // free memory early
 
   if (encoding == TIXML_ENCODING_UNKNOWN)
-    Parse(data, file.GetProperty(XFILE::FILE_PROPERTY_CONTENT_CHARSET));
+    Parse(data, file.GetProperty(XFILE::FileProperty::CONTENT_CHARSET));
   else
     Parse(data, encoding);
 

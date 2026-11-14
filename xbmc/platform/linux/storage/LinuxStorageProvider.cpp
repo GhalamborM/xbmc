@@ -7,17 +7,20 @@
  */
 
 #include "LinuxStorageProvider.h"
-#include "guilib/LocalizeStrings.h"
+
+#include "ServiceBroker.h"
 #include "UDevProvider.h"
+#include "resources/LocalizeStrings.h"
+#include "resources/ResourcesComponent.h"
 #ifdef HAS_DBUS
 #include "UDisksProvider.h"
 #include "UDisks2Provider.h"
 #endif
 #include "platform/posix/PosixMountProvider.h"
 
-IStorageProvider* IStorageProvider::CreateInstance()
+std::unique_ptr<IStorageProvider> IStorageProvider::CreateInstance()
 {
-  return new CLinuxStorageProvider();
+  return std::make_unique<CLinuxStorageProvider>();
 }
 
 CLinuxStorageProvider::CLinuxStorageProvider()
@@ -54,23 +57,23 @@ void CLinuxStorageProvider::Stop()
   m_instance->Stop();
 }
 
-void CLinuxStorageProvider::GetLocalDrives(VECSOURCES &localDrives)
+void CLinuxStorageProvider::GetLocalDrives(std::vector<CMediaSource>& localDrives)
 {
   // Home directory
   CMediaSource share;
   share.strPath = getenv("HOME");
-  share.strName = g_localizeStrings.Get(21440);
+  share.strName = CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(21440);
   share.m_ignore = true;
-  share.m_iDriveType = CMediaSource::SOURCE_TYPE_LOCAL;
+  share.m_iDriveType = SourceType::LOCAL;
   localDrives.push_back(share);
   share.strPath = "/";
-  share.strName = g_localizeStrings.Get(21453);
+  share.strName = CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(21453);
   localDrives.push_back(share);
 
   m_instance->GetLocalDrives(localDrives);
 }
 
-void CLinuxStorageProvider::GetRemovableDrives(VECSOURCES &removableDrives)
+void CLinuxStorageProvider::GetRemovableDrives(std::vector<CMediaSource>& removableDrives)
 {
   m_instance->GetRemovableDrives(removableDrives);
 }

@@ -8,27 +8,27 @@
 
 #include "MusicInfoScraper.h"
 
-#include "filesystem/CurlFile.h"
+#include "filesystem/HttpClientFactory.h"
+#include "filesystem/IHttpClient.h"
 #include "utils/log.h"
 
 using namespace MUSIC_GRABBER;
 using namespace ADDON;
 using namespace std::chrono_literals;
 
-CMusicInfoScraper::CMusicInfoScraper(const ADDON::ScraperPtr &scraper) : CThread("MusicInfoScraper")
+CMusicInfoScraper::CMusicInfoScraper(const ADDON::ScraperPtr& scraper)
+  : CThread("MusicInfoScraper"), m_scraper(scraper)
 {
   m_bSucceeded=false;
   m_bCanceled=false;
   m_iAlbum=-1;
   m_iArtist=-1;
-  m_scraper = scraper;
-  m_http = new XFILE::CCurlFile;
+  m_http = XFILE::CreateHttpClient();
 }
 
 CMusicInfoScraper::~CMusicInfoScraper(void)
 {
   StopThread();
-  delete m_http;
 }
 
 int CMusicInfoScraper::GetAlbumCount() const
@@ -152,13 +152,13 @@ void CMusicInfoScraper::Process()
 {
   try
   {
-    if (m_strAlbum.size())
+    if (!m_strAlbum.empty())
     {
       FindAlbumInfo();
       m_strAlbum.clear();
       m_strArtist.clear();
     }
-    else if (m_strArtist.size())
+    else if (!m_strArtist.empty())
     {
       FindArtistInfo();
       m_strArtist.clear();

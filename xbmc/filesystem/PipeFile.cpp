@@ -10,7 +10,8 @@
 
 #include "PipesManager.h"
 #include "URL.h"
-#include "threads/SingleLock.h"
+
+#include <mutex>
 
 using namespace XFILE;
 
@@ -60,7 +61,10 @@ int CPipeFile::Stat(const CURL& url, struct __stat64* buffer)
 
 int CPipeFile::Stat(struct __stat64* buffer)
 {
-  memset(buffer,0,sizeof(struct __stat64));
+  if (!buffer)
+    return -1;
+
+  *buffer = {};
   buffer->st_size = m_length;
   return 0;
 }
@@ -152,7 +156,7 @@ bool CPipeFile::Rename(const CURL& url, const CURL& urlnew)
   return false;
 }
 
-int CPipeFile::IoControl(EIoControl, void* param)
+int CPipeFile::IoControl(IOControl, void* param)
 {
   return -1;
 }
@@ -166,7 +170,7 @@ std::string CPipeFile::GetName() const
 
 void CPipeFile::OnPipeOverFlow()
 {
-  CSingleLock lock(m_lock);
+  std::unique_lock lock(m_lock);
   for (size_t l=0; l<m_listeners.size(); l++)
     m_listeners[l]->OnPipeOverFlow();
 }
@@ -184,7 +188,7 @@ void CPipeFile::OnPipeUnderFlow()
 
 void CPipeFile::AddListener(IPipeListener *l)
 {
-  CSingleLock lock(m_lock);
+  std::unique_lock lock(m_lock);
   for (size_t i=0; i<m_listeners.size(); i++)
   {
     if (m_listeners[i] == l)
@@ -195,7 +199,7 @@ void CPipeFile::AddListener(IPipeListener *l)
 
 void CPipeFile::RemoveListener(IPipeListener *l)
 {
-  CSingleLock lock(m_lock);
+  std::unique_lock lock(m_lock);
   std::vector<XFILE::IPipeListener *>::iterator i = m_listeners.begin();
   while(i != m_listeners.end())
   {

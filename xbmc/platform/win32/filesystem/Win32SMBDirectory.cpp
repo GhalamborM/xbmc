@@ -9,16 +9,21 @@
 #include "Win32SMBDirectory.h"
 
 #include "FileItem.h"
+#include "FileItemList.h"
 #include "PasswordManager.h"
 #include "ServiceBroker.h"
 #include "URL.h"
 #include "utils/CharsetConverter.h"
+#include "utils/StringUtils.h"
 #include "utils/XTimeUtils.h"
 #include "utils/log.h"
 
 #include "platform/win32/CharsetConverter.h"
 #include "platform/win32/WIN32Util.h"
 #include "platform/win32/network/WSDiscoveryWin32.h"
+
+#include <algorithm>
+#include <cstdint>
 
 #include <Windows.h>
 #include <Winnetwk.h>
@@ -36,9 +41,9 @@ using KODI::PLATFORM::WINDOWS::FromW;
 // local helper
 static inline bool worthTryToConnect(const DWORD lastErr)
 {
-  return lastErr != ERROR_FILE_NOT_FOUND      && lastErr != ERROR_BAD_NET_NAME  &&
-         lastErr != ERROR_NO_NET_OR_BAD_PATH  && lastErr != ERROR_NO_NETWORK    &&
-         lastErr != ERROR_BAD_NETPATH;
+  return lastErr != ERROR_FILE_NOT_FOUND && lastErr != ERROR_BAD_NET_NAME &&
+         lastErr != ERROR_NO_NET_OR_BAD_PATH && lastErr != ERROR_NO_NETWORK &&
+         lastErr != ERROR_BAD_NETPATH && lastErr != ERROR_PATH_NOT_FOUND;
 }
 
 /**
@@ -143,6 +148,7 @@ bool CWin32SMBDirectory::GetDirectory(const CURL& url, CFileItemList &items)
   if (pathWithSlash.back() != '/')
     pathWithSlash.push_back('/');
 
+  std::vector<std::shared_ptr<CFileItem>> fileItems;
   do
   {
     std::wstring itemNameW(findData.cFileName);
@@ -156,34 +162,44 @@ bool CWin32SMBDirectory::GetDirectory(const CURL& url, CFileItemList &items)
       continue;
     }
 
-    CFileItemPtr pItem(new CFileItem(itemName));
+    const bool isDir = (findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+    const bool isHidden =
+        (findData.dwFileAttributes & (FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM)) != 0 ||
+        itemName.starts_with('.'); // mark files starting from dot as hidden
 
-    pItem->m_bIsFolder = ((findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0);
-    if (pItem->m_bIsFolder)
-      pItem->SetPath(pathWithSlash + itemName + '/');
-    else
-      pItem->SetPath(pathWithSlash + itemName);
-
-    if ((findData.dwFileAttributes & (FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM)) != 0
-          || itemName.front() == '.') // mark files starting from dot as hidden
-      pItem->SetProperty("file:hidden", true);
+    std::string itemPath(pathWithSlash + itemName);
+    if (isDir)
+      itemPath.push_back('/');
 
     // calculation of size and date costs a little on win32
     // so DIR_FLAG_NO_FILE_INFO flag is ignored
-    KODI::TIME::FileTime fileTime;
-    fileTime.lowDateTime = findData.ftLastWriteTime.dwLowDateTime;
-    fileTime.highDateTime = findData.ftLastWriteTime.dwHighDateTime;
-    KODI::TIME::FileTime localTime;
-    if (KODI::TIME::FileTimeToLocalFileTime(&fileTime, &localTime) == TRUE)
-      pItem->m_dateTime = localTime;
-    else
-      pItem->m_dateTime.SetValid(false);
+    const auto& item = fileItems.emplace_back(std::make_shared<CFileItem>(itemName));
 
-    if (!pItem->m_bIsFolder)
-        pItem->m_dwSize = (__int64(findData.nFileSizeHigh) << 32) + findData.nFileSizeLow;
+    item->SetFolder(isDir);
+    item->SetPath(itemPath);
 
-    items.Add(pItem);
+    using KODI::TIME::FileTime;
+    FileTime localTime{};
+
+    if (FileTimeToLocalFileTime(reinterpret_cast<const FileTime*>(&findData.ftLastWriteTime),
+                                &localTime) == TRUE)
+      item->SetDateTime(localTime);
+
+    if (!isDir)
+      item->SetSize((static_cast<int64_t>(findData.nFileSizeHigh) << 32) + findData.nFileSizeLow);
+
+    // raw values; the DateTime above is local-time converted
+    item->SetProperty(DIR_PROPERTY_STAT_MTIME,
+                      static_cast<int64_t>(CWIN32Util::fileTimeToTimeT(findData.ftLastWriteTime)));
+    item->SetProperty(DIR_PROPERTY_STAT_CTIME,
+                      static_cast<int64_t>(CWIN32Util::fileTimeToTimeT(findData.ftCreationTime)));
+
+    if (isHidden)
+      item->SetProperty("file:hidden", true);
+
   } while (FindNextFileW(hSearch, &findData));
+
+  items.AddItems(std::move(fileItems));
 
   FindClose(hSearch);
 
@@ -291,10 +307,12 @@ bool CWin32SMBDirectory::RealExists(const CURL& url, bool tryToConnect)
       return false;
     }
     const std::string& searchStr = (url.GetShareName().empty()) ? url.GetHostName() : url.GetShareName();
-    const VECFILEITEMS entrVec = entries.GetList();
+    const auto entrVec = entries.GetList();
     for (const auto& it : entrVec)
     {
-      if (it->GetLabel() == searchStr)
+      // a server's label can differ from the host in its path, e.g. "name (IP)"
+      if (url.GetShareName().empty() ? CURL(it->GetPath()).GetHostName() == searchStr
+                                     : it->GetLabel() == searchStr)
         return true;
     }
     return false;
@@ -467,7 +485,7 @@ static bool localGetNetworkResources(struct _NETRESOURCEW* basePathToScanPtr, co
               {
                 CFileItemPtr pItem(new CFileItem(remoteNameUtf8));
                 pItem->SetPath(urlPrefixForItems + remoteNameUtf8 + '/');
-                pItem->m_bIsFolder = true;
+                pItem->SetFolder(true);
                 items.Add(pItem);
               }
               else
@@ -501,7 +519,7 @@ static bool localGetNetworkResources(struct _NETRESOURCEW* basePathToScanPtr, co
                 {
                   CFileItemPtr pItem(new CFileItem(shareNameUtf8));
                   pItem->SetPath(urlPrefixForItems + shareNameUtf8 + '/');
-                  pItem->m_bIsFolder = true;
+                  pItem->SetFolder(true);
                   if (curResource.dwDisplayType == RESOURCEDISPLAYTYPE_SHAREADMIN)
                     pItem->SetProperty("file:hidden", true);
 
@@ -613,7 +631,7 @@ static bool localGetShares(const std::wstring& serverNameToScan, const std::stri
           {
             CFileItemPtr pItem(new CFileItem(shareNameUtf8));
             pItem->SetPath(urlPrefixForItems + shareNameUtf8 + '/');
-            pItem->m_bIsFolder = true;
+            pItem->SetFolder(true);
             if ((curShare.shi1_type & STYPE_SPECIAL) != 0 || shareNameUtf8.back() == '$')
               pItem->SetProperty("file:hidden", true);
 
@@ -643,17 +661,36 @@ static bool localGetServers(const std::string& urlPrefixForItems, CFileItemList&
   // Get servers immediately from WSD daemon process
   if (wsd.IsRunning() && wsd.ThereAreServers())
   {
-    for (const auto& ip : wsd.GetServersIPs())
+    const auto servers = wsd.GetServers();
+    std::vector<std::string> hostNames;
+    for (const auto& server : servers)
     {
-      std::wstring hostname = wsd.ResolveHostName(ip);
-      std::string shareNameUtf8;
-      if (g_charsetConverter.wToUTF8(hostname, shareNameUtf8, true) && !shareNameUtf8.empty())
+      std::string hostName;
+      if (g_charsetConverter.wToUTF8(server.hostName, hostName, true) && !hostName.empty())
+        hostNames.push_back(hostName);
+    }
+
+    for (const auto& server : servers)
+    {
+      std::string hostName;
+      std::string ip;
+      if (!g_charsetConverter.wToUTF8(server.hostName, hostName, true) || hostName.empty() ||
+          !g_charsetConverter.wToUTF8(server.ip, ip, true))
+        continue;
+
+      // different machines announcing the same name can't share a path
+      std::string label = hostName;
+      if (std::ranges::count_if(hostNames, [&hostName](const std::string& name)
+                                { return StringUtils::EqualsNoCase(name, hostName); }) > 1)
       {
-        CFileItemPtr pItem = std::make_shared<CFileItem>(shareNameUtf8);
-        pItem->SetPath(urlPrefixForItems + shareNameUtf8 + '/');
-        pItem->m_bIsFolder = true;
-        items.Add(pItem);
+        label = StringUtils::Format("{} ({})", hostName, ip);
+        hostName = ip;
       }
+
+      CFileItemPtr pItem = std::make_shared<CFileItem>(label);
+      pItem->SetPath(urlPrefixForItems + hostName + '/');
+      pItem->SetFolder(true);
+      items.Add(pItem);
     }
     return true;
   }
@@ -774,6 +811,16 @@ bool CWin32SMBDirectory::ConnectAndAuthenticate(CURL& url, bool allowPromptForCr
       CLog::LogF(LOGINFO, "Network is busy for \"{}\"", serverShareName);
     else if (connRes == ERROR_SESSION_CREDENTIAL_CONFLICT)
     {
+      // Windows already has a session to this server, e.g. from a saved Windows credential.
+      // Use it if it gives access rather than closing its connections.
+      if ((!usernameW.empty() || !passwordW.empty()) &&
+          WNetAddConnection2W(&connInfo, nullptr, nullptr, CONNECT_TEMPORARY) == NO_ERROR)
+      {
+        CLog::LogF(LOGDEBUG, "Connected to \"{}\" with the credentials of the existing session",
+                   serverShareName);
+        return true;
+      }
+
       CLog::LogF(LOGWARNING,
                  "Can't connect to \"{}\" {} because of conflict of credential. Will try to close "
                  "current connections.",

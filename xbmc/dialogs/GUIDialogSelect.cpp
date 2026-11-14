@@ -9,10 +9,15 @@
 #include "GUIDialogSelect.h"
 
 #include "FileItem.h"
+#include "FileItemList.h"
+#include "ServiceBroker.h"
 #include "guilib/GUIMessage.h"
-#include "guilib/LocalizeStrings.h"
-#include "input/Key.h"
+#include "input/actions/ActionIDs.h"
+#include "resources/LocalizeStrings.h"
+#include "resources/ResourcesComponent.h"
 #include "utils/StringUtils.h"
+
+#include <memory>
 
 #define CONTROL_HEADING         1
 #define CONTROL_NUMBER_OF_ITEMS 2
@@ -25,16 +30,14 @@
 CGUIDialogSelect::CGUIDialogSelect() : CGUIDialogSelect(WINDOW_DIALOG_SELECT) {}
 
 CGUIDialogSelect::CGUIDialogSelect(int windowId)
-    : CGUIDialogBoxBase(windowId, "DialogSelect.xml"),
+  : CGUIDialogBoxBase(windowId, "DialogSelect.xml"),
+    m_vecList(std::make_unique<CFileItemList>()),
     m_bButtonEnabled(false),
     m_bButton2Enabled(false),
     m_bButtonPressed(false),
     m_bButton2Pressed(false),
-    m_selectedItem(nullptr),
     m_useDetails(false),
-    m_multiSelection(false),
-    m_selectedItems(),
-    m_vecList(new CFileItemList())
+    m_multiSelection(false)
 {
   m_bConfirmed = false;
   m_loadType = KEEP_IN_MEMORY;
@@ -97,7 +100,12 @@ bool CGUIDialogSelect::OnMessage(CGUIMessage& message)
           {
             CFileItemPtr item(m_vecList->Get(iSelected));
             if (m_multiSelection)
+            {
               item->Select(!item->IsSelected());
+              // the item layouts only pick up the changed selection when processed
+              if (CGUIControl* list = GetControl(m_viewControl.GetCurrentControl()))
+                list->MarkDirtyRegion(DIRTY_STATE_CHILD);
+            }
             else
             {
               for (int i = 0 ; i < m_vecList->Size() ; i++)
@@ -190,36 +198,35 @@ void CGUIDialogSelect::Reset()
 
 int CGUIDialogSelect::Add(const std::string& strLabel)
 {
-  CFileItemPtr pItem(new CFileItem(strLabel));
+  auto pItem = std::make_shared<CFileItem>(strLabel);
   m_vecList->Add(pItem);
   return m_vecList->Size() - 1;
 }
 
 int CGUIDialogSelect::Add(const CFileItem& item)
 {
-  m_vecList->Add(CFileItemPtr(new CFileItem(item)));
+  m_vecList->Add(std::make_shared<CFileItem>(item));
   return m_vecList->Size() - 1;
 }
 
 void CGUIDialogSelect::SetItems(const CFileItemList& pList)
 {
-  // need to make internal copy of list to be sure dialog is owner of it
   m_vecList->Clear();
-  m_vecList->Copy(pList);
+  m_vecList->Append(pList);
 
   m_viewControl.SetItems(*m_vecList);
 }
 
 int CGUIDialogSelect::GetSelectedItem() const
 {
-  return m_selectedItems.size() > 0 ? m_selectedItems[0] : -1;
+  return !m_selectedItems.empty() ? m_selectedItems[0] : -1;
 }
 
 const CFileItemPtr CGUIDialogSelect::GetSelectedFileItem() const
 {
   if (m_selectedItem)
     return m_selectedItem;
-  return CFileItemPtr(new CFileItem);
+  return std::make_shared<CFileItem>();
 }
 
 const std::vector<int>& CGUIDialogSelect::GetSelectedItems() const
@@ -230,7 +237,7 @@ const std::vector<int>& CGUIDialogSelect::GetSelectedItems() const
 void CGUIDialogSelect::EnableButton(bool enable, int label)
 {
   m_bButtonEnabled = enable;
-  m_buttonLabel = g_localizeStrings.Get(label);
+  m_buttonLabel = CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(label);
 }
 
 void CGUIDialogSelect::EnableButton(bool enable, const std::string& label)
@@ -242,7 +249,7 @@ void CGUIDialogSelect::EnableButton(bool enable, const std::string& label)
 void CGUIDialogSelect::EnableButton2(bool enable, int label)
 {
   m_bButton2Enabled = enable;
-  m_button2Label = g_localizeStrings.Get(label);
+  m_button2Label = CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(label);
 }
 
 void CGUIDialogSelect::EnableButton2(bool enable, const std::string& label)
@@ -263,7 +270,7 @@ bool CGUIDialogSelect::IsButton2Pressed()
 
 void CGUIDialogSelect::Sort(bool bSortOrder /*=true*/)
 {
-  m_vecList->Sort(SortByLabel, bSortOrder ? SortOrderAscending : SortOrderDescending);
+  m_vecList->Sort(SortBy::LABEL, bSortOrder ? SortOrder::ASCENDING : SortOrder::DESCENDING);
 }
 
 void CGUIDialogSelect::SetSelected(int iSelected)
@@ -354,8 +361,10 @@ void CGUIDialogSelect::OnInitWindow()
   }
   m_viewControl.SetCurrentView(m_useDetails ? CONTROL_DETAILED_LIST : CONTROL_SIMPLE_LIST);
 
-  SET_CONTROL_LABEL(CONTROL_NUMBER_OF_ITEMS,
-                    StringUtils::Format("{} {}", m_vecList->Size(), g_localizeStrings.Get(127)));
+  SET_CONTROL_LABEL(
+      CONTROL_NUMBER_OF_ITEMS,
+      StringUtils::Format("{} {}", m_vecList->Size(),
+                          CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(127)));
 
   if (m_multiSelection)
     EnableButton(true, 186);
@@ -376,7 +385,8 @@ void CGUIDialogSelect::OnInitWindow()
   else
     SET_CONTROL_HIDDEN(CONTROL_EXTRA_BUTTON2);
 
-  SET_CONTROL_LABEL(CONTROL_CANCEL_BUTTON, g_localizeStrings.Get(222));
+  SET_CONTROL_LABEL(CONTROL_CANCEL_BUTTON,
+                    CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(222));
 
   CGUIDialogBoxBase::OnInitWindow();
 

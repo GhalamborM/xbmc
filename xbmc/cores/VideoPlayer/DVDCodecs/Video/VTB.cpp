@@ -6,22 +6,38 @@
  *  See LICENSES/README.md for more information.
  */
 
-#include "cores/VideoPlayer/Process/ProcessInfo.h"
-#include "DVDVideoCodec.h"
+#include "VTB.h"
+
 #include "DVDCodecs/DVDCodecUtils.h"
 #include "DVDCodecs/DVDFactoryCodec.h"
-#include "utils/log.h"
-#include "VTB.h"
+#include "DVDVideoCodec.h"
+#include "ServiceBroker.h"
+#include "cores/VideoPlayer/Process/ProcessInfo.h"
 #include "settings/Settings.h"
 #include "settings/SettingsComponent.h"
-#include "threads/SingleLock.h"
-#include "ServiceBroker.h"
+#include "video/geometry/FrameReduction.h"
+#if defined(TARGET_DARWIN_TVOS)
+#include "windowing/tvos/WinSystemTVOS.h"
+#endif
+
+#include <algorithm>
+#include <mutex>
 
 extern "C" {
 #include <libavcodec/videotoolbox.h>
 }
 
 using namespace VTB;
+
+#if defined(TARGET_DARWIN_TVOS)
+namespace
+{
+bool CanDisplayHLG(const CHDRCapabilities& caps)
+{
+  return caps.SupportsHLG() || caps.SupportsHDR10();
+}
+} // namespace
+#endif
 
 //------------------------------------------------------------------------------
 // Video Buffers
@@ -55,6 +71,53 @@ CVPixelBufferRef CVideoBufferVTB::GetPB()
   return m_pbRef;
 }
 
+ReductionResult CVideoBufferVTB::ReduceForAnalysis(KODI::VIDEO::GEOMETRY::ReducedFrame& reduction,
+                                                   unsigned int sourceWidth,
+                                                   unsigned int sourceHeight,
+                                                   unsigned int targetWidth)
+{
+  using namespace KODI::VIDEO::GEOMETRY;
+
+  if (!m_pbRef)
+    return ReductionResult::Unsupported;
+
+  ReductionSource source;
+  switch (CVPixelBufferGetPixelFormatType(m_pbRef))
+  {
+    case kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange:
+    case kCVPixelFormatType_420YpCbCr8BiPlanarFullRange:
+      source.bitDepth = 8;
+      break;
+    case kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange:
+    case kCVPixelFormatType_420YpCbCr10BiPlanarFullRange:
+      source.bitDepth = 10;
+      source.highAligned = true;
+      break;
+    default:
+      return ReductionResult::Unsupported;
+  }
+
+  if (CVPixelBufferGetPlaneCount(m_pbRef) < 2)
+    return ReductionResult::Unsupported;
+
+  if (CVPixelBufferLockBaseAddress(m_pbRef, kCVPixelBufferLock_ReadOnly) != kCVReturnSuccess)
+    return ReductionResult::Unsupported;
+
+  source.width =
+      std::min(sourceWidth, static_cast<unsigned int>(CVPixelBufferGetWidthOfPlane(m_pbRef, 0)));
+  source.height =
+      std::min(sourceHeight, static_cast<unsigned int>(CVPixelBufferGetHeightOfPlane(m_pbRef, 0)));
+  source.y = static_cast<const uint8_t*>(CVPixelBufferGetBaseAddressOfPlane(m_pbRef, 0));
+  source.yStrideBytes = static_cast<int>(CVPixelBufferGetBytesPerRowOfPlane(m_pbRef, 0));
+  source.u = static_cast<const uint8_t*>(CVPixelBufferGetBaseAddressOfPlane(m_pbRef, 1));
+  source.uStrideBytes = static_cast<int>(CVPixelBufferGetBytesPerRowOfPlane(m_pbRef, 1));
+
+  const bool reduced = ReduceFrame(source, targetWidth, reduction);
+
+  CVPixelBufferUnlockBaseAddress(m_pbRef, kCVPixelBufferLock_ReadOnly);
+  return reduced ? ReductionResult::Produced : ReductionResult::Unsupported;
+}
+
 //------------------------------------------------------------------------------
 
 class VTB::CVideoBufferPoolVTB : public IVideoBufferPool
@@ -81,7 +144,7 @@ CVideoBufferPoolVTB::~CVideoBufferPoolVTB()
 
 CVideoBuffer* CVideoBufferPoolVTB::Get()
 {
-  CSingleLock lock(m_critSection);
+  std::unique_lock lock(m_critSection);
 
   CVideoBufferVTB *buf = nullptr;
   if (!m_free.empty())
@@ -105,7 +168,7 @@ CVideoBuffer* CVideoBufferPoolVTB::Get()
 
 void CVideoBufferPoolVTB::Return(int id)
 {
-  CSingleLock lock(m_critSection);
+  std::unique_lock lock(m_critSection);
 
   m_all[id]->Unref();
   auto it = m_used.begin();
@@ -128,8 +191,36 @@ void CVideoBufferPoolVTB::Return(int id)
 
 IHardwareDecoder* CDecoder::Create(CDVDStreamInfo &hint, CProcessInfo &processInfo, AVPixelFormat fmt)
 {
+#if defined(TARGET_DARWIN_EMBEDDED)
+  // force disable HW acceleration for live streams
+  // to avoid absent image issue on interlaced videos
+  if (processInfo.IsRealtimeStream() && hint.interlaced)
+    return nullptr;
+#endif
+
   if (fmt == AV_PIX_FMT_VIDEOTOOLBOX && CServiceBroker::GetSettingsComponent()->GetSettings()->GetBool(CSettings::SETTING_VIDEOPLAYER_USEVTB))
-    return new VTB::CDecoder(processInfo);
+  {
+    bool hdrOutput = false;
+#if defined(TARGET_DARWIN_TVOS)
+    auto* winSystem = dynamic_cast<CWinSystemTVOS*>(CServiceBroker::GetWinSystem());
+    if (winSystem)
+    {
+      const bool canUseHDRVideoLayer = winSystem->CanUseHDRVideoLayer();
+      const CHDRCapabilities caps = winSystem->GetDisplayHDRCapabilities();
+      // InputStream addons can report the HDR transfer without filling in
+      // CDVDStreamInfo::bitdepth. The decoder negotiates the actual P010 format.
+      hdrOutput =
+          canUseHDRVideoLayer &&
+          (((hint.hdrType == StreamHdrType::HDR_TYPE_HDR10 ||
+             hint.hdrType == StreamHdrType::HDR_TYPE_HDR10PLUS ||
+             hint.HasHDR10DolbyVisionBaseLayer()) &&
+            caps.SupportsHDR10()) ||
+           ((hint.hdrType == StreamHdrType::HDR_TYPE_HLG || hint.HasHLGDolbyVisionBaseLayer()) &&
+            CanDisplayHLG(caps)));
+    }
+#endif
+    return new VTB::CDecoder(processInfo, hdrOutput, hint.dovi.dv_profile == 0);
+  }
 
   return nullptr;
 }
@@ -140,10 +231,13 @@ bool CDecoder::Register()
   return true;
 }
 
-CDecoder::CDecoder(CProcessInfo& processInfo) : m_processInfo(processInfo)
+CDecoder::CDecoder(CProcessInfo& processInfo, bool hdrOutput, bool allowColorTransferFallback)
+  : m_processInfo(processInfo),
+    m_hdrOutput(hdrOutput),
+    m_allowColorTransferFallback(allowColorTransferFallback),
+    m_videoBufferPool(std::make_shared<CVideoBufferPoolVTB>())
 {
   m_avctx = nullptr;
-  m_videoBufferPool = std::make_shared<CVideoBufferPoolVTB>();
 }
 
 CDecoder::~CDecoder()
@@ -163,11 +257,26 @@ bool CDecoder::Open(AVCodecContext *avctx, AVCodecContext* mainctx, enum AVPixel
   if (!CServiceBroker::GetSettingsComponent()->GetSettings()->GetBool(CSettings::SETTING_VIDEOPLAYER_USEVTB))
     return false;
 
+#if defined(TARGET_DARWIN_TVOS)
+  if (!m_hdrOutput && m_allowColorTransferFallback && avctx->color_primaries == AVCOL_PRI_BT2020)
+  {
+    auto* winSystem = dynamic_cast<CWinSystemTVOS*>(CServiceBroker::GetWinSystem());
+    if (winSystem && winSystem->CanUseHDRVideoLayer())
+    {
+      const CHDRCapabilities caps = winSystem->GetDisplayHDRCapabilities();
+      m_hdrOutput = (avctx->color_trc == AVCOL_TRC_SMPTE2084 && caps.SupportsHDR10()) ||
+                    (avctx->color_trc == AVCOL_TRC_ARIB_STD_B67 && CanDisplayHLG(caps));
+    }
+  }
+#endif
+
   AVBufferRef *deviceRef =  av_hwdevice_ctx_alloc(AV_HWDEVICE_TYPE_VIDEOTOOLBOX);
   AVBufferRef *framesRef = av_hwframe_ctx_alloc(deviceRef);
   AVHWFramesContext *framesCtx = (AVHWFramesContext*)framesRef->data;
   framesCtx->format = AV_PIX_FMT_VIDEOTOOLBOX;
-  framesCtx->sw_format = AV_PIX_FMT_NV12;
+  // The tvOS HDR video layer consumes P010 directly. The GLES renderer cannot
+  // preserve this precision, so all other playback keeps the existing NV12 path.
+  framesCtx->sw_format = m_hdrOutput ? AV_PIX_FMT_P010LE : AV_PIX_FMT_NV12;
   avctx->hw_frames_ctx = framesRef;
   m_avctx = avctx;
 
@@ -188,7 +297,7 @@ CDVDVideoCodec::VCReturn CDecoder::Decode(AVCodecContext* avctx, AVFrame* frame)
 
   if(frame)
   {
-    if (frame->interlaced_frame)
+    if (frame->flags & AV_FRAME_FLAG_INTERLACED)
       return CDVDVideoCodec::VC_FATAL;
 
     if (m_renderBuffer)

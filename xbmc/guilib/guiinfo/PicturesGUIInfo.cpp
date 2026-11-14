@@ -15,18 +15,21 @@
 #include "guilib/GUIWindowManager.h"
 #include "guilib/guiinfo/GUIInfo.h"
 #include "guilib/guiinfo/GUIInfoLabels.h"
-#include "pictures/GUIWindowSlideShow.h"
 #include "pictures/PictureInfoTag.h"
+#include "pictures/SlideShowDelegator.h"
+#include "utils/Map.h"
 #include "utils/StringUtils.h"
 #include "utils/URIUtils.h"
 #include "utils/log.h"
+#include "video/VideoFileItemClassify.h"
 
-#include <map>
+#include <memory>
 
 using namespace KODI::GUILIB::GUIINFO;
+using namespace KODI;
 
-static const std::map<int, int> listitem2slideshow_map =
-{
+constexpr auto listitem2slideshow_map = make_map<int, int>({
+    // clang-format off
   { LISTITEM_PICTURE_RESOLUTION       , SLIDESHOW_RESOLUTION },
   { LISTITEM_PICTURE_LONGDATE         , SLIDESHOW_EXIF_LONG_DATE },
   { LISTITEM_PICTURE_LONGDATETIME     , SLIDESHOW_EXIF_LONG_DATE_TIME },
@@ -80,13 +83,14 @@ static const std::map<int, int> listitem2slideshow_map =
   { LISTITEM_PICTURE_GPS_LAT          , SLIDESHOW_EXIF_GPS_LATITUDE },
   { LISTITEM_PICTURE_GPS_LON          , SLIDESHOW_EXIF_GPS_LONGITUDE },
   { LISTITEM_PICTURE_GPS_ALT          , SLIDESHOW_EXIF_GPS_ALTITUDE }
-};
+    // clang-format on
+});
 
 CPicturesGUIInfo::CPicturesGUIInfo() = default;
 
 CPicturesGUIInfo::~CPicturesGUIInfo() = default;
 
-void CPicturesGUIInfo::SetCurrentSlide(CFileItem *item)
+void CPicturesGUIInfo::SetCurrentSlide(CFileItem* item)
 {
   if (m_currentSlide && item && m_currentSlide->GetPath() == item->GetPath())
     return;
@@ -99,7 +103,7 @@ void CPicturesGUIInfo::SetCurrentSlide(CFileItem *item)
       if (!tag->Loaded()) // If picture metadata has not been loaded yet, load it now
         tag->Load(item->GetPath());
     }
-    m_currentSlide.reset(new CFileItem(*item));
+    m_currentSlide = std::make_unique<CFileItem>(*item);
   }
   else if (m_currentSlide)
   {
@@ -112,19 +116,24 @@ const CFileItem* CPicturesGUIInfo::GetCurrentSlide() const
   return m_currentSlide.get();
 }
 
-bool CPicturesGUIInfo::InitCurrentItem(CFileItem *item)
+bool CPicturesGUIInfo::InitCurrentItem(CFileItem* item)
 {
   return false;
 }
 
-bool CPicturesGUIInfo::GetLabel(std::string& value, const CFileItem *item, int contextWindow, const CGUIInfo &info, std::string *fallback) const
+bool CPicturesGUIInfo::GetLabel(std::string& value,
+                                const CFileItem* item,
+                                int contextWindow,
+                                const CGUIInfo& info,
+                                std::string* fallback) const
 {
-  if (item->IsPicture() && info.m_info >= LISTITEM_PICTURE_START && info.m_info <= LISTITEM_PICTURE_END)
+  if (item->IsPicture() && info.GetInfo() >= LISTITEM_PICTURE_START &&
+      info.GetInfo() <= LISTITEM_PICTURE_END)
   {
     ///////////////////////////////////////////////////////////////////////////////////////////////
     // LISTITEM_*
     ///////////////////////////////////////////////////////////////////////////////////////////////
-    const auto& it = listitem2slideshow_map.find(info.m_info);
+    const auto& it = listitem2slideshow_map.find(info.GetInfo());
     if (it != listitem2slideshow_map.end())
     {
       if (item->HasPictureInfoTag())
@@ -137,16 +146,17 @@ bool CPicturesGUIInfo::GetLabel(std::string& value, const CFileItem *item, int c
     {
       CLog::Log(LOGERROR,
                 "CPicturesGUIInfo::GetLabel - cannot map LISTITEM ({}) to SLIDESHOW label!",
-                info.m_info);
+                info.GetInfo());
       return false;
     }
   }
-  else if (m_currentSlide && info.m_info >= SLIDESHOW_LABELS_START && info.m_info <= SLIDESHOW_LABELS_END)
+  else if (m_currentSlide && info.GetInfo() >= SLIDESHOW_LABELS_START &&
+           info.GetInfo() <= SLIDESHOW_LABELS_END)
   {
     ///////////////////////////////////////////////////////////////////////////////////////////////
     // SLIDESHOW_*
     ///////////////////////////////////////////////////////////////////////////////////////////////
-    switch (info.m_info)
+    switch (info.GetInfo())
     {
       case SLIDESHOW_FILE_NAME:
       {
@@ -161,35 +171,36 @@ bool CPicturesGUIInfo::GetLabel(std::string& value, const CFileItem *item, int c
       }
       case SLIDESHOW_FILE_SIZE:
       {
-        if (!m_currentSlide->m_bIsFolder || m_currentSlide->m_dwSize)
+        if (!m_currentSlide->IsFolder() || m_currentSlide->GetSize())
         {
-          value = StringUtils::SizeToString(m_currentSlide->m_dwSize);
+          value = StringUtils::SizeToString(m_currentSlide->GetSize());
           return true;
         }
         break;
       }
       case SLIDESHOW_FILE_DATE:
       {
-        if (m_currentSlide->m_dateTime.IsValid())
+        const CDateTime& dateTime{m_currentSlide->GetDateTime()};
+        if (dateTime.IsValid())
         {
-          value = m_currentSlide->m_dateTime.GetAsLocalizedDate();
+          value = dateTime.GetAsLocalizedDate();
           return true;
         }
         break;
       }
       case SLIDESHOW_INDEX:
       {
-        CGUIWindowSlideShow *slideshow = CServiceBroker::GetGUI()->GetWindowManager().GetWindow<CGUIWindowSlideShow>(WINDOW_SLIDESHOW);
-        if (slideshow && slideshow->NumSlides())
+        const CSlideShowDelegator& slideshow{CServiceBroker::GetSlideShowDelegator()};
+        if (slideshow.NumSlides() > 0)
         {
-          value = StringUtils::Format("{}/{}", slideshow->CurrentSlide(), slideshow->NumSlides());
+          value = StringUtils::Format("{}/{}", slideshow.CurrentSlide(), slideshow.NumSlides());
           return true;
         }
         break;
       }
       default:
       {
-        value = m_currentSlide->GetPictureInfoTag()->GetInfo(info.m_info);
+        value = m_currentSlide->GetPictureInfoTag()->GetInfo(info.GetInfo());
         return true;
       }
     }
@@ -200,7 +211,7 @@ bool CPicturesGUIInfo::GetLabel(std::string& value, const CFileItem *item, int c
     /////////////////////////////////////////////////////////////////////////////////////////////////
     // LISTITEM_*
     /////////////////////////////////////////////////////////////////////////////////////////////////
-    switch (info.m_info)
+    switch (info.GetInfo())
     {
       case LISTITEM_PICTURE_PATH:
       {
@@ -211,48 +222,58 @@ bool CPicturesGUIInfo::GetLabel(std::string& value, const CFileItem *item, int c
         }
         break;
       }
+      default:
+        break;
     }
   }
 
   return false;
 }
 
-bool CPicturesGUIInfo::GetInt(int& value, const CGUIListItem *gitem, int contextWindow, const CGUIInfo &info) const
+bool CPicturesGUIInfo::GetInt(int& value,
+                              const CGUIListItem* gitem,
+                              int contextWindow,
+                              const CGUIInfo& info) const
 {
   return false;
 }
 
-bool CPicturesGUIInfo::GetBool(bool& value, const CGUIListItem *gitem, int contextWindow, const CGUIInfo &info) const
+bool CPicturesGUIInfo::GetBool(bool& value,
+                               const CGUIListItem* gitem,
+                               int contextWindow,
+                               const CGUIInfo& info) const
 {
-  switch (info.m_info)
+  switch (info.GetInfo())
   {
     ///////////////////////////////////////////////////////////////////////////////////////////////
     // SLIDESHOW_*
     ///////////////////////////////////////////////////////////////////////////////////////////////
     case SLIDESHOW_ISPAUSED:
     {
-      CGUIWindowSlideShow *slideShow = CServiceBroker::GetGUI()->GetWindowManager().GetWindow<CGUIWindowSlideShow>(WINDOW_SLIDESHOW);
-      value = (slideShow && slideShow->IsPaused());
+      const CSlideShowDelegator& slideShow{CServiceBroker::GetSlideShowDelegator()};
+      value = slideShow.IsPaused();
       return true;
     }
     case SLIDESHOW_ISRANDOM:
     {
-      CGUIWindowSlideShow *slideShow = CServiceBroker::GetGUI()->GetWindowManager().GetWindow<CGUIWindowSlideShow>(WINDOW_SLIDESHOW);
-      value = (slideShow && slideShow->IsShuffled());
+      const CSlideShowDelegator& slideShow{CServiceBroker::GetSlideShowDelegator()};
+      value = slideShow.IsShuffled();
       return true;
     }
     case SLIDESHOW_ISACTIVE:
     {
-      CGUIWindowSlideShow *slideShow = CServiceBroker::GetGUI()->GetWindowManager().GetWindow<CGUIWindowSlideShow>(WINDOW_SLIDESHOW);
-      value = (slideShow && slideShow->InSlideShow());
+      const CSlideShowDelegator& slideShow{CServiceBroker::GetSlideShowDelegator()};
+      value = slideShow.InSlideShow();
       return true;
     }
     case SLIDESHOW_ISVIDEO:
     {
-      CGUIWindowSlideShow *slideShow = CServiceBroker::GetGUI()->GetWindowManager().GetWindow<CGUIWindowSlideShow>(WINDOW_SLIDESHOW);
-      value = (slideShow && slideShow->GetCurrentSlide() && slideShow->GetCurrentSlide()->IsVideo());
+      CSlideShowDelegator& slideShow{CServiceBroker::GetSlideShowDelegator()};
+      value = slideShow.GetCurrentSlide() && VIDEO::IsVideo(*slideShow.GetCurrentSlide());
       return true;
     }
+    default:
+      break;
   }
 
   return false;

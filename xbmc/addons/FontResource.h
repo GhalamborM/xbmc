@@ -17,10 +17,7 @@ namespace ADDON
 class CFontResource : public CResource
 {
 public:
-  explicit CFontResource(const AddonInfoPtr& addonInfo) : CResource(addonInfo, ADDON_RESOURCE_FONT) {}
-
-  //! \brief Check whether file is allowed or not (no filters here).
-  bool IsAllowed(const std::string& file) const override { return true; }
+  explicit CFontResource(const AddonInfoPtr& addonInfo);
 
   //! \brief Get the font path if given font file is served by the add-on.
   //! \param[in] file File name of font.
@@ -29,7 +26,6 @@ public:
   bool GetFont(const std::string& file, std::string& path) const;
 
   //! \brief Callback executed after installation
-  void OnPostInstall(bool update, bool modal) override;
 };
 
 }

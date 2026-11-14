@@ -16,10 +16,13 @@ namespace ADDON
 class CUISoundsResource : public CResource
 {
 public:
-  explicit CUISoundsResource(const AddonInfoPtr& addonInfo) : CResource(addonInfo, ADDON_RESOURCE_UISOUNDS) {}
-  bool IsAllowed(const std::string &file) const override;
+  explicit CUISoundsResource(const AddonInfoPtr& addonInfo);
+
   bool IsInUse() const override;
   void OnPostInstall(bool update, bool modal) override;
+
+protected:
+  Published PublishedFiles() const override;
 };
 
 }

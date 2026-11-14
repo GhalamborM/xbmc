@@ -8,15 +8,16 @@
 
 #include "InfoLoader.h"
 
-#include "JobManager.h"
+#include "ServiceBroker.h"
 #include "TimeUtils.h"
-#include "guilib/LocalizeStrings.h"
+#include "jobs/JobManager.h"
+#include "resources/LocalizeStrings.h"
+#include "resources/ResourcesComponent.h"
 
 CInfoLoader::CInfoLoader(unsigned int timeToRefresh)
 {
   m_refreshTime = 0;
   m_timeToRefresh = timeToRefresh;
-  m_busy = false;
 }
 
 CInfoLoader::~CInfoLoader() = default;
@@ -27,14 +28,22 @@ void CInfoLoader::OnJobComplete(unsigned int jobID, bool success, CJob *job)
   m_busy = false;
 }
 
+bool CInfoLoader::RefreshIfNeeded()
+{
+  if (m_refreshTime < CTimeUtils::GetFrameTime() && !m_busy)
+  {
+    // queue up data refresh job
+    m_busy = true;
+    CServiceBroker::GetJobManager()->AddJob(GetJob(), this);
+    return true;
+  }
+  return false;
+}
+
 std::string CInfoLoader::GetInfo(int info)
 {
-  // Refresh if need be
-  if (m_refreshTime < CTimeUtils::GetFrameTime() && !m_busy)
-  { // queue up the job
-    m_busy = true;
-    CJobManager::GetInstance().AddJob(GetJob(), this);
-  }
+  RefreshIfNeeded();
+
   if (m_busy && CTimeUtils::GetFrameTime() - m_refreshTime > 1000)
   {
     return BusyInfo(info);
@@ -44,7 +53,7 @@ std::string CInfoLoader::GetInfo(int info)
 
 std::string CInfoLoader::BusyInfo(int info) const
 {
-  return g_localizeStrings.Get(503);
+  return CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(503);
 }
 
 std::string CInfoLoader::TranslateInfo(int info) const

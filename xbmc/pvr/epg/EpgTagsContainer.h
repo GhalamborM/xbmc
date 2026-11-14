@@ -110,11 +110,16 @@ public:
   std::shared_ptr<CPVREpgInfoTag> GetTagBetween(const CDateTime& start, const CDateTime& end) const;
 
   /*!
+   * @brief Update the currently active event.
+   * @return True if the active event was updated, false otherwise.
+   */
+  bool UpdateActiveTag();
+
+  /*!
    * @brief Get the event that is occurring now
-   * @param bUpdateIfNeeded Whether the tag should be obtained if no one was cached before.
    * @return The tag or nullptr if no tag was found.
    */
-  std::shared_ptr<CPVREpgInfoTag> GetActiveTag(bool bUpdateIfNeeded) const;
+  std::shared_ptr<CPVREpgInfoTag> GetActiveTag() const;
 
   /*!
    * @brief Get the event that will occur next
@@ -148,16 +153,10 @@ public:
   std::vector<std::shared_ptr<CPVREpgInfoTag>> GetAllTags() const;
 
   /*!
-   * @brief Get the start time of the first tag in this EPG.
-   * @return The time.
+   * @brief Get the start and end time of the last not yet committed entry in this EPG.
+   * @return The times; first: start time, second: end time.
    */
-  CDateTime GetFirstStartTime() const;
-
-  /*!
-   * @brief Get the end time of the last tag in this EPG.
-   * @return The time.
-   */
-  CDateTime GetLastEndTime() const;
+  std::pair<CDateTime, CDateTime> GetFirstAndLastUncommittedEPGDate() const;
 
   /*!
    * @brief Check whether this container has unsaved data.
@@ -186,7 +185,7 @@ private:
 
   /*!
    * @brief Complete the instance data for the given tag.
-   * @param tags The tag to complete.
+   * @param tag The tag to complete.
    * @return The completed tag.
    */
   std::shared_ptr<CPVREpgInfoTag> CreateEntry(const std::shared_ptr<CPVREpgInfoTag>& tag) const;
@@ -198,6 +197,16 @@ private:
    * @return The tag.
    */
   std::shared_ptr<CPVREpgInfoTag> CreateGapTag(const CDateTime& start, const CDateTime& end) const;
+
+  /*!
+   * @brief Merge m_changedTags tags into given tags, resolving conflicts.
+   * @param minEventEnd The minimum end time of the events to return
+   * @param maxEventStart The maximum start time of the events to return
+   * @param tags The merged tags.
+   */
+  void MergeTags(const CDateTime& minEventEnd,
+                 const CDateTime& maxEventStart,
+                 std::vector<std::shared_ptr<CPVREpgInfoTag>>& tags) const;
 
   /*!
    * @brief Fix overlapping events.

@@ -39,10 +39,15 @@ public:
   */
   void Configure();
 
+  /*!
+  * \brief Render the track at a PTS
+  * \param subStyle Applied when it is a different object from the last one applied, whether
+  * or not anything is on screen; a new style is a new object
+  * \return The images to draw, or nullptr when nothing is on screen
+  */
   ASS_Image* RenderImage(double pts,
-                         KODI::SUBTITLES::renderOpts opts,
-                         bool updateStyle,
-                         const std::shared_ptr<struct KODI::SUBTITLES::style>& subStyle,
+                         KODI::SUBTITLES::STYLE::renderOpts opts,
+                         const std::shared_ptr<struct KODI::SUBTITLES::STYLE::style>& subStyle,
                          int* changes = NULL);
 
   ASS_Event* GetEvents();
@@ -76,6 +81,12 @@ public:
   * \brief Flush buffered events
   */
   void FlushEvents();
+
+  /*!
+  * \brief Get PlayResY value
+  * \return The PlayResY value of current track
+  */
+  int GetPlayResY();
 
 protected:
   /*!
@@ -117,7 +128,7 @@ protected:
   int AddEvent(const char* text,
                double startTime,
                double stopTime,
-               KODI::SUBTITLES::subtitleOpts* opts);
+               KODI::SUBTITLES::STYLE::subtitleOpts* opts);
 
   /*!
   * \brief Append text to the specified event
@@ -139,14 +150,14 @@ protected:
   */
   void ChangeEventStopTime(int eventId, double stopTime);
 
-
   friend class CSubtitlesAdapter;
 
 
 private:
-  void ConfigureAssOverride(KODI::SUBTITLES::style& subStyle, ASS_Style* style);
-  void ConfigureFont(bool overrideFont, std::string fontName);
-  void ApplyStyle(KODI::SUBTITLES::style subStyle, KODI::SUBTITLES::renderOpts opts);
+  void ConfigureAssOverride(const std::shared_ptr<struct KODI::SUBTITLES::STYLE::style>& subStyle,
+                            ASS_Style* style);
+  void ApplyStyle(const std::shared_ptr<struct KODI::SUBTITLES::STYLE::style>& subStyle,
+                  const KODI::SUBTITLES::STYLE::renderOpts& opts);
 
   ASS_Library* m_library = nullptr;
   ASS_Track* m_track = nullptr;
@@ -154,10 +165,12 @@ private:
   mutable CCriticalSection m_section;
   ASSSubType m_subtitleType{NATIVE};
 
+  std::shared_ptr<const struct KODI::SUBTITLES::STYLE::style> m_appliedStyle;
+
   // current default style ID of the ASS track
   int m_currentDefaultStyleId{ASS_NO_ID};
 
   // default allocated style ID for the kodi user configured subtitle style
   int m_defaultKodiStyleId{ASS_NO_ID};
-  bool m_drawWithinBlackBars{false};
+  std::string m_defaultFontFamilyName;
 };

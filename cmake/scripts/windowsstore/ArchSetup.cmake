@@ -1,11 +1,17 @@
-# Minimum SDK version we support
-set(VS_MINIMUM_SDK_VERSION 10.0.17763.0)
+# Minimum SDK version required to build
+set(VS_MINIMUM_BUILD_SDK_VERSION 10.0.22621.0)
+# Minimum OS version to run the app
+set(VS_MINIMUM_SDK_VERSION 10.0.18362.0)
 
-if(CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION VERSION_LESS VS_MINIMUM_SDK_VERSION)
+if(CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION VERSION_LESS VS_MINIMUM_BUILD_SDK_VERSION)
   message(FATAL_ERROR "Detected Windows SDK version is ${CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION}.\n"
-    "Windows SDK ${VS_MINIMUM_SDK_VERSION} or higher is required.\n"
+    "Windows SDK ${VS_MINIMUM_BUILD_SDK_VERSION} or higher is required.\n"
     "INFO: Windows SDKs can be installed from the Visual Studio installer.")
 endif()
+
+# -------- Host Settings ---------
+
+set(HOSTTOOLSET ${CMAKE_VS_PLATFORM_TOOLSET_HOST_ARCHITECTURE})
 
 # -------- Architecture settings ---------
 
@@ -45,17 +51,27 @@ set(PACKAGE_GUID "281d668b-5739-4abd-b3c2-ed1cda572ed2")
 set(APP_MANIFEST_NAME package.appxmanifest)
 set(DEPS_FOLDER_RELATIVE project/BuildDependencies)
 
-set(DEPENDENCIES_DIR ${CMAKE_SOURCE_DIR}/${DEPS_FOLDER_RELATIVE}/win10-${ARCH})
+# ToDo: currently host build tools are hardcoded to win32
+# If we ever allow package.native other than 0_package.native-win32.list we will want to
+# adapt this based on host
+set(NATIVEPREFIX ${CMAKE_SOURCE_DIR}/${DEPS_FOLDER_RELATIVE}/tools)
+set(DEPENDS_PATH ${CMAKE_SOURCE_DIR}/${DEPS_FOLDER_RELATIVE}/win10-${ARCH})
 set(MINGW_LIBS_DIR ${CMAKE_SOURCE_DIR}/${DEPS_FOLDER_RELATIVE}/mingwlibs/win10-${ARCH})
+
+set(Msys_ROOT "${CMAKE_SOURCE_DIR}/${DEPS_FOLDER_RELATIVE}/msys64")
 
 # mingw libs
 list(APPEND CMAKE_PREFIX_PATH ${MINGW_LIBS_DIR})
 list(APPEND CMAKE_LIBRARY_PATH ${MINGW_LIBS_DIR}/bin)
-# dependencies
-list(PREPEND CMAKE_PREFIX_PATH ${DEPENDENCIES_DIR})
 
+if(NOT TARBALL_DIR)
+  set(TARBALL_DIR "${CMAKE_SOURCE_DIR}/project/BuildDependencies/downloads")
+endif()
 
 # -------- Compiler options ---------
+
+# Allow to use UTF-8 strings in the source code, disable MSVC charset conversion
+add_options(CXX ALL_BUILDS "/utf-8")
 
 add_options(CXX ALL_BUILDS "/wd\"4996\"")
 add_options(CXX ALL_BUILDS "/wd\"4146\"")
@@ -67,7 +83,7 @@ if(NOT SDK_TARGET_ARCH STREQUAL arm)
   list(APPEND ARCH_DEFINES -D__SSE__ -D__SSE2__)
 endif()
 set(SYSTEM_DEFINES -DWIN32_LEAN_AND_MEAN -DNOMINMAX -DHAS_DX -D__STDC_CONSTANT_MACROS
-                   -DTAGLIB_STATIC -DNPT_CONFIG_ENABLE_LOGGING
+                   -DNPT_CONFIG_ENABLE_LOGGING
                    -DPLT_HTTP_DEFAULT_USER_AGENT="UPnP/1.0 DLNADOC/1.50 Kodi"
                    -DPLT_HTTP_DEFAULT_SERVER="UPnP/1.0 DLNADOC/1.50 Kodi"
                    -DUNICODE -D_UNICODE
@@ -78,7 +94,12 @@ set(SYSTEM_DEFINES -DWIN32_LEAN_AND_MEAN -DNOMINMAX -DHAS_DX -D__STDC_CONSTANT_M
 list(APPEND SYSTEM_DEFINES -DHAS_WIN10_NETWORK)
 
 # The /MP option enables /FS by default.
-set(CMAKE_CXX_FLAGS "/MP ${CMAKE_CXX_FLAGS} /EHsc /await /permissive-")
+if(DEFINED ENV{MAXTHREADS})
+  set(MP_FLAG "/MP$ENV{MAXTHREADS}")
+else()
+  set(MP_FLAG "/MP")
+endif()
+set(CMAKE_CXX_FLAGS "${MP_FLAG} ${CMAKE_CXX_FLAGS} /EHsc /permissive-")
 # Google Test needs to use shared version of runtime libraries
 set(gtest_force_shared_crt ON CACHE STRING "" FORCE)
 
@@ -88,9 +109,9 @@ set(gtest_force_shared_crt ON CACHE STRING "" FORCE)
 # For #pragma comment(lib X)
 # TODO: It would certainly be better to handle these libraries via CMake modules.
 link_directories(${MINGW_LIBS_DIR}/lib
-                 ${DEPENDENCIES_DIR}/lib)
+                 ${DEPENDS_PATH}/lib)
 
-list(APPEND DEPLIBS bcrypt.lib d3d11.lib WS2_32.lib dxguid.lib dloadhelper.lib WindowsApp.lib)
+list(APPEND DEPLIBS bcrypt d3d11.lib mfuuid.lib ws2_32 dxguid.lib dloadhelper.lib WindowsApp.lib)
 
 set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /WINMD:NO")
 set(CMAKE_EXE_LINKER_FLAGS_DEBUG "${CMAKE_EXE_LINKER_FLAGS_DEBUG} /NODEFAULTLIB:msvcrt /DEBUG:FASTLINK /OPT:NOREF /OPT:NOICF")

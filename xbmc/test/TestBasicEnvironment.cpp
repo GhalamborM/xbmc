@@ -7,28 +7,36 @@
  */
 
 #include "TestBasicEnvironment.h"
-#include "TestUtils.h"
+
+#include "FileItem.h"
+#include "FileItemList.h"
 #include "ServiceBroker.h"
-#include "filesystem/Directory.h"
+#include "ServiceManager.h"
+#include "TestUtils.h"
+#include "application/AppEnvironment.h"
+#include "application/AppParams.h"
+#include "application/Application.h"
 #include "filesystem/File.h"
 #include "filesystem/SpecialProtocol.h"
-#include "profiles/ProfileManager.h"
-#include "settings/AdvancedSettings.h"
-#include "settings/Settings.h"
-#include "settings/SettingsComponent.h"
-#include "Application.h"
-#include "AppParamParser.h"
-#include "windowing/WinSystem.h"
+#include "interfaces/AnnouncementManager.h"
+#include "messaging/ApplicationMessenger.h"
 #include "platform/Filesystem.h"
+#include "profiles/ProfileManager.h"
+#include "settings/SettingsComponent.h"
+#include "windowing/WinSystem.h"
 
 #ifdef TARGET_DARWIN
 #include "Util.h"
 #endif
 
+#include <climits>
 #include <cstdio>
 #include <cstdlib>
-#include <climits>
+#include <filesystem>
+#include <string>
 #include <system_error>
+
+#include <gtest/gtest.h>
 
 namespace fs = KODI::PLATFORM::FILESYSTEM;
 
@@ -36,13 +44,15 @@ TestBasicEnvironment::TestBasicEnvironment() = default;
 
 void TestBasicEnvironment::SetUp()
 {
-  CAppParamParser params;
-  params.SetPlatformDirectories(false);
+  const auto params = std::make_shared<CAppParams>();
+  params->SetUserDirectoriesLocation(UserDirectoriesLocation::TEST);
 
-  CServiceBroker::CreateLogging();
+  CAppEnvironment::SetUp(params);
 
-  m_pSettingsComponent.reset(new CSettingsComponent());
-  m_pSettingsComponent->Init(params);
+  CServiceBroker::RegisterAppMessenger(std::make_shared<KODI::MESSAGING::CApplicationMessenger>());
+
+  CServiceBroker::RegisterAnnouncementManager(
+      std::make_shared<ANNOUNCEMENT::CAnnouncementManager>());
 
   XFILE::CFile *f;
 
@@ -79,6 +89,7 @@ void TestBasicEnvironment::SetUp()
 
   CSpecialProtocol::SetTempPath(m_tempPath);
   CSpecialProtocol::SetProfilePath(m_tempPath);
+  CSpecialProtocol::SetMasterProfilePath(m_tempPath);
 
   /* Create and delete a tempfile to initialize the VFS (really to initialize
    * CLibcdio). This is done so that the initialization of the VFS does not
@@ -95,8 +106,8 @@ void TestBasicEnvironment::SetUp()
   }
 
   const CProfile profile("special://temp");
-  m_pSettingsComponent->GetProfileManager()->AddProfile(profile);
-  m_pSettingsComponent->GetProfileManager()->CreateProfileFolders();
+  CServiceBroker::GetSettingsComponent()->GetProfileManager()->AddProfile(profile);
+  CServiceBroker::GetSettingsComponent()->GetProfileManager()->CreateProfileFolders();
 
   if (!g_application.m_ServiceManager->InitForTesting())
     exit(1);
@@ -104,12 +115,21 @@ void TestBasicEnvironment::SetUp()
 
 void TestBasicEnvironment::TearDown()
 {
-  XFILE::CDirectory::RemoveRecursive(m_tempPath);
-
   g_application.m_ServiceManager->DeinitTesting();
 
-  m_pSettingsComponent->Deinit();
-  m_pSettingsComponent.reset();
+  // Do not use the deinitialized VFS machinery.
+  // std::u8string cast to interpret the path as UTF-8 on all platforms.
+  std::error_code ec;
+  const std::filesystem::path tempPath{
+      std::u8string{reinterpret_cast<const char8_t*>(m_tempPath.data()), m_tempPath.size()}};
+  std::filesystem::remove_all(tempPath, ec);
+  if (ec)
+    ADD_FAILURE() << "Failed to remove the test profile at " << m_tempPath << ": " << ec.message();
+
+  CServiceBroker::UnregisterAnnouncementManager();
+  CServiceBroker::UnregisterAppMessenger();
+
+  CAppEnvironment::TearDown();
 }
 
 void TestBasicEnvironment::SetUpError()

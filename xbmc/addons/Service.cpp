@@ -7,14 +7,21 @@
  */
 #include "Service.h"
 
-#include "AddonManager.h"
+#include "addons/AddonManager.h"
+#include "addons/addoninfo/AddonType.h"
 #include "interfaces/generic/ScriptInvocationManager.h"
 #include "utils/StringUtils.h"
 #include "utils/log.h"
 
+#include <mutex>
+
 
 namespace ADDON
 {
+
+CService::CService(const AddonInfoPtr& addonInfo) : CAddon(addonInfo, AddonType::SERVICE)
+{
+}
 
 CServiceAddonManager::CServiceAddonManager(CAddonMgr& addonMgr) :
     m_addonMgr(addonMgr)
@@ -31,26 +38,27 @@ void CServiceAddonManager::OnEvent(const ADDON::AddonEvent& event)
 {
   if (typeid(event) == typeid(ADDON::AddonEvents::Enabled))
   {
-    Start(event.id);
+    Start(event.addonId);
   }
   else if (typeid(event) == typeid(ADDON::AddonEvents::ReInstalled))
   {
-    Stop(event.id);
-    Start(event.id);
+    Stop(event.addonId);
+    Start(event.addonId);
   }
   else if (typeid(event) == typeid(ADDON::AddonEvents::Disabled) ||
            typeid(event) == typeid(ADDON::AddonEvents::Unload))
   {
-    Stop(event.id);
+    Stop(event.addonId);
   }
 }
 
 void CServiceAddonManager::Start()
 {
-  m_addonMgr.Events().Subscribe(this, &CServiceAddonManager::OnEvent);
-  m_addonMgr.UnloadEvents().Subscribe(this, &CServiceAddonManager::OnEvent);
+  m_addonMgr.Events().Subscribe(this, [this](const ADDON::AddonEvent& event) { OnEvent(event); });
+  m_addonMgr.UnloadEvents().Subscribe(this,
+                                      [this](const ADDON::AddonEvent& event) { OnEvent(event); });
   VECADDONS addons;
-  if (m_addonMgr.GetAddons(addons, ADDON_SERVICE))
+  if (m_addonMgr.GetAddons(addons, AddonType::SERVICE))
   {
     for (const auto& addon : addons)
     {
@@ -62,7 +70,7 @@ void CServiceAddonManager::Start()
 void CServiceAddonManager::Start(const std::string& addonId)
 {
   AddonPtr addon;
-  if (m_addonMgr.GetAddon(addonId, addon, ADDON_SERVICE, OnlyEnabled::YES))
+  if (m_addonMgr.GetAddon(addonId, addon, AddonType::SERVICE, OnlyEnabled::CHOICE_YES))
   {
     Start(addon);
   }
@@ -70,8 +78,8 @@ void CServiceAddonManager::Start(const std::string& addonId)
 
 void CServiceAddonManager::Start(const AddonPtr& addon)
 {
-  CSingleLock lock(m_criticalSection);
-  if (m_services.find(addon->ID()) != m_services.end())
+  std::unique_lock lock(m_criticalSection);
+  if (m_services.contains(addon->ID()))
   {
     CLog::Log(LOGDEBUG, "CServiceAddonManager: {} already started.", addon->ID());
     return;
@@ -94,7 +102,7 @@ void CServiceAddonManager::Stop()
 {
   m_addonMgr.Events().Unsubscribe(this);
   m_addonMgr.UnloadEvents().Unsubscribe(this);
-  CSingleLock lock(m_criticalSection);
+  std::unique_lock lock(m_criticalSection);
   for (const auto& service : m_services)
   {
     Stop(service);
@@ -104,7 +112,7 @@ void CServiceAddonManager::Stop()
 
 void CServiceAddonManager::Stop(const std::string& addonId)
 {
-  CSingleLock lock(m_criticalSection);
+  std::unique_lock lock(m_criticalSection);
   auto it = m_services.find(addonId);
   if (it != m_services.end())
   {
@@ -113,12 +121,10 @@ void CServiceAddonManager::Stop(const std::string& addonId)
   }
 }
 
-void CServiceAddonManager::Stop(const std::map<std::string, int>::value_type& service)
+void CServiceAddonManager::Stop(
+    const std::map<std::string, int, std::less<>>::value_type& service) const
 {
   CLog::Log(LOGDEBUG, "CServiceAddonManager: stopping {}.", service.first);
-  if (!CScriptInvocationManager::GetInstance().Stop(service.second))
-  {
-    CLog::Log(LOGINFO, "CServiceAddonManager: failed to stop {} (may have ended)", service.first);
-  }
+  CScriptInvocationManager::GetInstance().Stop(service.second);
 }
 }

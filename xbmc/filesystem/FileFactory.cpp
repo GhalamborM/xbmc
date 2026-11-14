@@ -18,7 +18,13 @@
 #endif // TARGET_WINDOWS
 #include "CurlFile.h"
 #include "DAVFile.h"
+#include "DataFile.h"
 #include "ShoutcastFile.h"
+#if defined(TARGET_WASM)
+#include "wasm/XhrFile.h"
+
+#include "platform/wasm/network/TizenSockets.h"
+#endif
 #ifdef HAS_FILESYSTEM_SMB
 #ifdef TARGET_WINDOWS
 #include "platform/win32/filesystem/Win32SMBFile.h"
@@ -26,7 +32,9 @@
 #include "platform/posix/filesystem/SMBFile.h"
 #endif
 #endif
+#ifdef HAS_OPTICAL_DRIVE
 #include "CDDAFile.h"
+#endif // HAS_OPTICAL_DRIVE
 #if defined(HAS_ISO9660PP)
 #include "ISO9660File.h"
 #endif
@@ -86,13 +94,13 @@ IFile* CFileFactory::CreateLoader(const CURL& url)
   if (!CWakeOnAccess::GetInstance().WakeUpHost(url))
     return NULL;
 
-  if (!url.GetProtocol().empty() && CServiceBroker::IsBinaryAddonCacheUp())
+  if (!url.GetProtocol().empty() && CServiceBroker::IsAddonInterfaceUp())
   {
     for (const auto& vfsAddon : CServiceBroker::GetVFSAddonCache().GetAddonInstances())
     {
       auto prots = StringUtils::Split(vfsAddon->GetProtocols(), "|");
 
-      if (vfsAddon->HasFiles() && std::find(prots.begin(), prots.end(), url.GetProtocol()) != prots.end())
+      if (vfsAddon->HasFiles() && std::ranges::find(prots, url.GetProtocol()) != prots.end())
         return new CVFSEntryIFileWrapper(vfsAddon);
     }
   }
@@ -102,6 +110,8 @@ IFile* CFileFactory::CreateLoader(const CURL& url)
 #endif
   if (url.IsProtocol("zip")) return new CZipFile();
   else if (url.IsProtocol("xbt")) return new CXbtFile();
+  else if (url.IsProtocol("data"))
+    return new CDataFile();
   else if (url.IsProtocol("musicdb")) return new CMusicDatabaseFile();
   else if (url.IsProtocol("videodb")) return new CVideoDatabaseFile();
   else if (url.IsProtocol("plugin")) return new CPluginFile();
@@ -129,7 +139,7 @@ IFile* CFileFactory::CreateLoader(const CURL& url)
     return new CWin32File();
   }
 #endif // TARGET_WINDOWS
-#if defined(HAS_DVD_DRIVE)
+#if defined(HAS_OPTICAL_DRIVE)
   else if (url.IsProtocol("cdda")) return new CFileCDDA();
 #endif
 #if defined(HAS_ISO9660PP)
@@ -152,6 +162,10 @@ IFile* CFileFactory::CreateLoader(const CURL& url)
   else if (CWinLibraryFile::IsValid(url)) return new CWinLibraryFile();
 #endif
 
+#if defined(TARGET_WASM)
+  if ((url.IsProtocol("http") || url.IsProtocol("https")) && !kodi_wasm_has_sockets())
+    return new CXhrFile();
+#endif
   if (url.IsProtocol("ftp")
   ||  url.IsProtocol("ftps")
   ||  url.IsProtocol("rss")

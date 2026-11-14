@@ -9,17 +9,65 @@
 #include "RendererShaders.h"
 
 #include "DVDCodecs/Video/DXVA.h"
+#if defined(TARGET_WINDOWS_STORE)
+#include "DolbyVisionEffect.h"
+#endif
+#include "VideoRenderers/VideoShaders/ToneMappers.h"
+#include "WIN32Util.h"
 #include "rendering/dx/RenderContext.h"
 #include "utils/CPUInfo.h"
-#ifndef _M_ARM
-  #include "utils/gpu_memcpy_sse4.h"
+#if !defined(_M_ARM) && !defined(_M_ARM64)
+#include "utils/gpu_memcpy_sse4.h"
 #endif
 #include "utils/log.h"
+#include "utils/memcpy_sse2.h"
 #include "windowing/GraphicContext.h"
+
+#include <cmath>
 
 #include <ppl.h>
 
 using namespace Microsoft::WRL;
+
+#if defined(TARGET_WINDOWS_STORE)
+namespace
+{
+// formats the Dolby Vision effect can be fed: decoder textures, or software frames uploaded as P010
+bool IsDolbyVisionEffectFormat(AVPixelFormat format)
+{
+  return format == AV_PIX_FMT_D3D11VA_VLD || format == AV_PIX_FMT_YUV420P10;
+}
+
+CDolbyVisionEffect::StreamInfo GetStreamInfo(const DoviRpu& rpu,
+                                             AVColorSpace colorSpace,
+                                             AVColorTransferCharacteristic colorTransfer,
+                                             bool fullRange,
+                                             bool hasDisplayMetadata,
+                                             const AVMasteringDisplayMetadata& displayMetadata)
+{
+  CDolbyVisionEffect::StreamInfo stream;
+  stream.profile = rpu.profile;
+  stream.compatibilityId = rpu.compatibilityId;
+  stream.colorSpace = colorSpace;
+  stream.colorTransfer = colorTransfer;
+  stream.fullRange = fullRange;
+  if (hasDisplayMetadata && displayMetadata.has_luminance)
+    stream.maxMasteringLuminance =
+        static_cast<unsigned>(std::lround(av_q2d(displayMetadata.max_luminance)));
+  return stream;
+}
+
+std::unique_ptr<CDolbyVisionEffect> OpenEffect(bool hdr,
+                                               float fps,
+                                               const CDolbyVisionEffect::StreamInfo& stream)
+{
+  auto effect = std::make_unique<CDolbyVisionEffect>();
+  if (!effect->Open(hdr, fps, stream))
+    return nullptr;
+  return effect;
+}
+} // namespace
+#endif
 static DXGI_FORMAT plane_formats[][2] =
 {
   { DXGI_FORMAT_R8_UNORM,  DXGI_FORMAT_R8G8_UNORM },   // NV12
@@ -67,11 +115,37 @@ void CRendererShaders::GetWeight(std::map<RenderMethod, int>& weights, const Vid
       break;
   }
 
+#if defined(TARGET_WINDOWS_STORE)
+  // Dolby Vision is only reshaped by the renderer effect on this path
+  if (picture.doviRpu && IsDolbyVisionEffectFormat(av_pixel_format))
+  {
+    static const bool effectAvailable = CDolbyVisionEffect::IsAvailable();
+    if (effectAvailable)
+      weight += 2000;
+  }
+#endif
+
   if (weight > 0)
     weights[RENDER_PS] = weight;
 }
 
-bool CRendererShaders::Supports(ESCALINGMETHOD method)
+CRendererShaders::CRendererShaders(CVideoSettings& videoSettings) : CRendererHQ(videoSettings)
+{
+  m_renderMethodName = "Pixel Shaders";
+}
+
+CRendererShaders::~CRendererShaders() = default;
+
+bool CRendererShaders::Supports(ERENDERFEATURE feature) const
+{
+  // the Dolby Vision effect bypasses the YUV shader and the HDR output stage
+  if (feature == RENDERFEATURE_HUE || feature == RENDERFEATURE_SATURATION)
+    return !m_dolbyVisionEffect;
+
+  return CRendererBase::Supports(feature);
+}
+
+bool CRendererShaders::Supports(ESCALINGMETHOD method) const
 {
   if (method == VS_SCALINGMETHOD_LINEAR)
     return true;
@@ -93,8 +167,32 @@ bool CRendererShaders::Configure(const VideoPicture& picture, float fps, unsigne
       if (!IsHWPicSupported(picture))
         m_format = GetAVFormat(dxgi_format);
     }
+    m_srcPrimaries = picture.color_primaries;
+    DXGI_FORMAT intermediateFormat = CalcIntermediateTargetFormat();
+#if defined(TARGET_WINDOWS_STORE)
+    m_dvEffect.reset();
+    m_dvOutput = nullptr;
+    m_dvFrameIdx = UINT64_MAX;
+    m_dvUpload.Release();
+    m_dolbyVisionEffect =
+        picture.doviRpu && IsDolbyVisionEffectFormat(picture.videoBuffer->GetFormat());
+    if (m_dolbyVisionEffect)
+    {
+      // opened before the first ProcessHDR(), which only switches to Dolby Vision output for a
+      // working effect
+      m_dvEffect = OpenEffect(IntendToRenderAsHDR(picture), m_fps,
+                              GetStreamInfo(*picture.doviRpu, picture.color_space,
+                                            picture.color_transfer, picture.color_range == 1,
+                                            picture.hasDisplayMetadata, picture.displayMetadata));
+      m_dvEffectDolbyVisionOutput = m_DolbyVisionOutput;
+      if (m_dvEffect)
+        intermediateFormat = m_dvEffect->GetOutputFormat();
+      else
+        DisableDolbyVisionEffect("Unable to open the Dolby Vision effect");
+    }
+#endif
 
-    CreateIntermediateTarget(m_sourceWidth, m_sourceHeight);
+    CreateIntermediateTarget(m_sourceWidth, m_sourceHeight, false, intermediateFormat);
     return true;
   }
   return false;
@@ -114,28 +212,194 @@ void CRendererShaders::RenderImpl(CD3DTexture& target, CRect& sourceRect, CPoint
 
   CRenderBuffer* buf = m_renderBuffers[m_iBufferIndex];
 
-  CPoint srcPoints[4];
-  sourceRect.GetQuad(srcPoints);
+  // view sized target: convert and scale in one pass, the output pass then copies 1:1
+  const bool viewSized = target.GetWidth() != m_sourceWidth || target.GetHeight() != m_sourceHeight;
+  CRect src = sourceRect;
+  CRect dst = sourceRect;
+  if (viewSized)
+  {
+    dst = CRect(destPoints[0], destPoints[2]);
+    CWIN32Util::CropSource(src, dst,
+                           CRect(0.0f, 0.0f, static_cast<float>(target.GetWidth()),
+                                 static_cast<float>(target.GetHeight())));
+  }
 
-  m_colorShader->SetParams(m_videoSettings.m_Contrast, m_videoSettings.m_Brightness, 
-                           DX::Windowing()->UseLimitedColor());
-  m_colorShader->SetColParams(buf->color_space, buf->bits, !buf->full_range, buf->texBits);
-  m_colorShader->Render(sourceRect, srcPoints, buf, target);
+#if defined(TARGET_WINDOWS_STORE)
+  if (RenderDolbyVision(target, buf))
+  {
+    if (!HasHQScaler())
+      ReorderDrawPoints(CRect(destPoints[0], destPoints[2]), destPoints);
+    return;
+  }
+#endif
 
-  if (!HasHQScaler())
-    ReorderDrawPoints(CRect(destPoints[0], destPoints[2]), destPoints);
+  CPoint dstPoints[4];
+  dst.GetQuad(dstPoints);
+
+  if (!m_reuseIntermediate)
+  {
+    m_colorShader->SetParams(m_videoSettings.m_Contrast, m_videoSettings.m_Brightness,
+                             m_hdrStream ? 50.0f : m_videoSettings.m_Hue,
+                             m_hdrStream ? 50.0f : m_videoSettings.m_Saturation,
+                             DX::Windowing()->UseLimitedColor());
+    if (m_colorShaderHueSat != AVCOL_TRC_UNSPECIFIED)
+      m_colorShader->SetHueSaturation(
+          (m_videoSettings.m_Hue - 50.0f) * 3.6f, m_videoSettings.m_Saturation * 0.02f,
+          CToneMappers::GetPeakLuminanceValue(buf->hasDisplayMetadata, buf->displayMetadata,
+                                              buf->hasLightMetadata, buf->lightMetadata));
+    m_colorShader->SetColParams(buf->color_space, buf->bits, !buf->full_range, buf->texBits);
+    m_colorShader->Render(src, dstPoints, buf, target);
+  }
+
+  // the output pass draws with a full back buffer viewport, move the picture to the eye's half
+  // in the split stereo modes (the HQ scaler does it itself)
+  const auto& context = CServiceBroker::GetWinSystem()->GetGfxContext();
+  if (viewSized)
+  {
+    context.StereoCorrection(dst).GetQuad(destPoints);
+    sourceRect = dst;
+  }
+  else if (!HasHQScaler())
+    ReorderDrawPoints(context.StereoCorrection(CRect(destPoints[0], destPoints[2])), destPoints);
 }
+
+#if defined(TARGET_WINDOWS_STORE)
+void CRendererShaders::DisableDolbyVisionEffect(const char* reason)
+{
+  // Not retried until the next Configure(): ProcessHDR() would otherwise switch the HDMI output
+  // in and out of Dolby Vision mode.
+  CLog::LogF(LOGERROR, "{}, Dolby Vision effect disabled for this stream", reason);
+  m_dvEffect.reset();
+  m_dvOutput = nullptr;
+  m_dvFrameIdx = UINT64_MAX;
+  m_dolbyVisionEffect = false;
+  CreateIntermediateTarget(m_sourceWidth, m_sourceHeight, false, CalcIntermediateTargetFormat());
+  m_reuseIntermediate = false;
+  if (m_iNumBuffers)
+    StopDolbyVisionOutput(m_renderBuffers[m_iBufferIndex]);
+}
+
+bool CRendererShaders::RenderDolbyVision(CD3DTexture& target, CRenderBuffer* buf)
+{
+  // ProcessHDR() keeps Dolby Vision output off for a frame without an RPU, which the P010
+  // shader draws instead
+  if (!m_dolbyVisionEffect || !buf->doviRpu)
+    return false;
+
+  // The display reports its own colour volume only once it is in Dolby Vision mode, so the
+  // effect is reopened when that changes.
+  const bool hdr = ActualRenderAsHDR();
+  if (!m_dvEffect || m_dvEffect->IsHdrOutput() != hdr ||
+      m_dvEffectDolbyVisionOutput != m_DolbyVisionOutput)
+  {
+    m_dvEffectDolbyVisionOutput = m_DolbyVisionOutput;
+    m_dvOutput = nullptr;
+    m_dvFrameIdx = UINT64_MAX;
+    m_dvEffect =
+        OpenEffect(hdr, m_fps,
+                   GetStreamInfo(*buf->doviRpu, buf->color_space, buf->color_transfer,
+                                 buf->full_range, buf->hasDisplayMetadata, buf->displayMetadata));
+    if (!m_dvEffect)
+    {
+      DisableDolbyVisionEffect("Unable to reopen the Dolby Vision effect");
+      return false;
+    }
+    CreateIntermediateTarget(m_sourceWidth, m_sourceHeight, false, m_dvEffect->GetOutputFormat());
+  }
+
+  // a frame shown more than once must not be fed to the effect again
+  if (buf->frameIdx != m_dvFrameIdx)
+  {
+    ComPtr<ID3D11Resource> resource;
+    unsigned index = 0;
+    if (buf->videoBuffer->GetFormat() == AV_PIX_FMT_D3D11VA_VLD)
+    {
+      if (FAILED(buf->GetResource(&resource, &index)))
+      {
+        DisableDolbyVisionEffect("Unable to open the decoder texture");
+        return false;
+      }
+    }
+    else
+    {
+      if (!UploadDolbyVisionFrame(buf))
+      {
+        DisableDolbyVisionEffect("Unable to upload the frame");
+        return false;
+      }
+      resource = m_dvUpload.Get();
+    }
+
+    const LONGLONG time =
+        m_fps > 0.0f ? static_cast<LONGLONG>(buf->frameIdx / 2 * 10000000.0 / m_fps) : 0;
+    ID3D11Texture2D* output = nullptr;
+    const HRESULT hr =
+        m_dvEffect->Process(resource.Get(), index, buf->doviRpu->data, time, &output);
+    m_dvFrameIdx = buf->frameIdx;
+    if (FAILED(hr))
+    {
+      DisableDolbyVisionEffect("Dolby Vision effect processing failed");
+      return false;
+    }
+    // without new output the target keeps showing the previous one
+    if (output)
+      m_dvOutput = output;
+  }
+
+  if (!m_dvOutput)
+    return false;
+
+  D3D11_TEXTURE2D_DESC desc;
+  m_dvOutput->GetDesc(&desc);
+  const D3D11_BOX box{
+      0, 0, 0, std::min(desc.Width, target.GetWidth()), std::min(desc.Height, target.GetHeight()),
+      1};
+  DX::DeviceResources::Get()->GetD3DContext()->CopySubresourceRegion(target.Get(), 0, 0, 0, 0,
+                                                                     m_dvOutput, 0, &box);
+  return true;
+}
+
+bool CRendererShaders::UploadDolbyVisionFrame(CRenderBuffer* buf)
+{
+  if (!m_dvUpload.Get() && !m_dvUpload.Create(FFALIGN(m_sourceWidth, 2), FFALIGN(m_sourceHeight, 2),
+                                              1, D3D11_USAGE_DYNAMIC, DXGI_FORMAT_P010))
+  {
+    CLog::LogF(LOGERROR, "Unable to create the Dolby Vision upload texture");
+    return false;
+  }
+
+  D3D11_MAPPED_SUBRESOURCE map;
+  if (!m_dvUpload.LockRect(0, &map, D3D11_MAP_WRITE_DISCARD))
+    return false;
+
+  uint8_t* src[3];
+  int srcStrides[3];
+  buf->videoBuffer->GetPlanes(src);
+  buf->videoBuffer->GetStrides(srcStrides);
+
+  auto* data = static_cast<uint8_t*>(map.pData);
+  uint8_t* dst[] = {data, data + m_dvUpload.GetHeight() * map.RowPitch};
+  const int dstStrides[] = {static_cast<int>(map.RowPitch), static_cast<int>(map.RowPitch)};
+  convert_yuv420_p01x(src, srcStrides, m_sourceHeight, m_sourceWidth, dst, dstStrides, 10);
+
+  return m_dvUpload.UnlockRect(0);
+}
+#endif
 
 void CRendererShaders::CheckVideoParameters()
 {
   __super::CheckVideoParameters();
 
   CRenderBuffer* buf = m_renderBuffers[m_iBufferIndex];
-  const AVColorPrimaries srcPrim = GetSrcPrimaries(buf->primaries, buf->GetWidth(), buf->GetHeight());
-  if (srcPrim != m_srcPrimaries)
+  if (buf->primaries != m_srcPrimaries)
   {
     // source params is changed, reset shader
-    m_srcPrimaries = srcPrim;
+    m_srcPrimaries = buf->primaries;
+    m_colorShader.reset();
+  }
+  if (m_hueSatTransfer != m_colorShaderHueSat)
+  {
+    m_colorShaderHueSat = m_hueSatTransfer;
     m_colorShader.reset();
   }
 }
@@ -146,6 +410,7 @@ void CRendererShaders::UpdateVideoFilters()
 
   if (!m_colorShader)
   {
+    m_intermediateState = {};
     m_colorShader = std::make_unique<CYUV2RGBShader>();
 
     AVColorPrimaries dstPrimaries = AVCOL_PRI_BT709;
@@ -154,13 +419,23 @@ void CRendererShaders::UpdateVideoFilters()
         (m_srcPrimaries == AVCOL_PRI_BT709 || m_srcPrimaries == AVCOL_PRI_BT2020))
       dstPrimaries = m_srcPrimaries;
 
-    if (!m_colorShader->Create(m_format, dstPrimaries, m_srcPrimaries))
+    if (!m_colorShader->Create(m_format, dstPrimaries, m_srcPrimaries, nullptr,
+                               m_colorShaderHueSat))
     {
       // we are in a big trouble
       CLog::LogF(LOGERROR, "unable to create YUV->RGB shader, rendering is not possible");
       m_colorShader.reset();
     }
   }
+
+  // when downscaling without HQ scaler, a view sized target saves converting at source size.
+  // The Dolby Vision effect output is copied as is, so it needs a source sized target.
+  const bool viewSized = !m_dolbyVisionEffect && !HasHQScaler() && !m_renderOrientation &&
+                         m_viewWidth <= m_sourceWidth && m_viewHeight <= m_sourceHeight &&
+                         (m_viewWidth < m_sourceWidth || m_viewHeight < m_sourceHeight);
+  CreateIntermediateTarget(viewSized ? m_viewWidth : m_sourceWidth,
+                           viewSized ? m_viewHeight : m_sourceHeight, false,
+                           m_IntermediateTarget.GetFormat());
 }
 
 bool CRendererShaders::IsHWPicSupported(const VideoPicture& picture)
@@ -184,17 +459,34 @@ bool CRendererShaders::IsHWPicSupported(const VideoPicture& picture)
   return false;
 }
 
-AVColorPrimaries CRendererShaders::GetSrcPrimaries(AVColorPrimaries srcPrimaries, unsigned width, unsigned height)
+DXGI_FORMAT CRendererShaders::CalcIntermediateTargetFormat() const
 {
-  AVColorPrimaries ret = srcPrimaries;
-  if (ret == AVCOL_PRI_UNSPECIFIED)
-  {
-    if (width > 1024 || height >= 600)
-      ret = AVCOL_PRI_BT709;
-    else
-      ret = AVCOL_PRI_BT470BG;
-  }
-  return ret;
+  // Default value: same as the back buffer
+  DXGI_FORMAT format{DX::Windowing()->GetBackBuffer().GetFormat()};
+
+  // High precision setting not enabled: use back buffer format, 8 or 10 bits
+  // enabled: look for higher quality format
+  if (!DX::Windowing()->IsHighPrecisionProcessingSettingEnabled())
+    return format;
+
+  UINT reqSupport{D3D11_FORMAT_SUPPORT_SHADER_SAMPLE | D3D11_FORMAT_SUPPORT_RENDER_TARGET};
+
+  // Preferred: float16 as the yuv-rgb conversion takes place in float
+  // => avoids a conversion / quantization round-trip, but uses more memory / bandwidth
+  const std::array hdrformats{DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_R10G10B10A2_UNORM,
+                              DXGI_FORMAT_R32G32B32A32_FLOAT};
+
+  const auto it =
+      std::find_if(hdrformats.cbegin(), hdrformats.cend(), [&](DXGI_FORMAT outputFormat) {
+        return DX::Windowing()->IsFormatSupport(outputFormat, reqSupport);
+      });
+
+  if (it != hdrformats.cend())
+    format = *it;
+  else
+    CLog::LogF(LOGDEBUG, "no compatible high precision format found.");
+
+  return format;
 }
 
 CRenderBuffer* CRendererShaders::CreateBuffer()
@@ -437,7 +729,6 @@ bool CRendererShaders::CRenderBufferImpl::UploadFromBuffer() const
   int srcLines[3];
   videoBuffer->GetPlanes(bufData);
   videoBuffer->GetStrides(srcLines);
-  std::vector<Concurrency::task<void>> tasks;
 
   for (unsigned plane = 0; plane < m_viewCount; ++plane)
   {
@@ -451,34 +742,22 @@ bool CRendererShaders::CRenderBufferImpl::UploadFromBuffer() const
     int dstLine = mapping.RowPitch;
     int height = plane ? m_height >> 1 : m_height;
 
-    auto task = Concurrency::create_task([src, dst, srcLine, dstLine, height]()
+    if (srcLine == dstLine)
     {
-      if (srcLine == dstLine)
+      memcpy(dst, src, srcLine * height);
+    }
+    else
+    {
+      uint8_t* s = src;
+      uint8_t* d = dst;
+      for (int i = 0; i < height; ++i)
       {
-        memcpy(dst, src, srcLine * height);
+        memcpy(d, s, std::min(srcLine, dstLine));
+        d += dstLine;
+        s += srcLine;
       }
-      else
-      {
-        uint8_t* s = src;
-        uint8_t* d = dst;
-        for (int i = 0; i < height; ++i)
-        {
-          memcpy(d, s, std::min(srcLine, dstLine));
-          d += dstLine;
-          s += srcLine;
-        }
-      }
-    });
-    tasks.push_back(task);
+    }
   }
-
-  // event based await is required on WinRT because
-  // blocking WinRT STA threads with task.wait() isn't allowed
-  auto sync = std::make_shared<Concurrency::event>();
-  when_all(tasks.begin(), tasks.end()).then([&sync]() {
-    sync->set();
-  });
-  sync->wait();
 
   for (unsigned plane = 0; plane < m_viewCount; ++plane)
     if (!m_textures[plane].UnlockRect(0)) {}

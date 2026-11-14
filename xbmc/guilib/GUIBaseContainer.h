@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2005-2018 Team Kodi
+ *  Copyright (C) 2005-2026 Team Kodi
  *  This file is part of Kodi - https://kodi.tv
  *
  *  SPDX-License-Identifier: GPL-2.0-or-later
@@ -18,6 +18,9 @@
 #include "utils/Stopwatch.h"
 
 #include <list>
+#include <memory>
+#include <optional>
+#include <set>
 #include <utility>
 #include <vector>
 
@@ -27,6 +30,7 @@
  */
 
 class IListProvider;
+class TiXmlElement;
 class TiXmlNode;
 class CGUIListItemLayout;
 
@@ -34,7 +38,7 @@ class CGUIBaseContainer : public IGUIContainer
 {
 public:
   CGUIBaseContainer(int parentID, int controlID, float posX, float posY, float width, float height, ORIENTATION orientation, const CScroller& scroller, int preloadItems);
-  CGUIBaseContainer(const CGUIBaseContainer &);
+  explicit CGUIBaseContainer(const CGUIBaseContainer& other);
   ~CGUIBaseContainer(void) override;
 
   bool OnAction(const CAction &action) override;
@@ -49,6 +53,7 @@ public:
   void AllocResources() override;
   void FreeResources(bool immediately = false) override;
   void UpdateVisibility(const CGUIListItem *item = NULL) override;
+  void AssignDepth() override;
 
   virtual unsigned int GetRows() const;
 
@@ -67,7 +72,7 @@ public:
   void LoadLayout(TiXmlElement *layout);
   void LoadListProvider(TiXmlElement *content, int defaultItem, bool defaultAlways);
 
-  CGUIListItemPtr GetListItem(int offset, unsigned int flag = 0) const override;
+  std::shared_ptr<CGUIListItem> GetListItem(int offset, unsigned int flag = 0) const override;
 
   bool GetCondition(int condition, int data) const override;
   std::string GetLabel(int info) const override;
@@ -75,7 +80,7 @@ public:
   /*! \brief Set the list provider for this container (for python).
    \param provider the list provider to use for this container.
    */
-  void SetListProvider(IListProvider *provider);
+  void SetListProvider(std::unique_ptr<IListProvider> provider);
 
   /*! \brief Set the offset of the first item in the container from the container's position
    Useful for lists/panels where the focused item may be larger than the non-focused items and thus
@@ -92,14 +97,21 @@ public:
   void ResetAutoScrolling();
   void UpdateAutoScrolling(unsigned int currentTime);
 
+  void UpdateListProvider(bool forceRefresh = false);
+
 #ifdef _DEBUG
   void DumpTextureUse() override;
 #endif
 protected:
-  EVENT_RESULT OnMouseEvent(const CPoint &point, const CMouseEvent &event) override;
+  EVENT_RESULT OnMouseEvent(const CPoint& point, const KODI::MOUSE::CMouseEvent& event) override;
   bool OnClick(int actionID);
 
-  virtual void ProcessItem(float posX, float posY, CGUIListItemPtr& item, bool focused, unsigned int currentTime, CDirtyRegionList &dirtyregions);
+  virtual void ProcessItem(float posX,
+                           float posY,
+                           std::shared_ptr<CGUIListItem>& item,
+                           bool focused,
+                           unsigned int currentTime,
+                           CDirtyRegionList& dirtyregions);
 
   void Render() override;
   virtual void RenderItem(float posX, float posY, CGUIListItem *item, bool focused);
@@ -112,6 +124,7 @@ protected:
   virtual void UpdateLayout(bool refreshAllItems = false);
   virtual void SetPageControlRange();
   virtual void UpdatePageControl(int offset);
+  void StartPageChangeTimer();
   virtual void CalculateLayout();
   virtual void SelectItem(int item) {}
   virtual bool SelectItemFromPoint(const CPoint& point) { return false; }
@@ -119,10 +132,30 @@ protected:
   virtual void Reset();
   virtual size_t GetNumItems() const { return m_items.size(); }
   virtual int GetCurrentPage() const;
+  /*!
+   * \brief Get the number of fully visible items in the container area.
+   * \note Use for page navigation, not for layout/rendering where partially visible items matter.
+   * \return Cached number of items fully visible in the current viewport when the screen range can
+   *         be determined. Falls back to the calculated item count, which can include partially
+   *         visible items.
+   */
+  int GetPageSize() const;
+  /*! \brief Calculate and cache the page navigation size.
+   \param force recalculate even if the visible screen range has not changed.
+   \return true if the cached page size changed, false otherwise.
+   */
+  bool CalculatePageSize(bool force = true);
+  /*! \brief Calculate and cache the visible screen range for this container. */
+  virtual bool CalculateScreenRange();
+  /*! \brief Get the visible screen range for this container's scroll orientation in skin coordinates.
+   \param screenStart start of the visible screen range.
+   \param screenEnd end of the visible screen range.
+   \return true if the cached screen range was determined, false otherwise.
+   */
+  bool GetScreenRange(float& screenStart, float& screenEnd) const;
   bool InsideLayout(const CGUIListItemLayout *layout, const CPoint &point) const;
   void OnFocus() override;
   void OnUnFocus() override;
-  void UpdateListProvider(bool forceRefresh = false);
 
   int ScrollCorrectionRange() const;
   inline float Size() const;
@@ -136,29 +169,41 @@ protected:
   unsigned int m_lastHoldTime;
 
   ORIENTATION m_orientation;
-  int m_itemsPerPage;
+  int m_itemsPerPage; ///< \brief number of layout slots in the container area, including partial slots
+  int m_pageSize; ///< \brief cached number of fully visible items used for page navigation
+  int m_pageSizeCursor; ///< \brief cursor position used to calculate the cached page size
+  bool m_hasScreenRange;
+  float m_screenStart;
+  float m_screenEnd;
 
-  std::vector< CGUIListItemPtr > m_items;
-  typedef std::vector<CGUIListItemPtr> ::iterator iItems;
-  CGUIListItemPtr m_lastItem;
+  std::vector<std::shared_ptr<CGUIListItem>> m_items;
+  typedef std::vector<std::shared_ptr<CGUIListItem>>::iterator iItems;
+  std::shared_ptr<CGUIListItem> m_lastItem;
+
+  // Items dropped by Reset(). The destructor releases the layouts of any that
+  // are still alive, while this container (their layouts' parent) exists.
+  std::set<std::weak_ptr<CGUIListItem>, std::owner_less<std::weak_ptr<CGUIListItem>>>
+      m_releasedItems;
 
   int m_pageControl;
+  std::optional<int>
+      m_lastPageControlOffset; // cached offset to avoid redundant page control messages
 
   std::list<CGUIListItemLayout> m_layouts;
   std::list<CGUIListItemLayout> m_focusedLayouts;
 
-  CGUIListItemLayout *m_layout;
-  CGUIListItemLayout *m_focusedLayout;
+  CGUIListItemLayout* m_layout{nullptr};
+  CGUIListItemLayout* m_focusedLayout{nullptr};
   bool m_layoutCondition = false;
   bool m_focusedLayoutCondition = false;
 
-  void ScrollToOffset(int offset);
+  virtual void ScrollToOffset(int offset);
   void SetContainerMoving(int direction);
   void UpdateScrollOffset(unsigned int currentTime);
 
   CScroller m_scroller;
 
-  IListProvider *m_listProvider;
+  std::unique_ptr<IListProvider> m_listProvider;
 
   bool m_wasReset;  // true if we've received a Reset message until we've rendered once.  Allows
                     // us to make sure we don't tell the infomanager that we've been moving when
@@ -207,6 +252,23 @@ protected:
 
   unsigned int m_lastRenderTime;
 
+  struct RENDERITEM
+  {
+    // user-defined ctor for XCode 15.2 and emplace_back
+    RENDERITEM(float newPosX,
+               float newPosY,
+               std::shared_ptr<CGUIListItem> newItem,
+               bool newFocused);
+
+    float posX;
+    float posY;
+    std::shared_ptr<CGUIListItem> item;
+    bool focused;
+  };
+
+  // Cached render items to avoid per-frame vector allocation
+  std::vector<RENDERITEM> m_renderItems;
+
 private:
   bool OnContextMenu();
 
@@ -233,5 +295,3 @@ private:
   bool m_waitForScrollEnd = false;
   float m_lastScrollValue = 0.0f;
 };
-
-

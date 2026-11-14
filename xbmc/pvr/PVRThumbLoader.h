@@ -14,7 +14,6 @@
 
 namespace PVR
 {
-
 class CPVRThumbLoader : public CThumbLoader
 {
 public:
@@ -26,16 +25,16 @@ public:
   bool LoadItemLookup(CFileItem* item) override;
 
   void ClearCachedImage(CFileItem& item);
-  void ClearCachedImages(CFileItemList& items);
+  void ClearCachedImages(const CFileItemList& items);
 
 protected:
   void OnLoaderFinish() override;
 
 private:
   bool FillThumb(CFileItem& item);
-  std::string CreateChannelGroupThumb(const CFileItem& channelGroupItem);
+  std::string GetChannelGroupThumbURL(const CFileItem& channelGroupItem) const;
 
   bool m_bInvalidated = false;
 };
 
-}
+} // namespace PVR

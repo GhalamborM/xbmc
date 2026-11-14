@@ -106,8 +106,23 @@ std::vector<std::string> CCompileInfo::GetAvailableWindowSystems()
   return StringUtils::Split("@CORE_PLATFORM_NAME_LC@", ' ');
 }
 
+std::vector<std::string> CCompileInfo::GetAvailableAudioBackends()
+{
+  return StringUtils::Split("@AUDIO_BACKENDS@", ' ');
+}
+
+std::vector<std::string> CCompileInfo::GetAvailableGlInterfaces()
+{
+  return StringUtils::Split("@GL_INTERFACES@", ' ');
+}
+
 // Return version of python built against as format MAJOR.MINOR
 std::string CCompileInfo::GetPythonVersion()
 {
   return "@PYTHON_VERSION@";
+}
+
+std::vector<std::string> CCompileInfo::GetWebserverExtraWhitelist()
+{
+  return StringUtils::Split("@KODI_WEBSERVER_EXTRA_WHITELIST@", ',');
 }

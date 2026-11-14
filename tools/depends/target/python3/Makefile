@@ -1,29 +1,119 @@
-include ../../Makefile.include
-DEPS= ../../Makefile.include Makefile apple.patch crosscompile.patch android.patch \
-       modules.setup darwin_embedded.patch 01-GH-27394-move-crypt-h.patch
-
-# lib name, version
-LIBNAME=Python
-VERSION=3.9.7
-SOURCE=$(LIBNAME)-$(VERSION)
-ARCHIVE=$(SOURCE).tar.xz
-BASE_URL=https://www.python.org/ftp/python/$(VERSION)
+include ../../Makefile.include PYTHON3-VERSION ../../download-files.include
+DEPS = ../../Makefile.include Makefile PYTHON3-VERSION ../../download-files.include \
+                                 apple.patch \
+                                 process-vm-ready.patch \
+                                 static-compile.patch \
+                                 10-android-modules.patch \
+                                 11-android-ctypes.patch \
+                                 13-wasm-em-config-clang.patch \
+                                 14-wasm-build-wasm-default.patch \
+                                 15-wasm-static-hacl.patch \
+                                 16-ios-static-nonframework.patch \
+                                 19-tvos-disable-fork-exec.patch \
+                                 20-wasm-runtime-deps.patch \
+                                 21-wasm-em-js-deps.patch \
+                                 22-wasm-trampoline-static.patch \
+                                 23-wasm-static-linking.patch \
+                                 24-wasm-optional-reference-types.patch
 
 ifeq ($(findstring apple-darwin, $(HOST)), apple-darwin)
-  HOSTPLATFORM=_PYTHON_HOST_PLATFORM="darwin"
-  LINK_ICONV=-liconv
   ifeq ($(OS), darwin_embedded)
     EXTRA_CONFIGURE=ac_cv_func_wait3=no ac_cv_func_wait4=no ac_cv_func_waitpid=no \
                     ac_cv_func_execv=no ac_cv_func_fexecv=no ac_cv_func_getentropy=no \
                     ac_cv_func_setpriority=no ac_cv_func_sendfile=no ac_cv_header_sched_h=no \
                     ac_cv_func_posix_spawn=no ac_cv_func_posix_spawnp=no \
                     ac_cv_func_forkpty=no ac_cv_lib_util_forkpty=no \
-                    ac_cv_func_getgroups=no
+                    ac_cv_func_getgroups=no \
+                    ac_cv_func_system=no \
+                    ac_cv_func_dup3=no \
+                    ac_cv_func_pipe2=no
+    export SDKROOT
   endif
+  ifeq ($(OS), osx)
+    EXTRA_CONFIGURE+= ac_cv_func_dup3=no ac_cv_func_pipe2=no
+    export SDKROOT
+  endif
+  # required for _localemodule
+  EXTRA_CONFIGURE+= ac_cv_lib_intl_textdomain=yes
+
+  # Python already handles older OSs correctly internally
+  # config.site appends a CFLAGS given here after the platform's, so it overrides them
+  EXTRA_CONFIGURE+= CFLAGS=-Wno-error=unguarded-availability-new
 endif
 
 ifeq ($(OS), linux)
   EXTRA_CONFIGURE=ac_cv_pthread=yes
+  ifeq ($(TARGET_PLATFORM),webos)
+    # Force intl check to succeed
+    EXTRA_CONFIGURE+=ac_cv_lib_intl_textdomain=yes
+  endif
+endif
+
+ifeq ($(OS),wasm)
+  # Cross-compiling to wasm cannot run AX_C_FLOAT_WORDS_BIGENDIAN's probe.
+  # WebAssembly is little-endian, so preset the cache result. Also disable
+  # forkpty: posixmodule builds the forkpty wrapper under HAVE_FORKPTY, but the
+  # PyOS_*Fork helpers it calls are only built when HAVE_FORK is available.
+  # memfd_create is also misdetected here and fails at link time with emcc.
+  EXTRA_CONFIGURE+= ax_cv_c_float_words_bigendian=no \
+                    ac_cv_func_forkpty=no ac_cv_lib_util_forkpty=no \
+                    ac_cv_func_memfd_create=no
+
+  # libpython is linked statically into the Kodi binary, so there is no dlopen()
+  # for extension modules; MODULE_BUILDTYPE=static builds them all into the
+  # archive. Saying so keeps configure from picking dynload_shlib.o, whose
+  # dlopen() emcc provides but which can never succeed here.
+  EXTRA_CONFIGURE+= --disable-wasm-dynamic-linking
+
+  # WebAssembly's indirect calls check the full signature, so the fpcasts
+  # CPython and its modules rely on trap without the call trampoline.
+  CFLAGS+= -DPY_CALL_TRAMPOLINE
+  # Chromium 85 on Samsung TVs does not support WASM reference types.
+  CFLAGS+= -mno-reference-types
+  export CFLAGS
+endif
+
+# Disabled c extension modules for all platforms
+PY_MODULES = py_cv_module_grp=n/a \
+             py_cv_module_syslog=n/a \
+             py_cv_module__dbm=n/a \
+             py_cv_module__gdbm=n/a \
+             py_cv_module__uuid=n/a \
+             py_cv_module_readline=n/a \
+             py_cv_module__curses=n/a \
+             py_cv_module__curses_panel=n/a \
+             py_cv_module_xx=n/a \
+             py_cv_module_xxlimited=n/a \
+             py_cv_module_xxlimited_35=n/a \
+             py_cv_module_xxsubtype=n/a \
+             py_cv_module__xxsubinterpreters=n/a \
+             py_cv_module__tkinter=n/a \
+             py_cv_module__curses=n/a \
+             py_cv_module__codecs_jp=n/a \
+             py_cv_module__codecs_kr=n/a \
+             py_cv_module__codecs_tw=n/a
+
+# These modules use "internal" libs for building. The required static archives
+# are not installed outside of the cpython build tree, and cause failure in kodi linking
+# If we wish to support them in the future, we should create "system libs" for them
+PY_MODULES+= py_cv_module__decimal=n/a \
+             py_cv_module__sha2=n/a \
+             py_cv_module__zstd=n/a
+
+
+ifeq ($(OS), darwin_embedded)
+  PY_MODULES+= py_cv_module__posixsubprocess=n/a \
+               py_cv_module__scproxy=n/a
+
+  # A real iOS triplet, not the tree's darwin one: CPython derives ac_sys_system,
+  # the deployment target and the simulator split from it.
+  ifeq ($(findstring iphone,$(TARGET_PLATFORM)),iphone)
+    PYTHON_HOST=$(subst -darwin,-ios$(APPLE_DEPLOYMENT_TARGET),$(HOST))
+    ifeq ($(TARGET_PLATFORM),iphonesimulator)
+      PYTHON_HOST:=$(PYTHON_HOST)-simulator
+    endif
+    EXTRA_CONFIGURE+= --host=$(PYTHON_HOST)
+  endif
 endif
 
 # configuration settings
@@ -33,56 +123,71 @@ CONFIGURE=./configure --prefix=$(PREFIX) \
                       --disable-framework \
                       --without-pymalloc \
                       --enable-ipv6 \
+                      --with-build-python=$(NATIVEPREFIX)/bin/python3 \
+                      --with-system-expat=yes \
+                      --disable-test-modules \
+                      MODULE_BUILDTYPE=static \
+                      $(PY_MODULES) \
                       $(EXTRA_CONFIGURE)
 
+# Use LIBS as some platforms (webos) require iconv to be late on the linker line
+# appending to LDFLAGS puts the iconv link argument too early, causing link failures
+export LIBS=$(LINK_ICONV)
 
 LIBDYLIB=$(PLATFORM)/libpython$(PYTHON_VERSION).a
 
 all: .installed-$(PLATFORM)
 
-$(TARBALLS_LOCATION)/$(ARCHIVE):
-	cd $(TARBALLS_LOCATION); $(RETRIEVE_TOOL) $(RETRIEVE_TOOL_FLAGS) $(BASE_URL)/$(ARCHIVE)
-
-$(PLATFORM): $(TARBALLS_LOCATION)/$(ARCHIVE) $(DEPS)
+.configured-$(PLATFORM): $(DEPS) | $(TARBALLS_LOCATION)/$(ARCHIVE).$(HASH_TYPE)
 	rm -rf $(PLATFORM)/*; mkdir -p $(PLATFORM)
 	cd $(PLATFORM); $(ARCHIVE_TOOL) $(ARCHIVE_TOOL_FLAGS) $(TARBALLS_LOCATION)/$(ARCHIVE)
-	cd $(PLATFORM); patch -p1 -i ../crosscompile.patch
-	cd $(PLATFORM); patch -p1 -i ../android.patch
 	cd $(PLATFORM); patch -p1 -i ../apple.patch
-	cd $(PLATFORM); patch -p1 -i ../01-GH-27394-move-crypt-h.patch
-ifeq ($(OS),darwin_embedded)
-	cd $(PLATFORM); patch -p1 -i ../darwin_embedded.patch
-endif
-	cp modules.setup $(PLATFORM)/Modules/Setup
+	cd $(PLATFORM); patch -p1 -i ../static-compile.patch
+	cd $(PLATFORM); patch -p1 -i ../process-vm-ready.patch
 
-#Add -liconv as needed, and add the _scproxy module for darwin
-#  disable locale altogether for Android
 ifeq ($(OS),android)
-	cd $(PLATFORM); sed -ie 's|_locale -DPy_BUILD_CORE_BUILTIN _localemodule.c -lintl \$$(LINK_ICONV)|#_locale -DPy_BUILD_CORE_BUILTIN _localemodule.c -lintl \$$(LINK_ICONV)|' Modules/Setup
+	cd $(PLATFORM); patch -p1 -i ../10-android-modules.patch
+	cd $(PLATFORM); patch -p1 -i ../11-android-ctypes.patch
 endif
-ifeq ($(OS),linux)
-	# _posixshmem module requires librt for linux for SHM_OPEN/SHM_UNLINK
-	cd $(PLATFORM); sed -ie 's|# -lrt # _posixshmem|-lrt # _posixshmem|' Modules/Setup
+ifeq ($(OS),wasm)
+	cd $(PLATFORM); patch -p1 -i ../13-wasm-em-config-clang.patch
+	cd $(PLATFORM); patch -p1 -i ../14-wasm-build-wasm-default.patch
+	cd $(PLATFORM); patch -p1 -i ../15-wasm-static-hacl.patch
+# Merged upstream: python/cpython#156335 (3.15; adapted here, as 3.14 does not
+# use stringToNewUTF8 yet), #156798 and #157238 (3.16).
+	cd $(PLATFORM); patch -p1 -i ../20-wasm-runtime-deps.patch
+	cd $(PLATFORM); patch -p1 -i ../21-wasm-em-js-deps.patch
+	cd $(PLATFORM); patch -p1 -i ../22-wasm-trampoline-static.patch
+# Pending upstream review (python/cpython#156781).
+	cd $(PLATFORM); patch -p1 -i ../23-wasm-static-linking.patch
+	cd $(PLATFORM); patch -p1 -i ../24-wasm-optional-reference-types.patch
 endif
-ifeq ($(OS),osx)
-	cd $(PLATFORM); sed -ie 's|\$$(OSX_SCPROXY)|_scproxy \$$(srcdir)/Modules/_scproxy.c -framework SystemConfiguration -framework CoreFoundation|' Modules/Setup
+ifeq ($(findstring iphone,$(TARGET_PLATFORM)),iphone)
+# Merged upstream (python/cpython#156110); drop it when we bump python past 3.16.
+	cd $(PLATFORM); patch -p1 -i ../16-ios-static-nonframework.patch
 endif
-
+ifeq ($(findstring appletv,$(TARGET_PLATFORM)),appletv)
+	# TODO: drop once tvOS is built as a real Python platform
+	cd $(PLATFORM); patch -p1 -i ../19-tvos-disable-fork-exec.patch
+endif
 	cd $(PLATFORM); $(AUTORECONF)
 	cd $(PLATFORM); $(CONFIGURE)
+	touch $@
 
-$(LIBDYLIB): $(PLATFORM)
-	$(MAKE) -C $(PLATFORM) $(HOSTPLATFORM) PYTHON_FOR_BUILD=$(NATIVEPREFIX)/bin/python3 CROSS_COMPILE_TARGET=yes libpython$(PYTHON_VERSION).a
+$(LIBDYLIB): .configured-$(PLATFORM)
+	$(MAKE) -C $(PLATFORM) libpython$(PYTHON_VERSION).a
 	touch $@
 
 .installed-$(PLATFORM): $(LIBDYLIB)
-	$(MAKE) -C $(PLATFORM) $(HOSTPLATFORM) PYTHON_FOR_BUILD=$(NATIVEPREFIX)/bin/python3 CROSS_COMPILE_TARGET=yes install
+# We specifically use -j1 as some threading issues can occur with install directory creation
+	$(MAKE) -C $(PLATFORM) $(HOSTPLATFORM) install -j1
 	find $(PREFIX)/lib/python$(PYTHON_VERSION) -type f -name "*.pyc" -delete
+	find $(PREFIX)/lib/python$(PYTHON_VERSION) -type d -name "config-$(PYTHON_VERSION)-*" -exec rm -r {} +
 	touch $(LIBDYLIB)
 	touch $@
 
 clean:
-	rm -rf .installed-$(PLATFORM)
+	rm -rf .installed-$(PLATFORM) .configured-$(PLATFORM)
 
 distclean::
-	rm -rf $(PLATFORM) .installed-$(PLATFORM)
+	rm -rf $(PLATFORM) .installed-$(PLATFORM) .configured-$(PLATFORM)

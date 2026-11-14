@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2010-2018 Team Kodi
+ *  Copyright (C) 2010-2026 Team Kodi
  *  This file is part of Kodi - https://kodi.tv
  *
  *  SPDX-License-Identifier: GPL-2.0-or-later
@@ -9,10 +9,14 @@
 #include "ActiveAESink.h"
 
 #include "ActiveAE.h"
+#include "ServiceBroker.h"
 #include "cores/AudioEngine/AEResampleFactory.h"
+#include "cores/AudioEngine/Sinks/AESinkNULL.h"
 #include "cores/AudioEngine/Utils/AEBitstreamPacker.h"
 #include "cores/AudioEngine/Utils/AEStreamInfo.h"
 #include "cores/AudioEngine/Utils/AEUtil.h"
+#include "settings/Settings.h"
+#include "settings/SettingsComponent.h"
 #include "utils/EndianSwap.h"
 #include "utils/MemUtils.h"
 #include "utils/log.h"
@@ -25,25 +29,27 @@ using namespace AE;
 using namespace ActiveAE;
 using namespace std::chrono_literals;
 
-CActiveAESink::CActiveAESink(CEvent *inMsgEvent) :
-  CThread("AESink"),
-  m_controlPort("SinkControlPort", inMsgEvent, &m_outMsgEvent),
-  m_dataPort("SinkDataPort", inMsgEvent, &m_outMsgEvent)
+CActiveAESink::CActiveAESink(CEvent* inMsgEvent)
+  : CThread("AESink"),
+    m_controlPort("SinkControlPort", inMsgEvent, &m_outMsgEvent),
+    m_dataPort("SinkDataPort", inMsgEvent, &m_outMsgEvent),
+    m_sink(nullptr),
+    m_packer(nullptr)
 {
   m_inMsgEvent = inMsgEvent;
-  m_sink = nullptr;
   m_stats = nullptr;
   m_volume = 0.0;
-  m_packer = nullptr;
   m_streamNoise = true;
 }
+
+CActiveAESink::~CActiveAESink() = default;
 
 void CActiveAESink::Start()
 {
   if (!IsRunning())
   {
     Create();
-    SetPriority(THREAD_PRIORITY_ABOVE_NORMAL);
+    SetPriority(ThreadPriority::ABOVE_NORMAL);
   }
 }
 
@@ -55,34 +61,25 @@ void CActiveAESink::Dispose()
   m_controlPort.Purge();
   m_dataPort.Purge();
 
-  if (m_sink)
-  {
-    m_sink->Drain();
-    m_sink->Deinitialize();
-    delete m_sink;
-    m_sink = nullptr;
-  }
+  CloseSink();
 
-  delete m_sampleOfSilence.pkt;
-  m_sampleOfSilence.pkt = nullptr;
+  m_sampleOfSilence.pkt.reset();
 
-  delete m_packer;
-  m_packer = nullptr;
+  m_packer.reset();
 
   CAESinkFactory::Cleanup();
 }
 
 AEDeviceType CActiveAESink::GetDeviceType(const std::string &device)
 {
-  std::string dev = device;
-  std::string dri;
-  CAESinkFactory::ParseDevice(dev, dri);
+  const AESinkDevice dev = CAESinkFactory::ParseDevice(device);
+
   for (auto itt = m_sinkInfoList.begin(); itt != m_sinkInfoList.end(); ++itt)
   {
     for (AEDeviceInfoList::iterator itt2 = itt->m_deviceInfoList.begin(); itt2 != itt->m_deviceInfoList.end(); ++itt2)
     {
       CAEDeviceInfo& info = *itt2;
-      if (info.m_deviceName == dev)
+      if (info.m_deviceName == dev.name)
         return info.m_deviceType;
     }
   }
@@ -105,18 +102,16 @@ bool CActiveAESink::HasPassthroughDevice()
 
 bool CActiveAESink::SupportsFormat(const std::string &device, AEAudioFormat &format)
 {
-  std::string dev = device;
-  std::string dri;
+  const AESinkDevice dev = CAESinkFactory::ParseDevice(device);
 
-  CAESinkFactory::ParseDevice(dev, dri);
   for (auto itt = m_sinkInfoList.begin(); itt != m_sinkInfoList.end(); ++itt)
   {
-    if (dri == itt->m_sinkName)
+    if (dev.driver == itt->m_sinkName)
     {
       for (auto itt2 = itt->m_deviceInfoList.begin(); itt2 != itt->m_deviceInfoList.end(); ++itt2)
       {
         CAEDeviceInfo& info = *itt2;
-        if (info.m_deviceName == dev)
+        if (info.m_deviceName == dev.name)
         {
           bool isRaw = format.m_dataFormat == AE_FMT_RAW;
           bool formatExists = false;
@@ -185,18 +180,20 @@ bool CActiveAESink::SupportsFormat(const std::string &device, AEAudioFormat &for
 
 bool CActiveAESink::NeedIECPacking()
 {
-  std::string dev = m_device;
-  std::string dri;
+  // the null sink only handles pcm, let a raw stream be packed for it
+  if (m_extReserved)
+    return true;
 
-  CAESinkFactory::ParseDevice(dev, dri);
+  const AESinkDevice dev = CAESinkFactory::ParseDevice(m_device);
+
   for (auto itt = m_sinkInfoList.begin(); itt != m_sinkInfoList.end(); ++itt)
   {
-    if (dri == itt->m_sinkName)
+    if (dev.driver == itt->m_sinkName)
     {
       for (auto itt2 = itt->m_deviceInfoList.begin(); itt2 != itt->m_deviceInfoList.end(); ++itt2)
       {
         CAEDeviceInfo& info = *itt2;
-        if (info.m_deviceName == dev)
+        if (info.m_deviceName == dev.name)
         {
           return info.m_wantsIECPassthrough;
         }
@@ -267,7 +264,7 @@ void CActiveAESink::StateMachine(int signal, Protocol *port, Message *msg)
             m_device = *(data->device);
           }
           m_extError = false;
-          m_extSilenceTimer.Set(0);
+          m_extSilenceTimer.Set(0ms);
           m_extStreaming = false;
           ReturnBuffers();
           OpenSink();
@@ -276,6 +273,7 @@ void CActiveAESink::StateMachine(int signal, Protocol *port, Message *msg)
           {
             SinkReply reply;
             reply.format = m_sinkFormat;
+            reply.device = &m_device;
             //! @todo
             //! use max raw packet size, for now use max size of an IEC packed packet
             //! maxIECPpacket > maxRawPacket
@@ -288,7 +286,7 @@ void CActiveAESink::StateMachine(int signal, Protocol *port, Message *msg)
             reply.latency = m_sink->GetLatency();
             reply.hasVolume = m_sink->HasVolume();
             m_state = S_TOP_CONFIGURED_IDLE;
-            m_extTimeout = 10000;
+            m_extTimeout = 10s;
             m_sinkLatency = (int64_t)(reply.latency * 1000);
             msg->Reply(CSinkControlProtocol::ACC, &reply, sizeof(SinkReply));
           }
@@ -301,34 +299,55 @@ void CActiveAESink::StateMachine(int signal, Protocol *port, Message *msg)
 
         case CSinkControlProtocol::UNCONFIGURE:
           ReturnBuffers();
-          if (m_sink)
-          {
-            m_sink->Drain();
-            m_sink->Deinitialize();
-            delete m_sink;
-            m_sink = nullptr;
-          }
+          CloseSink();
           m_state = S_TOP_UNCONFIGURED;
           msg->Reply(CSinkControlProtocol::ACC);
           return;
 
         case CSinkControlProtocol::FLUSH:
           ReturnBuffers();
+          // Only discards device audio when asked to, as on a stream flush or pause.
+          if (m_sink && *reinterpret_cast<const bool*>(msg->data))
+            m_sink->Flush();
           msg->Reply(CSinkControlProtocol::ACC);
           return;
 
         case CSinkControlProtocol::APPFOCUSED:
           m_extAppFocused = *(bool*)msg->data;
           SetSilenceTimer();
-          m_extTimeout = 0;
+          m_extTimeout = 0ms;
           return;
+
+        case CSinkControlProtocol::RESERVE:
+        {
+          const bool reserve = *reinterpret_cast<bool*>(msg->data);
+          if (reserve != m_extReserved)
+          {
+            m_extReserved = reserve;
+            CloseSink(false);
+            if (m_state == S_TOP_CONFIGURED_IDLE || m_state == S_TOP_CONFIGURED_PLAY ||
+                m_state == S_TOP_CONFIGURED_SILENCE)
+            {
+              m_state = S_TOP_CONFIGURED_SUSPEND;
+              m_extTimeout = 0ms;
+            }
+          }
+          msg->Reply(CSinkControlProtocol::ACC);
+          return;
+        }
 
         case CSinkControlProtocol::STREAMING:
           m_extStreaming = *(bool*)msg->data;
+          // A hold does not send STREAMING; the resume ending it does, as does a stop
+          m_fillerArmed = false;
+          return;
+
+        case CSinkControlProtocol::ARMFILLER:
+          m_fillerArmed = m_silenceFiller;
           return;
 
         case CSinkControlProtocol::SETSILENCETIMEOUT:
-          m_silenceTimeOut = *(int*)msg->data;
+          m_silenceTimeOut = std::chrono::minutes(*reinterpret_cast<int*>(msg->data));
           return;
 
         case CSinkControlProtocol::SETNOISETYPE:
@@ -346,7 +365,7 @@ void CActiveAESink::StateMachine(int signal, Protocol *port, Message *msg)
         case CSinkDataProtocol::DRAIN:
           msg->Reply(CSinkDataProtocol::ACC);
           m_state = S_TOP_UNCONFIGURED;
-          m_extTimeout = 0;
+          m_extTimeout = 0ms;
           return;
         default:
           break;
@@ -366,7 +385,7 @@ void CActiveAESink::StateMachine(int signal, Protocol *port, Message *msg)
         switch (signal)
         {
         case CSinkControlProtocol::TIMEOUT:
-          m_extTimeout = 1000;
+          m_extTimeout = 1000ms;
           return;
         default:
           break;
@@ -382,7 +401,7 @@ void CActiveAESink::StateMachine(int signal, Protocol *port, Message *msg)
           CThread::Sleep(std::chrono::milliseconds(1000 * samples->pkt->nb_samples /
                                                    samples->pkt->config.sample_rate));
           msg->Reply(CSinkDataProtocol::RETURNSAMPLE, &samples, sizeof(CSampleBuffer*));
-          m_extTimeout = 0;
+          m_extTimeout = 0ms;
           return;
         default:
           break;
@@ -397,12 +416,13 @@ void CActiveAESink::StateMachine(int signal, Protocol *port, Message *msg)
         {
         case CSinkControlProtocol::STREAMING:
           m_extStreaming = *(bool*)msg->data;
+          m_fillerArmed = false;
           SetSilenceTimer();
           if (!m_extSilenceTimer.IsTimePast())
           {
             m_state = S_TOP_CONFIGURED_SILENCE;
           }
-          m_extTimeout = 0;
+          m_extTimeout = 0ms;
           return;
         case CSinkControlProtocol::VOLUME:
           m_volume = *(float*)msg->data;
@@ -431,7 +451,7 @@ void CActiveAESink::StateMachine(int signal, Protocol *port, Message *msg)
           m_sink->Drain();
           msg->Reply(CSinkDataProtocol::ACC);
           m_state = S_TOP_CONFIGURED_IDLE;
-          m_extTimeout = 10000;
+          m_extTimeout = 10s;
           return;
         case CSinkDataProtocol::SAMPLE:
           CSampleBuffer *samples;
@@ -442,15 +462,14 @@ void CActiveAESink::StateMachine(int signal, Protocol *port, Message *msg)
           if (m_extError)
           {
             m_sink->Deinitialize();
-            delete m_sink;
-            m_sink = nullptr;
+            m_sink.reset();
             m_state = S_TOP_CONFIGURED_SUSPEND;
-            m_extTimeout = 0;
+            m_extTimeout = 0ms;
           }
           else
           {
             m_state = S_TOP_CONFIGURED_PLAY;
-            m_extTimeout = delay / 2;
+            m_extTimeout = std::chrono::milliseconds(delay / 2);
             m_extSilenceTimer.Set(m_extSilenceTimeout);
           }
           return;
@@ -467,8 +486,9 @@ void CActiveAESink::StateMachine(int signal, Protocol *port, Message *msg)
         {
         case CSinkControlProtocol::STREAMING:
           m_extStreaming = *(bool*)msg->data;
+          m_fillerArmed = false;
           SetSilenceTimer();
-          m_extTimeout = 0;
+          m_extTimeout = 0ms;
           return;
         case CSinkControlProtocol::VOLUME:
           m_volume = *(float*)msg->data;
@@ -488,7 +508,7 @@ void CActiveAESink::StateMachine(int signal, Protocol *port, Message *msg)
           {
             OutputSamples(&m_sampleOfSilence);
             m_state = S_TOP_CONFIGURED_PLAY;
-            m_extTimeout = 0;
+            m_extTimeout = 0ms;
             m_bStateMachineSelfTrigger = true;
           }
           else
@@ -508,7 +528,7 @@ void CActiveAESink::StateMachine(int signal, Protocol *port, Message *msg)
         switch (signal)
         {
         case CSinkControlProtocol::TIMEOUT:
-          m_extTimeout = 10000;
+          m_extTimeout = 10s;
           return;
         default:
           break;
@@ -524,7 +544,7 @@ void CActiveAESink::StateMachine(int signal, Protocol *port, Message *msg)
         case CSinkDataProtocol::SAMPLE:
           OutputSamples(&m_sampleOfSilence);
           m_state = S_TOP_CONFIGURED_PLAY;
-          m_extTimeout = 0;
+          m_extTimeout = 0ms;
           m_bStateMachineSelfTrigger = true;
           return;
         default:
@@ -537,10 +557,9 @@ void CActiveAESink::StateMachine(int signal, Protocol *port, Message *msg)
         {
         case CSinkControlProtocol::TIMEOUT:
           m_sink->Deinitialize();
-          delete m_sink;
-          m_sink = nullptr;
+          m_sink.reset();
           m_state = S_TOP_CONFIGURED_SUSPEND;
-          m_extTimeout = 10000;
+          m_extTimeout = 10s;
           return;
         default:
           break;
@@ -557,16 +576,16 @@ void CActiveAESink::StateMachine(int signal, Protocol *port, Message *msg)
           if (!m_extSilenceTimer.IsTimePast())
           {
             m_state = S_TOP_CONFIGURED_SILENCE;
-            m_extTimeout = 0;
+            m_extTimeout = 0ms;
           }
           else
           {
             m_sink->Drain();
             m_state = S_TOP_CONFIGURED_IDLE;
             if (m_extAppFocused)
-              m_extTimeout = 10000;
+              m_extTimeout = 10s;
             else
-              m_extTimeout = 0;
+              m_extTimeout = 0ms;
           }
           return;
         default:
@@ -585,13 +604,12 @@ void CActiveAESink::StateMachine(int signal, Protocol *port, Message *msg)
           if (m_extError)
           {
             m_sink->Deinitialize();
-            delete m_sink;
-            m_sink = nullptr;
+            m_sink.reset();
             m_state = S_TOP_CONFIGURED_SUSPEND;
           }
           else
             m_state = S_TOP_CONFIGURED_PLAY;
-          m_extTimeout = 0;
+          m_extTimeout = 0ms;
           return;
         default:
           break;
@@ -606,17 +624,23 @@ void CActiveAESink::StateMachine(int signal, Protocol *port, Message *msg)
   } // for
 }
 
+void CActiveAESink::OnStartup()
+{
+  SetTask(ThreadTask::AUDIO);
+}
+
 void CActiveAESink::Process()
 {
   Message *msg = nullptr;
   Protocol *port = nullptr;
   bool gotMsg;
-  XbmcThreads::EndTime timer;
+  XbmcThreads::EndTime<> timer;
 
   m_state = S_TOP_UNCONFIGURED;
-  m_extTimeout = 1000;
+  m_extTimeout = 1000ms;
   m_bStateMachineSelfTrigger = false;
   m_extAppFocused = true;
+  m_extReserved = false;
 
   while (!m_bStop)
   {
@@ -660,9 +684,9 @@ void CActiveAESink::Process()
     }
 
     // wait for message
-    else if (m_outMsgEvent.Wait(std::chrono::milliseconds(m_extTimeout)))
+    else if (m_outMsgEvent.Wait(m_extTimeout))
     {
-      m_extTimeout = timer.MillisLeft();
+      m_extTimeout = timer.GetTimeLeft();
       continue;
     }
     // time out
@@ -680,6 +704,11 @@ void CActiveAESink::Process()
       }
     }
   }
+}
+
+void CActiveAESink::OnExit()
+{
+  RevertTask();
 }
 
 void CActiveAESink::EnumerateSinkList(bool force, std::string driver)
@@ -738,6 +767,116 @@ void CActiveAESink::PrintSinks(std::string& driver)
   }
 }
 
+std::string CActiveAESink::ValidateOuputDevice(const std::string& device, bool passthrough) const
+{
+  if (m_sinkInfoList.empty())
+    return {};
+
+  const AESinkDevice dev = CAESinkFactory::ParseDevice(device);
+
+  // find exact match of deviceName in same driver
+  if (!dev.driver.empty() && !dev.name.empty())
+  {
+    for (const auto& sink : m_sinkInfoList)
+    {
+      if (sink.m_sinkName != dev.driver)
+        continue;
+
+      for (const auto& d : sink.m_deviceInfoList)
+      {
+        if (passthrough && (d.m_deviceType == AE_DEVTYPE_PCM || d.m_onlyPCM))
+          continue;
+
+        if (!passthrough && d.m_onlyPassthrough)
+          continue;
+
+        if (d.m_deviceName == dev.name)
+          return d.ToDeviceString(sink.m_sinkName);
+      }
+    }
+  }
+
+  // find same friendly name on other device in same driver
+  if (!dev.driver.empty() && !dev.friendlyName.empty())
+  {
+    for (const auto& sink : m_sinkInfoList)
+    {
+      if (sink.m_sinkName != dev.driver)
+        continue;
+
+      for (const auto& d : sink.m_deviceInfoList)
+      {
+        if (passthrough && (d.m_deviceType == AE_DEVTYPE_PCM || d.m_onlyPCM))
+          continue;
+
+        if (!passthrough && d.m_onlyPassthrough)
+          continue;
+
+        if (d.GetFriendlyName() == dev.friendlyName)
+          return d.ToDeviceString(sink.m_sinkName);
+      }
+    }
+  }
+
+  std::string firstDevice;
+
+  // find default device of same driver or first device of same driver
+  if (!dev.driver.empty())
+  {
+    for (const auto& sink : m_sinkInfoList)
+    {
+      if (sink.m_sinkName != dev.driver)
+        continue;
+
+      for (const auto& d : sink.m_deviceInfoList)
+      {
+        if (passthrough && (d.m_deviceType == AE_DEVTYPE_PCM || d.m_onlyPCM))
+          continue;
+
+        if (!passthrough && d.m_onlyPassthrough)
+          continue;
+
+        if (firstDevice.empty())
+          firstDevice = d.ToDeviceString(sink.m_sinkName);
+
+        if (d.m_deviceName.find("default") != std::string::npos)
+          return d.ToDeviceString(sink.m_sinkName);
+      }
+
+      if (!firstDevice.empty())
+        break;
+    }
+  }
+
+  // return first device of same driver
+  if (!firstDevice.empty())
+    return firstDevice;
+
+  firstDevice.clear();
+
+  // find the default of any driver or first of any driver
+  for (const auto& sink : m_sinkInfoList)
+  {
+    for (const auto& d : sink.m_deviceInfoList)
+    {
+      if (passthrough && (d.m_deviceType == AE_DEVTYPE_PCM || d.m_onlyPCM))
+        continue;
+
+      if (!passthrough && d.m_onlyPassthrough)
+        continue;
+
+      if (firstDevice.empty())
+        firstDevice = d.ToDeviceString(sink.m_sinkName);
+
+      if (d.m_deviceName.find("default") != std::string::npos)
+        return d.ToDeviceString(sink.m_sinkName);
+    }
+  }
+
+  // return first device of any driver or empty
+  return firstDevice;
+}
+
 void CActiveAESink::EnumerateOutputDevices(AEDeviceList &devices, bool passthrough)
 {
   EnumerateSinkList(false, "");
@@ -747,11 +886,20 @@ void CActiveAESink::EnumerateOutputDevices(AEDeviceList &devices, bool passthrou
     AESinkInfo sinkInfo = *itt;
     for (AEDeviceInfoList::iterator itt2 = sinkInfo.m_deviceInfoList.begin(); itt2 != sinkInfo.m_deviceInfoList.end(); ++itt2)
     {
-      CAEDeviceInfo devInfo = *itt2;
+      const CAEDeviceInfo& devInfo = *itt2;
       if (passthrough && devInfo.m_deviceType == AE_DEVTYPE_PCM)
         continue;
 
-      std::string device = sinkInfo.m_sinkName + ":" + devInfo.m_deviceName;
+      // filters devices that should not be shown in the list
+      // of AUDIO DEVICES or AUDIO PASSTHROUGH DEVICES
+      // according to the capabilities informed by each sink
+      if (devInfo.m_onlyPassthrough && !passthrough)
+        continue;
+
+      if (devInfo.m_onlyPCM && passthrough)
+        continue;
+
+      const std::string device = devInfo.ToDeviceString(sinkInfo.m_sinkName);
 
       std::stringstream ss;
 
@@ -763,12 +911,12 @@ void CActiveAESink::EnumerateOutputDevices(AEDeviceList &devices, bool passthrou
       if (!devInfo.m_displayNameExtra.empty())
         ss << ", " << devInfo.m_displayNameExtra;
 
-      devices.push_back(AEDevice(ss.str(), device));
+      devices.emplace_back(ss.str(), device);
     }
   }
 }
 
-void CActiveAESink::GetDeviceFriendlyName(std::string &device)
+void CActiveAESink::GetDeviceFriendlyName(const std::string& device)
 {
   m_deviceFriendlyName = "Device not found";
   /* Match the device and find its friendly name */
@@ -789,15 +937,12 @@ void CActiveAESink::GetDeviceFriendlyName(std::string &device)
 
 void CActiveAESink::OpenSink()
 {
-  // we need a copy of m_device here because ParseDevice and CreateDevice write back
-  // into this variable
-  std::string device = m_device;
-  std::string driver;
   bool passthrough = (m_requestedFormat.m_dataFormat == AE_FMT_RAW);
 
-  CAESinkFactory::ParseDevice(device, driver);
-  if (driver.empty() && m_sink)
-    driver = m_sink->GetName();
+  AESinkDevice dev = CAESinkFactory::ParseDevice(m_device);
+
+  if (dev.driver.empty() && m_sink)
+    dev.driver = m_sink->GetName();
 
   // iec packing or raw
   if (passthrough)
@@ -805,53 +950,60 @@ void CActiveAESink::OpenSink()
     m_needIecPack = NeedIECPacking();
     if (m_needIecPack)
     {
-      m_packer = new CAEBitstreamPacker();
+      m_packer = std::make_unique<CAEBitstreamPacker>();
       m_requestedFormat.m_sampleRate = CAEBitstreamPacker::GetOutputRate(m_requestedFormat.m_streamInfo);
       m_requestedFormat.m_channelLayout = CAEBitstreamPacker::GetOutputChannelMap(m_requestedFormat.m_streamInfo);
     }
   }
 
-  CLog::Log(LOGINFO, "CActiveAESink::OpenSink - initialize sink");
+  CLog::LogF(LOGINFO, "initialize sink");
 
-  if (m_sink)
-  {
-    m_sink->Drain();
-    m_sink->Deinitialize();
-    delete m_sink;
-    m_sink = nullptr;
-  }
+  CloseSink();
 
   // get the display name of the device
-  GetDeviceFriendlyName(device);
+  GetDeviceFriendlyName(dev.name);
 
   // if we already have a driver, prepend it to the device string
-  if (!driver.empty())
-    device = driver + ":" + device;
+  std::string device = dev.driver.empty() ? dev.name : dev.driver + ":" + dev.name;
 
   // WARNING: this changes format and does not use passthrough
   m_sinkFormat = m_requestedFormat;
-  CLog::Log(LOGDEBUG, "CActiveAESink::OpenSink - trying to open device {}", device);
-  m_sink = CAESinkFactory::Create(device, m_sinkFormat);
 
-  // try first device in out list
-  if (!m_sink && !m_sinkInfoList.empty())
+  if (m_extReserved)
   {
-    driver = m_sinkInfoList.front().m_sinkName;
-    device = m_sinkInfoList.front().m_deviceInfoList.front().m_deviceName;
-    GetDeviceFriendlyName(device);
-    if (!driver.empty())
-      device = driver + ":" + device;
-    m_sinkFormat = m_requestedFormat;
-    CLog::Log(LOGDEBUG, "CActiveAESink::OpenSink - trying to open device {}", device);
+    CLog::LogF(LOGDEBUG, "device {} is reserved, discarding output", device);
+    auto nullSink = std::make_unique<CAESinkNULL>(m_reservedCacheTotal, m_reservedLatency);
+    if (nullSink->Initialize(m_sinkFormat, device))
+      m_sink = std::move(nullSink);
+  }
+  else
+  {
+    CLog::LogF(LOGDEBUG, "trying to open device {}", device);
     m_sink = CAESinkFactory::Create(device, m_sinkFormat);
+
+    // try first device in out list
+    if (!m_sink && !m_sinkInfoList.empty())
+    {
+      dev.driver = m_sinkInfoList.front().m_sinkName;
+      dev.name = m_sinkInfoList.front().m_deviceInfoList.front().m_deviceName;
+      GetDeviceFriendlyName(dev.name);
+      device = dev.driver.empty() ? dev.name : dev.driver + ":" + dev.name;
+      m_sinkFormat = m_requestedFormat;
+      CLog::LogF(LOGDEBUG, "trying to open device {}", device);
+      m_sink = CAESinkFactory::Create(device, m_sinkFormat);
+    }
   }
 
   if (!m_sink)
   {
-    CLog::Log(LOGERROR, "CActiveAESink::OpenSink - no sink was returned");
+    CLog::LogF(LOGERROR, "no sink was returned");
     m_extError = true;
     return;
   }
+
+  m_device = device;
+  const AESinkDevice openedDevice = CAESinkFactory::ParseDevice(m_device);
+  GetDeviceFriendlyName(openedDevice.name);
 
   m_sink->SetVolume(m_volume);
 
@@ -867,7 +1019,13 @@ void CActiveAESink::OpenSink()
     m_sinkFormat.m_dataFormat = AE_FMT_S32NE;
 #endif
 
-  CLog::Log(LOGDEBUG, "CActiveAESink::OpenSink - {} Initialized:", m_sink->GetName());
+  if (!m_extReserved)
+  {
+    m_reservedCacheTotal = std::chrono::duration<double>(m_sink->GetCacheTotal());
+    m_reservedLatency = std::chrono::duration<double>(m_sink->GetLatency());
+  }
+
+  CLog::LogF(LOGDEBUG, "{} Initialized:", m_sink->GetName());
   CLog::Log(LOGDEBUG, "  Output Device : {}", m_deviceFriendlyName);
   CLog::Log(LOGDEBUG, "  Sample Rate   : {}", m_sinkFormat.m_sampleRate);
   CLog::Log(LOGDEBUG, "  Sample Format : {}", CAEUtil::DataFormatToStr(m_sinkFormat.m_dataFormat));
@@ -886,8 +1044,7 @@ void CActiveAESink::OpenSink()
   config.sample_rate = m_sinkFormat.m_sampleRate;
 
   // init sample of silence/noise
-  delete m_sampleOfSilence.pkt;
-  m_sampleOfSilence.pkt = new CSoundPacket(config, m_sinkFormat.m_frames);
+  m_sampleOfSilence.pkt = std::make_unique<CSoundPacket>(config, m_sinkFormat.m_frames);
   m_sampleOfSilence.pkt->nb_samples = m_sampleOfSilence.pkt->max_nb_samples;
   if (!passthrough)
     GenerateNoise();
@@ -897,7 +1054,24 @@ void CActiveAESink::OpenSink()
     m_sampleOfSilence.pkt->pause_burst_ms = m_sinkFormat.m_streamInfo.GetDuration();
   }
 
+  const auto settingsComponent = CServiceBroker::GetSettingsComponent();
+  const auto settings = settingsComponent ? settingsComponent->GetSettings() : nullptr;
+  m_silenceFiller = passthrough && settings && settings->GetBool("audiooutput.silencefiller");
+  m_fillerArmed = false;
+
   m_swapState = CHECK_SWAP;
+}
+
+void CActiveAESink::CloseSink(const bool drain)
+{
+  if (!m_sink)
+    return;
+
+  if (drain)
+    m_sink->Drain();
+
+  m_sink->Deinitialize();
+  m_sink.reset();
 }
 
 void CActiveAESink::ReturnBuffers()
@@ -924,7 +1098,6 @@ unsigned int CActiveAESink::OutputSamples(CSampleBuffer* samples)
   unsigned int maxFrames;
   int retry = 0;
   unsigned int written = 0;
-  uint8_t* p_mergeBuffer = nullptr;
   AEDelayStatus status;
 
   if (m_requestedFormat.m_dataFormat == AE_FMT_RAW)
@@ -935,34 +1108,24 @@ unsigned int CActiveAESink::OutputSamples(CSampleBuffer* samples)
       if (frames > 0)
       {
         m_packer->Reset();
-        if (m_sinkFormat.m_streamInfo.m_type == CAEStreamInfo::STREAM_TYPE_TRUEHD)
-        {
-          if (frames == 61440)
-          {
-            for (int i = 0, of = 0; i < 12; i++)
-            {
-              // calculates length of each audio unit using raw data of stream
-              const uint16_t len = ((*(buffer[0] + of) & 0x0F) << 8 | *(buffer[0] + of + 1)) << 1;
-
-              m_packer->Pack(m_sinkFormat.m_streamInfo, buffer[0] + of, len);
-              of += len;
-            }
-          }
-          else
-          {
-            m_extError = true;
-            CLog::Log(LOGERROR, "CActiveAESink::OutputSamples - incomplete TrueHD buffer");
-            return 0;
-          }
-        }
-        else
-          m_packer->Pack(m_sinkFormat.m_streamInfo, buffer[0], frames);
+        m_packer->Pack(m_sinkFormat.m_streamInfo, buffer[0], frames);
+        // Content is the hold over.
+        m_fillerArmed = false;
       }
       else if (samples->pkt->pause_burst_ms > 0)
       {
         // construct a pause burst if we have already output valid audio
         bool burst = m_extStreaming && (m_packer->GetBuffer()[0] != 0);
-        if (!m_packer->PackPause(m_sinkFormat.m_streamInfo, samples->pkt->pause_burst_ms, burst))
+        // Sync gaps request arbitrary lengths and stay as pause bursts.
+        bool filled = false;
+        const bool wholeFrame = samples->pkt->pause_burst_ms ==
+                                static_cast<int>(m_sinkFormat.m_streamInfo.GetDuration());
+        // Only during a hold: repeating a burst across any other gap is audible.
+        if (m_silenceFiller && m_fillerArmed && wholeFrame)
+          filled = m_packer->PackLastBurst();
+        // Not skipSwap: the retained burst is copied in fresh and still needs it.
+        if (!filled &&
+            !m_packer->PackPause(m_sinkFormat.m_streamInfo, samples->pkt->pause_burst_ms, burst))
           skipSwap = true;
       }
       else
@@ -993,28 +1156,6 @@ unsigned int CActiveAESink::OutputSamples(CSampleBuffer* samples)
     }
     else // Android IEC packer (RAW)
     {
-      if (m_sinkFormat.m_streamInfo.m_type == CAEStreamInfo::STREAM_TYPE_TRUEHD && frames == 61440)
-      {
-        if (m_mergeBuffer.empty())
-          m_mergeBuffer.resize(MAX_IEC61937_PACKET);
-
-        p_mergeBuffer = m_mergeBuffer.data();
-        unsigned int size = 0;
-
-        for (int i = 0, of = 0; i < 24; i++)
-        {
-          // calculates length of each audio unit using raw data of stream
-          const uint16_t len = ((*(buffer[0] + of) & 0x0F) << 8 | *(buffer[0] + of + 1)) << 1;
-
-          memcpy(m_mergeBuffer.data() + of, buffer[0] + of, len);
-          size += len;
-          of += len;
-        }
-
-        buffer = &p_mergeBuffer;
-        totalFrames = size / m_sinkFormat.m_frameSize; // m_frameSize = 1
-        frames = totalFrames;
-      }
       if (samples->pkt->pause_burst_ms > 0)
       {
         m_sink->AddPause(samples->pkt->pause_burst_ms);
@@ -1070,7 +1211,14 @@ unsigned int CActiveAESink::OutputSamples(CSampleBuffer* samples)
   }
 
   if (m_requestedFormat.m_dataFormat == AE_FMT_RAW)
+  {
+    // A packet dropped for a/v sync has no frames and never enters the loop above. Query the
+    // sink anyway, otherwise the engine is told the sink holds no audio at all and the next
+    // sync error measurements are off by the whole sink delay.
+    if (!m_needIecPack && totalFrames == 0)
+      m_sink->GetDelay(status);
     m_stats->UpdateSinkDelay(status, samples->pool ? 1 : 0);
+  }
 
   return status.delay * 1000;
 }
@@ -1116,7 +1264,8 @@ void CActiveAESink::GenerateNoise()
   }
 
   SampleConfig config = m_sampleOfSilence.pkt->config;
-  IAEResample *resampler = CAEResampleFactory::Create(AERESAMPLEFACTORY_QUICK_RESAMPLE);
+  std::unique_ptr<IAEResample> resampler =
+      CAEResampleFactory::Create(AERESAMPLEFACTORY_QUICK_RESAMPLE);
 
   SampleConfig dstConfig, srcConfig;
   dstConfig.channel_layout = config.channel_layout;
@@ -1133,24 +1282,33 @@ void CActiveAESink::GenerateNoise()
   srcConfig.bits_per_sample = CAEUtil::DataFormatToUsedBits(m_sinkFormat.m_dataFormat);
   srcConfig.dither_bits = CAEUtil::DataFormatToDitherBits(m_sinkFormat.m_dataFormat);
 
-  resampler->Init(dstConfig, srcConfig,
-                  false, false, M_SQRT1_2, nullptr, AE_QUALITY_UNKNOWN, false);
+  resampler->Init(dstConfig, srcConfig, false, false, M_SQRT1_2, nullptr, AE_QUALITY_UNKNOWN, false,
+                  0.0);
 
   resampler->Resample(m_sampleOfSilence.pkt->data, m_sampleOfSilence.pkt->max_nb_samples,
                      (uint8_t**)&noise, m_sampleOfSilence.pkt->max_nb_samples, 1.0);
 
   KODI::MEMORY::AlignedFree(noise);
-  delete resampler;
 }
 
 void CActiveAESink::SetSilenceTimer()
 {
   if (m_extStreaming)
-    m_extSilenceTimeout = std::numeric_limits<unsigned int>::max();
-  else if (m_extAppFocused)
-    m_extSilenceTimeout = m_silenceTimeOut;
+    m_extSilenceTimeout = XbmcThreads::EndTime<decltype(m_extSilenceTimeout)>::Max();
+  else if (m_extAppFocused) // handles no playback/GUI and playback in pause and seek
+  {
+    // only true with AudioTrack RAW + passthrough + DTSHD formats
+    const bool noSilenceOnPause =
+        !m_needIecPack && m_requestedFormat.m_dataFormat == AE_FMT_RAW &&
+        (m_sinkFormat.m_streamInfo.m_type == CAEStreamInfo::STREAM_TYPE_DTSHD_MA ||
+         m_sinkFormat.m_streamInfo.m_type == CAEStreamInfo::STREAM_TYPE_DTSHD);
+
+    m_extSilenceTimeout = (noSilenceOnPause) ? 0ms : m_silenceTimeOut;
+  }
   else
-    m_extSilenceTimeout = 0;
+  {
+    m_extSilenceTimeout = 0ms;
+  }
 
   m_extSilenceTimer.Set(m_extSilenceTimeout);
 }

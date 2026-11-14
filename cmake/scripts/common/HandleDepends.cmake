@@ -19,7 +19,7 @@ function(add_addon_depends addon searchpath)
     if(NOT (file MATCHES CMakeLists.txt OR
             file MATCHES install.txt OR
             file MATCHES noinstall.txt OR
-            file MATCHES flags.txt OR
+            file MATCHES "flags.*[.]txt" OR
             file MATCHES deps.txt OR
             file MATCHES "[a-z]+-deps[.]txt" OR
             file MATCHES platforms.txt))
@@ -59,6 +59,15 @@ function(add_addon_depends addon searchpath)
           message(STATUS "${id} extraflags: ${extraflags}")
         endif()
 
+        if(EXISTS ${dir}/flags-${CPU}.txt)
+          set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${dir}/flags-${CPU}.txt)
+          file(STRINGS ${dir}/flags-${CPU}.txt archextraflags)
+          string(REPLACE " " ";" archextraflags ${archextraflags})
+
+          message(STATUS "${id} ${CPU} extraflags: ${archextraflags}")
+          list(APPEND extraflags ${archextraflags})
+        endif()
+
         set(BUILD_ARGS -DCMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}
                        -DOUTPUT_DIR=${OUTPUT_DIR}
                        -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
@@ -70,15 +79,25 @@ function(add_addon_depends addon searchpath)
                        -DBUILD_SHARED_LIBS=0)
         # windows args
         if (CMAKE_SYSTEM_NAME STREQUAL WindowsStore OR CMAKE_SYSTEM_NAME STREQUAL Windows)
-          list(APPEND BUILD_ARGS -DCMAKE_SYSTEM_NAME=${CMAKE_SYSTEM_NAME}
-                                 -DCMAKE_SYSTEM_VERSION=${CMAKE_SYSTEM_VERSION})
+          list(APPEND BUILD_ARGS -DCMAKE_SYSTEM_NAME=${CMAKE_SYSTEM_NAME})
+          if(ADDON_SYSTEM_PROCESSOR AND NOT CMAKE_TOOLCHAIN_FILE)
+            list(APPEND BUILD_ARGS -DCMAKE_SYSTEM_PROCESSOR=${ADDON_SYSTEM_PROCESSOR})
+          endif()
+          list(APPEND BUILD_ARGS -DCMAKE_SYSTEM_VERSION=${CMAKE_SYSTEM_VERSION})
         endif()
         # if there are no make rules override files available take care of manually passing on ARCH_DEFINES
         if(NOT CMAKE_USER_MAKE_RULES_OVERRIDE AND NOT CMAKE_USER_MAKE_RULES_OVERRIDE_CXX)
           # make sure we create strings, not lists
           set(TMP_C_FLAGS "${CMAKE_C_FLAGS} ${ARCH_DEFINES}")
           set(TMP_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${ARCH_DEFINES}")
-          set(TMP_EXE_LINKER_FLAGS "-L${OUTPUT_DIR}/lib ${CMAKE_EXE_LINKER_FLAGS}")
+          if(MSVC)
+            set(TMP_EXE_LINKER_FLAGS "/LIBPATH:${OUTPUT_DIR}/lib ${CMAKE_EXE_LINKER_FLAGS}")
+          else()
+            set(TMP_EXE_LINKER_FLAGS "-L${OUTPUT_DIR}/lib ${CMAKE_EXE_LINKER_FLAGS}")
+          endif()
+          if(MSVC AND CMAKE_SYSTEM_NAME STREQUAL WindowsStore)
+            string(APPEND TMP_C_FLAGS " /wd4146 /wd4996")
+          endif()
           list(APPEND BUILD_ARGS -DCMAKE_C_FLAGS=${TMP_C_FLAGS}
                                  -DCMAKE_CXX_FLAGS=${TMP_CXX_FLAGS}
                                  -DCMAKE_EXE_LINKER_FLAGS=${TMP_EXE_LINKER_FLAGS})
@@ -88,6 +107,12 @@ function(add_addon_depends addon searchpath)
           list(APPEND BUILD_ARGS -DCMAKE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE})
           message("toolchain specified")
           message(${BUILD_ARGS})
+        endif()
+
+        if(ADDON_EXTRA_ARGS)
+          string(REPLACE " " ";" ADDON_EXTRA_ARGS ${ADDON_EXTRA_ARGS})
+          list(APPEND BUILD_ARGS ${ADDON_EXTRA_ARGS})
+          message("Addon Extra Args: ${ADDON_EXTRA_ARGS}")
         endif()
 
         # used for addons where need special folders to store there content (if
@@ -113,33 +138,50 @@ function(add_addon_depends addon searchpath)
         file(GLOB patches ${dir}/*.patch)
         list(SORT patches)
         foreach(patch ${patches})
+          set(patch_program ${PATCH_PROGRAM})
           if(NOT PATCH_PROGRAM OR "${PATCH_PROGRAM}" STREQUAL "")
             if(NOT PATCH_EXECUTABLE)
               # find the path to the patch executable
-              find_program(PATCH_EXECUTABLE NAMES patch)
 
+              if(WIN32)
+                # On Windows prioritize Git patch.exe
+                find_package(Git)
+                if(Git_FOUND)
+                  get_filename_component(GIT_DIR ${GIT_EXECUTABLE} DIRECTORY)
+                  get_filename_component(GIT_DIR ${GIT_DIR} DIRECTORY)
+                endif()
+                find_program(PATCH_EXECUTABLE NAMES patch.exe HINTS ${GIT_DIR} PATH_SUFFIXES usr/bin)
+              else()
+                find_program(PATCH_EXECUTABLE NAMES patch)
+              endif()
               if(NOT PATCH_EXECUTABLE)
                 message(FATAL_ERROR "Missing patch command (we looked in ${CMAKE_PREFIX_PATH})")
               endif()
             endif()
 
-            set(PATCH_PROGRAM ${PATCH_EXECUTABLE})
+            set(patch_program ${PATCH_EXECUTABLE})
 
-            # On Windows "patch.exe" can only handle CR-LF line-endings.
-            # Our patches have LF-only line endings - except when they
-            # have been checked out as part of a dependency hosted on Git
-            # and core.autocrlf=true.
+            # On Windows "patch.exe" converts line endings unless --binary is
+            # used. Do not use --binary for CRLF-only patches, such as patches
+            # checked out with core.autocrlf=true.
             if(WIN32)
               file(READ ${patch} patch_content_hex HEX)
-              # Force handle LF-only line endings
-              if(NOT patch_content_hex MATCHES "0d0a")
-                list(APPEND PATCH_PROGRAM --binary)
-              endif()
+              # Split into exact bytes before looking for bare LF characters.
+              string(REGEX MATCHALL ".." patch_content_bytes "${patch_content_hex}")
+              set(previous_patch_byte "")
+              foreach(patch_byte IN LISTS patch_content_bytes)
+                # Force handling if any LF-only line endings remain
+                if("${patch_byte}" STREQUAL "0a" AND NOT "${previous_patch_byte}" STREQUAL "0d")
+                  list(APPEND patch_program --binary)
+                  break()
+                endif()
+                set(previous_patch_byte "${patch_byte}")
+              endforeach()
             endif()
           endif()
 
           set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${patch})
-          list(APPEND PATCH_COMMAND COMMAND ${PATCH_PROGRAM} -p1 -i ${patch})
+          list(APPEND PATCH_COMMAND COMMAND ${patch_program} -p1 -i ${patch})
         endforeach()
 
 
@@ -171,6 +213,13 @@ function(add_addon_depends addon searchpath)
           message(STATUS "${id} depends: ${deps}")
         else()
           set(deps)
+        endif()
+
+        if (EXISTS "${dir}/${CORE_PLATFORM_NAME}-deps.txt" AND NOT "${CORE_PLATFORM_NAME}" STREQUAL "${CORE_SYSTEM_NAME}")
+          set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${dir}/${CORE_PLATFORM_NAME}-deps.txt")
+          file(STRINGS "${dir}/${CORE_PLATFORM_NAME}-deps.txt" platform_deps)
+          message(STATUS "${id} platform-specific depends: ${platform_deps}")
+          list(APPEND deps ${platform_deps})
         endif()
 
         if(CROSS_AUTOCONF AND AUTOCONF_FILES)
@@ -246,7 +295,7 @@ function(add_addon_depends addon searchpath)
 
             externalproject_add(${id}
                                 URL ${url}
-                                "${URL_HASH_COMMAND}"
+                                ${URL_HASH_COMMAND}
                                 DOWNLOAD_DIR ${DOWNLOAD_DIR}
                                 CONFIGURE_COMMAND ${CONFIGURE_COMMAND}
                                 ${EXTERNALPROJECT_SETUP})

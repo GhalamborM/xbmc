@@ -10,6 +10,7 @@
 
 #include "ControllerTypes.h"
 #include "addons/IAddon.h"
+#include "threads/CriticalSection.h"
 
 #include <map>
 #include <set>
@@ -19,11 +20,14 @@ namespace KODI
 {
 namespace GAME
 {
+/*!
+ * \ingroup games
+ */
 class CControllerManager
 {
 public:
-  CControllerManager() = default;
-  ~CControllerManager() = default;
+  CControllerManager(ADDON::CAddonMgr& addonManager);
+  ~CControllerManager();
 
   /*!
    * \brief Get a controller
@@ -66,11 +70,30 @@ public:
    */
   ControllerVector GetControllers();
 
+  /*!
+   * \brief Translate a feature on a controller into its localized name
+   *
+   * \param controllerId The controller ID that the feature belongs to
+   * \param featureName The feature name
+   *
+   * \return The localized feature name, or empty if the controller or feature
+   *         doesn't exist
+   */
+  std::string TranslateFeature(const std::string& controllerId, const std::string& featureName);
+
 private:
+  // Utility functions
   ControllerPtr LoadController(const ADDON::AddonPtr& addon);
 
+  // Construction parameters
+  ADDON::CAddonMgr& m_addonManager;
+
+  // Controller state
   std::map<std::string, ControllerPtr> m_cache;
   std::set<std::string> m_failedControllers; // Controllers that failed to load
+
+  // Synchronization parameters
+  CCriticalSection m_mutex;
 };
 } // namespace GAME
 } // namespace KODI

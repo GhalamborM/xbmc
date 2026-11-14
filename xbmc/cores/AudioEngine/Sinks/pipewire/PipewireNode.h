@@ -8,44 +8,41 @@
 
 #pragma once
 
-#include "cores/AudioEngine/Sinks/pipewire/PipewireProxy.h"
+#include "PipewireProxy.h"
 
 #include <memory>
 #include <set>
 
 #include <pipewire/node.h>
+#include <spa/param/audio/iec958.h>
 #include <spa/param/audio/raw.h>
 
-namespace AE
-{
-namespace SINK
+namespace KODI
 {
 namespace PIPEWIRE
 {
 
 class CPipewire;
+class CPipewireRegistry;
 
 class CPipewireNode : public CPipewireProxy
 {
 public:
-  explicit CPipewireNode(pw_registry* registry, uint32_t id, const char* type);
+  explicit CPipewireNode(CPipewireRegistry& registry, uint32_t id, const char* type);
   CPipewireNode() = delete;
   ~CPipewireNode() override;
 
-  void AddListener(void* userdata) override;
+  bool HasInfo() const { return m_info != nullptr; }
 
-  void EnumerateFormats();
-
-  pw_node_info* GetInfo() { return m_info.get(); }
+  std::string Get(const std::string& key) const;
 
   std::set<spa_audio_format>& GetFormats() { return m_formats; }
   std::set<spa_audio_channel>& GetChannels() { return m_channels; }
   std::set<uint32_t>& GetRates() { return m_rates; }
-
-  CPipewire* GetPipewire() { return m_pipewire; }
+  std::set<spa_audio_iec958_codec>& GetIEC958Codecs() { return m_iec958Codecs; }
 
 private:
-  void Parse(uint32_t type, void* body, uint32_t size);
+  bool Parse(uint32_t type, void* body, uint32_t size);
 
   static void Info(void* userdata, const struct pw_node_info* info);
   static void Param(void* userdata,
@@ -71,10 +68,8 @@ private:
   std::set<spa_audio_format> m_formats;
   std::set<spa_audio_channel> m_channels;
   std::set<uint32_t> m_rates;
-
-  CPipewire* m_pipewire;
+  std::set<spa_audio_iec958_codec> m_iec958Codecs;
 };
 
 } // namespace PIPEWIRE
-} // namespace SINK
-} // namespace AE
+} // namespace KODI

@@ -10,8 +10,12 @@
 
 #include "controllers/Controller.h"
 #include "controllers/ControllerManager.h"
+#include "cores/RetroPlayer/shaders/ShaderPresetFactory.h"
+#include "games/AchievementRuntime.h"
 #include "games/GameSettings.h"
-#include "profiles/ProfileManager.h"
+#include "games/GameUtils.h"
+#include "games/agents/input/AgentInput.h"
+#include "utils/FileExtensionProvider.h"
 
 using namespace KODI;
 using namespace GAME;
@@ -19,15 +23,33 @@ using namespace GAME;
 CGameServices::CGameServices(CControllerManager& controllerManager,
                              RETRO::CGUIGameRenderManager& renderManager,
                              PERIPHERALS::CPeripherals& peripheralManager,
-                             const CProfileManager& profileManager)
+                             CInputManager& inputManager,
+                             ADDON::CAddonMgr& addons,
+                             CFileExtensionProvider& fileExtensionProvider)
   : m_controllerManager(controllerManager),
     m_gameRenderManager(renderManager),
-    m_profileManager(profileManager),
-    m_gameSettings(new CGameSettings())
+    m_fileExtensionProvider(fileExtensionProvider),
+    m_achievementRuntime(std::make_unique<CAchievementRuntime>()),
+    m_gameSettings(new CGameSettings()),
+    m_agentInput(std::make_unique<CAgentInput>(peripheralManager, inputManager)),
+    m_videoShaders(std::make_unique<SHADER::CShaderPresetFactory>(addons))
 {
+  // Load the add-ons from the database asynchronously
+  m_initializationTask =
+      std::async(std::launch::async, []() { CGameUtils::UpdateInstallableAddons(); });
 }
 
 CGameServices::~CGameServices() = default;
+
+void CGameServices::Initialize()
+{
+  // Update game extensions
+  m_fileExtensionProvider.RegisterGameExtensions(CGameUtils::GetGameExtensions());
+}
+
+void CGameServices::Deinitialize()
+{
+}
 
 ControllerPtr CGameServices::GetController(const std::string& controllerId)
 {
@@ -54,7 +76,16 @@ ControllerVector CGameServices::GetControllers()
   return m_controllerManager.GetControllers();
 }
 
-std::string CGameServices::GetSavestatesFolder() const
+std::string CGameServices::TranslateFeature(const std::string& controllerId,
+                                            const std::string& featureName)
 {
-  return m_profileManager.GetSavestatesFolder();
+  return m_controllerManager.TranslateFeature(controllerId, featureName);
+}
+
+void CGameServices::OnAddonRepoInstalled()
+{
+  CGameUtils::UpdateInstallableAddons();
+
+  // Update game extensions
+  m_fileExtensionProvider.RegisterGameExtensions(CGameUtils::GetGameExtensions());
 }

@@ -8,20 +8,24 @@
 
 #include "DirectoryNodeTitleTvShows.h"
 
+#include "FileItem.h"
+#include "FileItemList.h"
 #include "QueryParams.h"
+#include "utils/ItemProperties.h"
 #include "video/VideoDatabase.h"
 
 using namespace XFILE::VIDEODATABASEDIRECTORY;
 
-CDirectoryNodeTitleTvShows::CDirectoryNodeTitleTvShows(const std::string& strName, CDirectoryNode* pParent)
-  : CDirectoryNode(NODE_TYPE_TITLE_TVSHOWS, strName, pParent)
+CDirectoryNodeTitleTvShows::CDirectoryNodeTitleTvShows(const std::string& strName,
+                                                       CDirectoryNode* pParent)
+  : CDirectoryNode(NodeType::TITLE_TVSHOWS, strName, pParent)
 {
 
 }
 
-NODE_TYPE CDirectoryNodeTitleTvShows::GetChildType() const
+NodeType CDirectoryNodeTitleTvShows::GetChildType() const
 {
-  return NODE_TYPE_SEASONS;
+  return NodeType::SEASONS;
 }
 
 std::string CDirectoryNodeTitleTvShows::GetLocalizedName() const
@@ -41,7 +45,12 @@ bool CDirectoryNodeTitleTvShows::GetContent(CFileItemList& items) const
   CQueryParams params;
   CollectQueryParams(params);
 
-  bool bSuccess=videodatabase.GetTvShowsNav(BuildPath(), items, params.GetGenreId(), params.GetYear(), params.GetActorId(), params.GetDirectorId(), params.GetStudioId(), params.GetTagId());
+  const int details =
+      items.GetProperty(KODI::ITEM::PROPERTY::SET_VIDEODB_DETAILS).asInteger32(VideoDbDetailsNone);
+
+  bool bSuccess = videodatabase.GetTvShowsNav(
+      BuildPath(), items, params.GetGenreId(), params.GetYear(), params.GetActorId(),
+      params.GetDirectorId(), params.GetStudioId(), params.GetTagId(), SortDescription(), details);
 
   videodatabase.Close();
 

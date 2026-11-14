@@ -13,10 +13,11 @@
 #include "URIUtils.h"
 #include "URL.h"
 #include "XMLUtils.h"
-#include "filesystem/CurlFile.h"
+#include "filesystem/IHttpClient.h"
 #include "filesystem/ZipFile.h"
 #include "settings/AdvancedSettings.h"
 #include "settings/SettingsComponent.h"
+#include "utils/ArtTypes.h"
 #include "utils/CharsetDetection.h"
 #include "utils/Mime.h"
 #include "utils/StringUtils.h"
@@ -72,7 +73,7 @@ const CScraperUrl::SUrlEntry CScraperUrl::GetSeasonUrl(int season, const std::st
 {
   const auto url = std::find_if(m_urls.begin(), m_urls.end(), [season, type](const SUrlEntry& url) {
     return url.m_type == UrlType::Season && url.m_season == season &&
-           (type.empty() || type == "thumb" || url.m_aspect == type);
+           (type.empty() || type == KODI::ART::TYPE::THUMB || url.m_aspect == type);
   });
   if (url != m_urls.end())
     return *url;
@@ -113,7 +114,7 @@ void CScraperUrl::GetThumbUrls(std::vector<std::string>& thumbs,
           (url.m_type == CScraperUrl::UrlType::Season && url.m_season == season))
       {
         std::string thumbUrl = GetThumbUrl(url);
-        if (!unique || std::find(thumbs.begin(), thumbs.end(), thumbUrl) == thumbs.end())
+        if (!unique || std::ranges::find(thumbs, thumbUrl) == thumbs.end())
           thumbs.push_back(thumbUrl);
       }
     }
@@ -299,7 +300,7 @@ std::string CScraperUrl::GetThumbUrl(const CScraperUrl::SUrlEntry& entry)
 
 bool CScraperUrl::Get(const SUrlEntry& scrURL,
                       std::string& strHTML,
-                      XFILE::CCurlFile& http,
+                      XFILE::IHttpClient& http,
                       const std::string& cacheContext)
 {
   CURL url(scrURL.m_url);
@@ -339,7 +340,7 @@ bool CScraperUrl::Get(const SUrlEntry& scrURL,
 
   strHTML = strHTML1;
 
-  const auto mimeType = http.GetProperty(XFILE::FILE_PROPERTY_MIME_TYPE);
+  const auto mimeType = http.GetProperty(XFILE::FileProperty::MIME_TYPE);
   CMime::EFileType ftype = CMime::GetFileTypeFromMime(mimeType);
   if (ftype == CMime::FileTypeUnknown)
     ftype = CMime::GetFileTypeFromContent(strHTML);
@@ -360,7 +361,7 @@ bool CScraperUrl::Get(const SUrlEntry& scrURL,
                 scrURL.m_url);
   }
 
-  const auto reportedCharset = http.GetProperty(XFILE::FILE_PROPERTY_CONTENT_CHARSET);
+  const auto reportedCharset = http.GetProperty(XFILE::FileProperty::CONTENT_CHARSET);
   if (ftype == CMime::FileTypeHtml)
   {
     std::string realHtmlCharset, converted;

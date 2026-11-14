@@ -219,8 +219,8 @@ extern "C"
     void RemoveItem(CFileItemPtr* fileItem);
     void ClearList();
     CFileItemPtr* GetListItem(int position);
-    int GetListSize();
-    int GetCurrentListPosition();
+    int GetListSize() const;
+    int GetCurrentListPosition() const;
     void SetCurrentListPosition(int item);
     void SetContainerProperty(const std::string& key, const std::string& value);
     void SetContainerContent(const std::string& value);
@@ -235,27 +235,29 @@ extern "C"
     void SetupShares() override;
 
     /* kodi to addon callback function addresses */
-    KODI_GUI_CLIENT_HANDLE m_clientHandle;
-    bool (*CBOnInit)(KODI_GUI_CLIENT_HANDLE cbhdl);
-    bool (*CBOnFocus)(KODI_GUI_CLIENT_HANDLE cbhdl, int controlId);
-    bool (*CBOnClick)(KODI_GUI_CLIENT_HANDLE cbhdl, int controlId);
-    bool (*CBOnAction)(KODI_GUI_CLIENT_HANDLE cbhdl, ADDON_ACTION actionId);
+    KODI_GUI_CLIENT_HANDLE m_clientHandle = nullptr;
+    bool (*CBOnInit)(KODI_GUI_CLIENT_HANDLE cbhdl) = nullptr;
+    bool (*CBOnFocus)(KODI_GUI_CLIENT_HANDLE cbhdl, int controlId) = nullptr;
+    bool (*CBOnClick)(KODI_GUI_CLIENT_HANDLE cbhdl, int controlId) = nullptr;
+    bool (*CBOnAction)(KODI_GUI_CLIENT_HANDLE cbhdl, ADDON_ACTION actionId) = nullptr;
     void (*CBGetContextButtons)(KODI_GUI_CLIENT_HANDLE cbhdl,
                                 int itemNumber,
                                 gui_context_menu_pair* buttons,
-                                unsigned int* size);
-    bool (*CBOnContextButton)(KODI_GUI_CLIENT_HANDLE cbhdl, int itemNumber, unsigned int button);
+                                unsigned int* size) = nullptr;
+    bool (*CBOnContextButton)(KODI_GUI_CLIENT_HANDLE cbhdl,
+                              int itemNumber,
+                              unsigned int button) = nullptr;
 
-    const int m_windowId;
-    int m_oldWindowId;
+    const int m_windowId{0};
+    int m_oldWindowId{0};
 
   private:
     void WaitForActionEvent(unsigned int timeout);
 
-    CEvent m_actionEvent;
-    ADDON::CAddonDll* m_addon;
+    CEvent m_actionEvent{true};
+    ADDON::CAddonDll* m_addon{nullptr};
     std::string m_mediaDir;
-    bool m_isMedia;
+    bool m_isMedia{false};
   };
 
   class CGUIAddonWindowDialog : public CGUIAddonWindow
@@ -271,7 +273,7 @@ extern "C"
     void Show_Internal(bool show = true);
 
   private:
-    bool m_bRunning;
+    bool m_bRunning = false;
   };
 
   } /* namespace ADDON */

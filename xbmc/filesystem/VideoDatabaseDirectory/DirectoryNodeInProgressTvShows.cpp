@@ -8,19 +8,23 @@
 
 #include "DirectoryNodeInProgressTvShows.h"
 
+#include "FileItem.h"
+#include "FileItemList.h"
+#include "utils/ItemProperties.h"
 #include "video/VideoDatabase.h"
 
 using namespace XFILE::VIDEODATABASEDIRECTORY;
 
-CDirectoryNodeInProgressTvShows::CDirectoryNodeInProgressTvShows(const std::string& strName, CDirectoryNode* pParent)
-  : CDirectoryNode(NODE_TYPE_INPROGRESS_TVSHOWS, strName, pParent)
+CDirectoryNodeInProgressTvShows::CDirectoryNodeInProgressTvShows(const std::string& strName,
+                                                                 CDirectoryNode* pParent)
+  : CDirectoryNode(NodeType::INPROGRESS_TVSHOWS, strName, pParent)
 {
 
 }
 
-NODE_TYPE CDirectoryNodeInProgressTvShows::GetChildType() const
+NodeType CDirectoryNodeInProgressTvShows::GetChildType() const
 {
-  return NODE_TYPE_SEASONS;
+  return NodeType::SEASONS;
 }
 
 std::string CDirectoryNodeInProgressTvShows::GetLocalizedName() const
@@ -37,7 +41,9 @@ bool CDirectoryNodeInProgressTvShows::GetContent(CFileItemList& items) const
   if (!videodatabase.Open())
     return false;
 
-  bool bSuccess=videodatabase.GetInProgressTvShowsNav(BuildPath(), items);
+  const int details =
+      items.GetProperty(KODI::ITEM::PROPERTY::SET_VIDEODB_DETAILS).asInteger32(VideoDbDetailsNone);
+  bool bSuccess = videodatabase.GetInProgressTvShowsNav(BuildPath(), items, details);
 
   videodatabase.Close();
 

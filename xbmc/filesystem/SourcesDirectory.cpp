@@ -8,43 +8,62 @@
 
 #include "SourcesDirectory.h"
 
-#include "File.h"
 #include "FileItem.h"
+#include "FileItemList.h"
 #include "ServiceBroker.h"
 #include "URL.h"
 #include "Util.h"
 #include "guilib/TextureManager.h"
 #include "media/MediaLockState.h"
+#include "music/MusicFileItemClassify.h"
+#include "network/NetworkFileItemClassify.h"
 #include "profiles/ProfileManager.h"
 #include "settings/MediaSourceSettings.h"
 #include "storage/MediaManager.h"
+#include "utils/ArtTypes.h"
+#include "utils/DefaultArt.h"
+#include "utils/FileUtils.h"
+#include "utils/PlaceholderPaths.h"
+#include "utils/StringUtils.h"
 #include "utils/URIUtils.h"
+#include "video/VideoFileItemClassify.h"
 
+using namespace KODI;
 using namespace XFILE;
 
 CSourcesDirectory::CSourcesDirectory(void) = default;
 
 CSourcesDirectory::~CSourcesDirectory(void) = default;
 
-bool CSourcesDirectory::GetDirectory(const CURL& url, CFileItemList &items)
+std::string CSourcesDirectory::PathOf(KODI::MEDIA::MediaSection section)
 {
-  // break up our path
-  // format is:  sources://<type>/
-  std::string type(url.GetFileName());
-  URIUtils::RemoveSlashAtEnd(type);
+  return StringUtils::Format("sources://{}/", KODI::MEDIA::NameOf(section));
+}
 
-  VECSOURCES sources;
-  VECSOURCES *sourcesFromType = CMediaSourceSettings::GetInstance().GetSources(type);
-  if (!sourcesFromType)
+std::optional<KODI::MEDIA::MediaSection> CSourcesDirectory::SectionOf(const std::string& path)
+{
+  const CURL url{path};
+  if (!url.IsProtocol("sources"))
+    return {};
+
+  std::string name{url.GetFileName()};
+  URIUtils::RemoveSlashAtEnd(name);
+  return KODI::MEDIA::MediaSectionFromName(name);
+}
+
+bool CSourcesDirectory::GetDirectory(const CURL& url, CFileItemList& items)
+{
+  const std::optional<KODI::MEDIA::MediaSection> section{SectionOf(url.Get())};
+  if (!section)
     return false;
 
-  sources = *sourcesFromType;
+  std::vector<CMediaSource> sources{CMediaSourceSettings::GetInstance().GetSources(*section)};
   CServiceBroker::GetMediaManager().GetRemovableDrives(sources);
 
   return GetDirectory(sources, items);
 }
 
-bool CSourcesDirectory::GetDirectory(const VECSOURCES &sources, CFileItemList &items)
+bool CSourcesDirectory::GetDirectory(const std::vector<CMediaSource>& sources, CFileItemList& items)
 {
   for (unsigned int i = 0; i < sources.size(); ++i)
   {
@@ -55,42 +74,41 @@ bool CSourcesDirectory::GetDirectory(const VECSOURCES &sources, CFileItemList &i
 
     std::string strIcon;
     // We have the real DVD-ROM, set icon on disktype
-    if (share.m_iDriveType == CMediaSource::SOURCE_TYPE_DVD && share.m_strThumbnailImage.empty())
+    if (share.m_iDriveType == SourceType::OPTICAL_DISC && share.m_strThumbnailImage.empty())
     {
       CUtil::GetDVDDriveIcon( pItem->GetPath(), strIcon );
       // CDetectDVDMedia::SetNewDVDShareUrl() caches disc thumb as special://temp/dvdicon.tbn
       std::string strThumb = "special://temp/dvdicon.tbn";
-      if (XFILE::CFile::Exists(strThumb))
-        pItem->SetArt("thumb", strThumb);
+      if (CFileUtils::Exists(strThumb))
+        pItem->SetArt(ART::TYPE::THUMB, strThumb);
     }
     else if (URIUtils::IsProtocol(pItem->GetPath(), "addons"))
-      strIcon = "DefaultHardDisk.png";
+      strIcon = ART::DEFAULT::HARD_DISK;
     else if (   pItem->IsPath("special://musicplaylists/")
              || pItem->IsPath("special://videoplaylists/"))
-      strIcon = "DefaultPlaylist.png";
-    else if (   pItem->IsVideoDb()
-             || pItem->IsMusicDb()
-             || pItem->IsPlugin()
-             || pItem->IsPath("musicsearch://"))
-      strIcon = "DefaultFolder.png";
-    else if (pItem->IsRemote())
-      strIcon = "DefaultNetwork.png";
+      strIcon = ART::DEFAULT::PLAYLIST;
+    else if (VIDEO::IsVideoDb(*pItem) || MUSIC::IsMusicDb(*pItem) || pItem->IsPlugin() ||
+             pItem->IsPath(ITEM::PLACEHOLDER::MUSIC_SEARCH))
+      strIcon = ART::DEFAULT::FOLDER;
+    else if (NETWORK::IsRemote(*pItem))
+      strIcon = ART::DEFAULT::NETWORK;
     else if (pItem->IsISO9660())
-      strIcon = "DefaultDVDRom.png";
+      strIcon = ART::DEFAULT::DVD_ROM;
     else if (pItem->IsDVD())
-      strIcon = "DefaultDVDFull.png";
+      strIcon = ART::DEFAULT::DVD_FULL;
     else if (pItem->IsBluray())
-      strIcon = "DefaultBluray.png";
-    else if (pItem->IsCDDA())
-      strIcon = "DefaultCDDA.png";
-    else if (pItem->IsRemovable() && CServiceBroker::GetGUI()->GetTextureManager().HasTexture("DefaultRemovableDisk.png"))
-      strIcon = "DefaultRemovableDisk.png";
+      strIcon = ART::DEFAULT::BLURAY;
+    else if (MUSIC::IsCDDA(*pItem))
+      strIcon = ART::DEFAULT::CDDA;
+    else if (pItem->IsRemovable() &&
+             CServiceBroker::GetGUI()->GetTextureManager().HasTexture(ART::DEFAULT::REMOVABLE_DISK))
+      strIcon = ART::DEFAULT::REMOVABLE_DISK;
     else
-      strIcon = "DefaultHardDisk.png";
+      strIcon = ART::DEFAULT::HARD_DISK;
 
-    pItem->SetArt("icon", strIcon);
-    if (share.m_iHasLock == LOCK_STATE_LOCKED &&
-        m_profileManager->GetMasterProfile().getLockMode() != LOCK_MODE_EVERYONE)
+    pItem->SetArt(ART::TYPE::ICON, strIcon);
+    if (share.GetLockInfo().IsLocked() &&
+        m_profileManager->GetMasterProfile().getLockMode() != LockMode::EVERYONE)
       pItem->SetOverlayImage(CGUIListItem::ICON_OVERLAY_LOCKED);
     else
       pItem->SetOverlayImage(CGUIListItem::ICON_OVERLAY_NONE);

@@ -8,7 +8,6 @@
 
 #pragma once
 
-#include "addons/Addon.h"
 #include "addons/kodi-dev-kit/include/kodi/addon-instance/Game.h"
 #include "games/GameTypes.h"
 
@@ -16,6 +15,13 @@
 #include <vector>
 
 struct AddonProps_Game;
+
+namespace ADDON
+{
+class IAddon;
+using AddonPtr = std::shared_ptr<IAddon>;
+using VECADDONS = std::vector<AddonPtr>;
+} // namespace ADDON
 
 namespace KODI
 {
@@ -26,6 +32,7 @@ class CGameClient;
 
 /**
  * \ingroup games
+ *
  * \brief C++ wrapper for properties to pass to the DLL
  *
  * Game client properties declared in addon-instance/Game.h.
@@ -70,6 +77,9 @@ private:
   bool GetProxyAddons(ADDON::VECADDONS& addons);
   void AddProxyDll(const GameClientPtr& gameClient);
   bool HasProxyDll(const std::string& strLibPath) const;
+
+  // Utility functions
+  static bool InstallDependencies(const std::vector<std::string>& addons);
 
   // Construction parameters
   const CGameClient& m_parent;

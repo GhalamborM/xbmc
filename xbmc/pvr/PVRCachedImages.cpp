@@ -8,12 +8,18 @@
 
 #include "PVRCachedImages.h"
 
+#include "ServiceBroker.h"
 #include "TextureCache.h"
 #include "TextureDatabase.h"
 #include "URL.h"
+#include "imagefiles/ImageFileURL.h"
+#include "utils/ArtTypes.h"
 #include "utils/StringUtils.h"
 #include "utils/Variant.h"
 #include "utils/log.h"
+
+#include <algorithm>
+#include <string_view>
 
 using namespace PVR;
 
@@ -44,12 +50,12 @@ int CPVRCachedImages::Cleanup(const std::vector<PVRImagePattern>& urlPatterns,
         StringUtils::Format("{}@{}", pattern.owner, CURL::Encode(pattern.path));
 
     std::string escapedPattern;
-    for (size_t i = 0; i < encodedPattern.size(); ++i)
+    for (const auto& pos : encodedPattern)
     {
-      if (encodedPattern[i] == '%' || encodedPattern[i] == '^')
+      if (pos == '%' || pos == '^')
         escapedPattern += '^';
 
-      escapedPattern += encodedPattern[i];
+      escapedPattern += pos;
     }
 
     const std::string where =
@@ -67,34 +73,21 @@ int CPVRCachedImages::Cleanup(const std::vector<PVRImagePattern>& urlPatterns,
   for (unsigned int i = 0; i < items.size(); ++i)
   {
     // Unwrap the image:// URL returned from texture db.
-    const std::string textureURL = UnwrapImageURL(items[i]["url"].asString());
+    const std::string textureURL =
+        IMAGE_FILES::CImageFileURL(items[i]["url"].asString()).GetTargetFile();
 
-    bool bFound = false;
-    for (const auto& url : urlsToCheck)
-    {
-      if (url == textureURL)
-      {
-        bFound = true;
-        break; // next item
-      }
-    }
-
-    if (!bFound)
+    if (std::ranges::none_of(urlsToCheck,
+                             [&textureURL](std::string_view url) { return url == textureURL; }))
     {
       CLog::LogFC(LOGDEBUG, LOGPVR, "Removing stale cached image: '{}'", textureURL);
-      CTextureCache::GetInstance().ClearCachedImage(items[i]["textureid"].asInteger());
+      CServiceBroker::GetTextureCache()->ClearCachedImage(items[i]["textureid"].asInteger());
 
       if (clearTextureForPath)
-        db.ClearTextureForPath(textureURL, "thumb");
+        db.ClearTextureForPath(textureURL, KODI::ART::TYPE::THUMB);
 
       iCleanedImages++;
     }
   }
 
   return iCleanedImages;
-}
-
-std::string CPVRCachedImages::UnwrapImageURL(const std::string& url)
-{
-  return StringUtils::StartsWith(url, "image://") ? CURL(url).GetHostName() : url;
 }

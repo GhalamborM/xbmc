@@ -9,10 +9,10 @@
 #pragma once
 
 #include "threads/Condition.h"
-#include "threads/SingleLock.h"
 
 #include <initializer_list>
 #include <memory>
+#include <mutex>
 #include <vector>
 
 // forward declare the CEventGroup
@@ -41,13 +41,7 @@ class CEvent
   CCriticalSection groupListMutex; // lock for the groups list
   std::unique_ptr<std::vector<XbmcThreads::CEventGroup*>> groups;
 
-  /**
-   * To satisfy the TightConditionVariable requirements and allow the
-   *  predicate being monitored to include both the signaled and interrupted
-   *  states.
-   */
   XbmcThreads::ConditionVariable actualCv;
-  XbmcThreads::TightConditionVariable<volatile bool&> condVar;
   CCriticalSection mutex;
 
   friend class XbmcThreads::CEventGroup;
@@ -69,13 +63,13 @@ class CEvent
 
 public:
   inline CEvent(bool manual = false, bool signaled_ = false)
-    : manualReset(manual), signaled(signaled_), condVar(actualCv, signaled)
+    : manualReset(manual), signaled(signaled_)
   {
   }
 
   inline void Reset()
   {
-    CSingleLock lock(mutex);
+    std::unique_lock lock(mutex);
     signaled = false;
   }
   void Set();
@@ -86,7 +80,7 @@ public:
    */
   inline bool Signaled()
   {
-    CSingleLock lock(mutex);
+    std::unique_lock lock(mutex);
     return signaled;
   }
 
@@ -99,9 +93,9 @@ public:
   template<typename Rep, typename Period>
   inline bool Wait(std::chrono::duration<Rep, Period> duration)
   {
-    CSingleLock lock(mutex);
+    std::unique_lock lock(mutex);
     numWaits++;
-    condVar.wait(mutex, duration);
+    actualCv.wait(mutex, duration, std::bind(&CEvent::Signaled, this));
     numWaits--;
     return prepReturn();
   }
@@ -114,9 +108,9 @@ public:
    */
   inline bool Wait()
   {
-    CSingleLock lock(mutex);
+    std::unique_lock lock(mutex);
     numWaits++;
-    condVar.wait(mutex);
+    actualCv.wait(mutex, std::bind(&CEvent::Signaled, this));
     numWaits--;
     return prepReturn();
   }
@@ -128,7 +122,7 @@ public:
    */
   inline int getNumWaits()
   {
-    CSingleLock lock(mutex);
+    std::unique_lock lock(mutex);
     return numWaits;
   }
 };
@@ -146,7 +140,6 @@ class CEventGroup
   std::vector<CEvent*> events;
   CEvent* signaled{};
   XbmcThreads::ConditionVariable actualCv;
-  XbmcThreads::TightConditionVariable<CEvent*&> condVar{actualCv, signaled};
   CCriticalSection mutex;
 
   unsigned int numWaits{0};
@@ -154,9 +147,9 @@ class CEventGroup
   // This is ONLY called from CEvent::Set.
   inline void Set(CEvent* child)
   {
-    CSingleLock l(mutex);
+    std::unique_lock l(mutex);
     signaled = child;
-    condVar.notifyAll();
+    actualCv.notifyAll();
   }
 
   friend class ::CEvent;
@@ -192,7 +185,7 @@ public:
   template<typename Rep, typename Period>
   CEvent* wait(std::chrono::duration<Rep, Period> duration)
   {
-    CSingleLock lock(mutex); // grab CEventGroup::mutex
+    std::unique_lock lock(mutex); // grab CEventGroup::mutex
     numWaits++;
 
     // ==================================================
@@ -203,7 +196,7 @@ public:
     signaled = nullptr;
     for (auto* cur : events)
     {
-      CSingleLock lock2(cur->mutex);
+      std::unique_lock lock2(cur->mutex);
       if (cur->signaled)
         signaled = cur;
     }
@@ -213,9 +206,9 @@ public:
     {
       // both of these release the CEventGroup::mutex
       if (duration == std::chrono::duration<Rep, Period>::max())
-        condVar.wait(mutex);
+        actualCv.wait(mutex, [this]() { return signaled != nullptr; });
       else
-        condVar.wait(mutex, duration);
+        actualCv.wait(mutex, duration, [this]() { return signaled != nullptr; });
     } // at this point the CEventGroup::mutex is reacquired
     numWaits--;
 
@@ -239,7 +232,7 @@ public:
    */
   inline int getNumWaits()
   {
-    CSingleLock lock(mutex);
+    std::unique_lock lock(mutex);
     return numWaits;
   }
 };

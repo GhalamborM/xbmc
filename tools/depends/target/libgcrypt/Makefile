@@ -1,50 +1,52 @@
-include ../../Makefile.include
-DEPS= ../../Makefile.include Makefile 01-gcrypt-android-select.patch 02-fix-armv7-neon.patch 03-remove-cipher-gcm-armv8.patch 04-fix-o-flag-munging.patch
+include ../../Makefile.include LIBGCRYPT-VERSION ../../download-files.include
+DEPS = ../../Makefile.include Makefile LIBGCRYPT-VERSION ../../download-files.include
 
-# lib name, version
-LIBNAME=libgcrypt
-VERSION=1.8.1
-SOURCE=$(LIBNAME)-$(VERSION)
-ARCHIVE=$(SOURCE).tar.bz2
-
-ifeq ($(OS),osx)
-  CONFIGURE_FLAGS+= --disable-asm --disable-avx-support --disable-avx2-support
-endif
-ifeq ($(findstring arm64, $(CPU)), arm64)
-  CONFIGURE_FLAGS+= --disable-asm
-else
-  CONFIGURE_FLAGS+= --disable-asm --disable-arm-crypto-support
+ifeq ($(findstring apple-darwin, $(HOST)), apple-darwin)
+  # required to fix asm link failure due C_SYMBOL_NAME macro not prepending _ to exported symbol
+  # exported symbols only have s single _ instead of double __
+  #   Undefined symbols for architecture x86_64:
+  #   "__gcry_mpih_add_n", referenced from:
+  CONFIGURE_FLAGS+= ac_cv_sys_symbol_underscore=yes
+  ifeq ($(OS), darwin_embedded)
+    # explicitly disable getentropy for ios/tvos as AC_CHECK_FUNCS(getentropy) incorrectly
+    # succeeds as of libgcrypt 1.9.4
+    CONFIGURE_FLAGS+= ac_cv_func_getentropy=no
+  endif
 endif
 
+ifeq ($(OS),wasm)
+  # Emscripten exposes <sys/random.h> with GRND_RANDOM, which makes libgcrypt's
+  # rndgetentropy backend compile a getrandom() reference even though that symbol
+  # is not provided at link time. Keep using getentropy() without the getrandom()
+  # FIPS-only branch by hiding sys/random.h from configure.
+  CONFIGURE_FLAGS+= ac_cv_header_sys_random_h=no
+endif
+
+# Disable random jitter entropy due to failure on multiple platform/arches
+# ./jitterentropy-base.c:58:3: error: "The CPU Jitter random number generator must not be compiled with optimizations. 
+#                                       See documentation. Use the compiler switch -O0 for compiling jitterentropy.c."
+CONFIGURE_FLAGS+= --disable-jent-support
+
+export GPG_ERROR_CONFIG=$(PREFIX)/bin/gpg-error-config
 
 # configuration settings
 CONFIGURE=cp -f $(CONFIG_SUB) $(CONFIG_GUESS) .; \
-          ./configure --prefix=$(PREFIX) --disable-doc --disable-shared \
-	  $(CONFIGURE_FLAGS)
+          ./configure --prefix=$(PREFIX) --disable-doc --disable-shared $(CONFIGURE_FLAGS)
 
-LIBDYLIB=$(PLATFORM)/src/.libs/$(LIBNAME).a
+LIBDYLIB=$(PLATFORM)/src/.libs/$(BYPRODUCT)
 
 all: .installed-$(PLATFORM)
 
-$(TARBALLS_LOCATION)/$(ARCHIVE):
-	cd $(TARBALLS_LOCATION); $(RETRIEVE_TOOL) $(RETRIEVE_TOOL_FLAGS) $(BASE_URL)/$(ARCHIVE)
-
-$(PLATFORM): $(TARBALLS_LOCATION)/$(ARCHIVE) $(DEPS)
+.configured-$(PLATFORM): $(DEPS) | $(TARBALLS_LOCATION)/$(ARCHIVE).$(HASH_TYPE)
 	rm -rf $(PLATFORM)/*; mkdir -p $(PLATFORM)
 	cd $(PLATFORM); $(ARCHIVE_TOOL) $(ARCHIVE_TOOL_FLAGS) $(TARBALLS_LOCATION)/$(ARCHIVE)
-	cd $(PLATFORM); patch -p1 -i ../01-gcrypt-android-select.patch
-	cd $(PLATFORM); patch -p1 -i ../02-fix-armv7-neon.patch
-ifneq ($(findstring arm64, $(CPU)), arm64)
-	cd $(PLATFORM); patch -p1 -i ../03-remove-cipher-gcm-armv8.patch
-endif
-	cd $(PLATFORM); patch -p1 -i ../04-fix-o-flag-munging.patch
 	# do not build the tests or docs
-	sed -ie "s|doc tests||" "$(PLATFORM)/Makefile.am"
 	sed -ie "s|\$$(doc) tests||" "$(PLATFORM)/Makefile.am"
 	cd $(PLATFORM); $(AUTORECONF) -vif
 	cd $(PLATFORM); $(CONFIGURE)
+	touch $@
 
-$(LIBDYLIB): $(PLATFORM)
+$(LIBDYLIB): .configured-$(PLATFORM)
 	$(MAKE) -C $(PLATFORM)
 
 .installed-$(PLATFORM): $(LIBDYLIB)
@@ -53,7 +55,7 @@ $(LIBDYLIB): $(PLATFORM)
 
 clean:
 	$(MAKE) -C $(PLATFORM) clean
-	rm -f .installed-$(PLATFORM)
+	rm -f .installed-$(PLATFORM) .configured-$(PLATFORM)
 
 distclean::
-	rm -rf $(PLATFORM) .installed-$(PLATFORM)
+	rm -rf $(PLATFORM) .installed-$(PLATFORM) .configured-$(PLATFORM)

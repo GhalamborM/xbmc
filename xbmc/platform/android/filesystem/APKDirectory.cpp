@@ -10,6 +10,7 @@
 
 #include "APKFile.h"
 #include "FileItem.h"
+#include "FileItemList.h"
 #include "utils/CharsetConverter.h"
 #include "utils/StringUtils.h"
 #include "utils/URIUtils.h"
@@ -57,7 +58,7 @@ bool CAPKDirectory::GetDirectory(const CURL& url, CFileItemList &items)
     if (dir_marker != std::string::npos)
     {
       // return items relative to path
-      test_name=test_name.substr(0, dir_marker);
+      test_name.resize(dir_marker);
 
       if (items.Contains(host + "/" + test_name))
         continue;
@@ -69,9 +70,9 @@ bool CAPKDirectory::GetDirectory(const CURL& url, CFileItemList &items)
     {
       g_charsetConverter.unknownToUTF8(test_name);
       CFileItemPtr pItem(new CFileItem(test_name));
-      pItem->m_dwSize    = sb.size;
-      pItem->m_dateTime  = sb.mtime;
-      pItem->m_bIsFolder = dir_marker > 0 ;
+      pItem->SetSize(sb.size);
+      pItem->SetDateTime(sb.mtime);
+      pItem->SetFolder(dir_marker > 0);
       pItem->SetPath(host + "/" + test_name);
       pItem->SetLabel(test_name.substr(path.size()));
       items.Add(pItem);
@@ -88,9 +89,9 @@ bool CAPKDirectory::ContainsFiles(const CURL& url)
   return false;
 }
 
-DIR_CACHE_TYPE CAPKDirectory::GetCacheType(const CURL& url) const
+CacheType CAPKDirectory::GetCacheType(const CURL& url) const
 {
-  return DIR_CACHE_ALWAYS;
+  return CacheType::ALWAYS;
 }
 
 bool CAPKDirectory::Exists(const CURL& url)

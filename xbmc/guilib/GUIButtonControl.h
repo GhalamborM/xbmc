@@ -20,6 +20,8 @@
 #include "guilib/guiinfo/GUIInfoLabel.h"
 #include "utils/ColorUtils.h"
 
+#include <optional>
+
 /*!
  \ingroup controls
  \brief
@@ -63,10 +65,10 @@ public:
 
   void PythonSetLabel(const std::string& strFont,
                       const std::string& strText,
-                      UTILS::COLOR::Color textColor,
-                      UTILS::COLOR::Color shadowColor,
-                      UTILS::COLOR::Color focusedColor);
-  void PythonSetDisabledColor(UTILS::COLOR::Color disabledColor);
+                      KODI::UTILS::COLOR::Color textColor,
+                      KODI::UTILS::COLOR::Color shadowColor,
+                      KODI::UTILS::COLOR::Color focusedColor);
+  void PythonSetDisabledColor(KODI::UTILS::COLOR::Color disabledColor);
 
   virtual void OnClick();
   bool HasClickActions() const { return m_clickActions.HasActionsMeetingCondition(); }
@@ -77,7 +79,7 @@ public:
 
 protected:
   friend class CGUISpinControlEx;
-  EVENT_RESULT OnMouseEvent(const CPoint &point, const CMouseEvent &event) override;
+  EVENT_RESULT OnMouseEvent(const CPoint& point, const KODI::MOUSE::CMouseEvent& event) override;
   void OnFocus() override;
   void OnUnFocus() override;
   virtual void ProcessText(unsigned int currentTime);
@@ -93,6 +95,7 @@ protected:
   std::unique_ptr<CGUITexture> m_imgNoFocus;
   unsigned int  m_focusCounter;
   unsigned char m_alpha;
+  std::optional<unsigned char> m_lastFocusAlpha;
 
   float m_minWidth;
   float m_maxWidth;

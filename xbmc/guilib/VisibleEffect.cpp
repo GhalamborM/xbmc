@@ -8,15 +8,19 @@
 
 #include "VisibleEffect.h"
 
+#include "GUIColorManager.h"
 #include "GUIControlFactory.h"
 #include "GUIInfoManager.h"
+#include "ServiceBroker.h"
 #include "Tween.h"
 #include "addons/Skin.h" // for the effect time adjustments
 #include "guilib/GUIComponent.h"
+#include "utils/ColorUtils.h"
 #include "utils/StringUtils.h"
 #include "utils/XBMCTinyXML.h"
 #include "utils/XMLUtils.h"
 #include "utils/log.h"
+#include "windowing/WinSystem.h"
 
 #include <utility>
 
@@ -28,19 +32,23 @@ CAnimEffect::CAnimEffect(const TiXmlElement *node, EFFECT_TYPE effect)
   m_pTweener.reset();
   // time and delay
 
+  auto skin = CServiceBroker::GetGUI()->GetSkinInfo();
+  float slowdown = skin ? skin->GetEffectsSlowdown() : 1.0f;
   float temp;
-  if (TIXML_SUCCESS == node->QueryFloatAttribute("time", &temp)) m_length = (unsigned int)(temp * g_SkinInfo->GetEffectsSlowdown());
-  if (TIXML_SUCCESS == node->QueryFloatAttribute("delay", &temp)) m_delay = (unsigned int)(temp * g_SkinInfo->GetEffectsSlowdown());
+  if (TIXML_SUCCESS == node->QueryFloatAttribute("time", &temp))
+    m_length = (unsigned int)(temp * slowdown);
+  if (TIXML_SUCCESS == node->QueryFloatAttribute("delay", &temp))
+    m_delay = (unsigned int)(temp * slowdown);
 
   m_pTweener = GetTweener(node);
 }
 
 CAnimEffect::CAnimEffect(unsigned int delay, unsigned int length, EFFECT_TYPE effect)
+  : m_pTweener(std::shared_ptr<Tweener>(new LinearTweener()))
 {
   m_delay = delay;
   m_length = length;
   m_effect = effect;
-  m_pTweener = std::shared_ptr<Tweener>(new LinearTweener());
 }
 
 CAnimEffect::~CAnimEffect() = default;
@@ -138,7 +146,8 @@ std::shared_ptr<Tweener> CAnimEffect::GetTweener(const TiXmlElement *pAnimationN
   return m_pTweener;
 }
 
-CFadeEffect::CFadeEffect(const TiXmlElement *node, bool reverseDefaults) : CAnimEffect(node, EFFECT_TYPE_FADE)
+CFadeEffect::CFadeEffect(const TiXmlElement* node, bool reverseDefaults, EFFECT_TYPE effect)
+  : CAnimEffect(node, effect)
 {
   if (reverseDefaults)
   { // out effect defaults
@@ -150,12 +159,36 @@ CFadeEffect::CFadeEffect(const TiXmlElement *node, bool reverseDefaults) : CAnim
     m_startAlpha = 0;
     m_endAlpha = 100.0f;
   }
-  node->QueryFloatAttribute("start", &m_startAlpha);
-  node->QueryFloatAttribute("end", &m_endAlpha);
-  if (m_startAlpha > 100.0f) m_startAlpha = 100.0f;
-  if (m_endAlpha > 100.0f) m_endAlpha = 100.0f;
-  if (m_startAlpha < 0) m_startAlpha = 0;
-  if (m_endAlpha < 0) m_endAlpha = 0;
+
+  m_startColor.alpha = m_startColor.red = m_startColor.green = m_startColor.blue = 1.0f;
+  m_endColor.alpha = m_endColor.red = m_endColor.green = m_endColor.blue = 1.0f;
+
+  if (effect == EFFECT_TYPE_FADE)
+  {
+    node->QueryFloatAttribute("start", &m_startAlpha);
+    node->QueryFloatAttribute("end", &m_endAlpha);
+    if (m_startAlpha > 100.0f)
+      m_startAlpha = 100.0f;
+    if (m_endAlpha > 100.0f)
+      m_endAlpha = 100.0f;
+    if (m_startAlpha < 0)
+      m_startAlpha = 0;
+    if (m_endAlpha < 0)
+      m_endAlpha = 0;
+    m_startColor.alpha = m_startAlpha * 0.01f;
+    m_endColor.alpha = m_endAlpha * 0.01f;
+  }
+  else if (effect == EFFECT_TYPE_FADE_DIFFUSE)
+  {
+    const char* start = node->Attribute("start");
+    const char* end = node->Attribute("end");
+    if (start)
+      m_startColor = KODI::UTILS::COLOR::ConvertToFloats(
+          CServiceBroker::GetGUI()->GetColorManager().GetColor(start));
+    if (end)
+      m_endColor = KODI::UTILS::COLOR::ConvertToFloats(
+          CServiceBroker::GetGUI()->GetColorManager().GetColor(end));
+  }
 }
 
 CFadeEffect::CFadeEffect(float start, float end, unsigned int delay, unsigned int length) : CAnimEffect(delay, length, EFFECT_TYPE_FADE)
@@ -164,9 +197,30 @@ CFadeEffect::CFadeEffect(float start, float end, unsigned int delay, unsigned in
   m_endAlpha = end;
 }
 
+CFadeEffect::CFadeEffect(KODI::UTILS::COLOR::Color start,
+                         KODI::UTILS::COLOR::Color end,
+                         unsigned int delay,
+                         unsigned int length)
+  : CAnimEffect(delay, length, EFFECT_TYPE_FADE_DIFFUSE),
+    m_startColor(KODI::UTILS::COLOR::ConvertToFloats(start)),
+    m_endColor(KODI::UTILS::COLOR::ConvertToFloats(end))
+{
+  m_startAlpha = m_endAlpha = 1.0f;
+}
+
 void CFadeEffect::ApplyEffect(float offset, const CPoint &center)
 {
-  m_matrix.SetFader(((m_endAlpha - m_startAlpha) * offset + m_startAlpha) * 0.01f);
+  if (m_effect == EFFECT_TYPE_FADE)
+  {
+    m_matrix.SetFader(((m_endAlpha - m_startAlpha) * offset + m_startAlpha) * 0.01f);
+  }
+  else if (m_effect == EFFECT_TYPE_FADE_DIFFUSE)
+  {
+    m_matrix.SetFader(((m_endColor.alpha - m_startColor.alpha) * offset + m_startColor.alpha),
+                      ((m_endColor.red - m_startColor.red) * offset + m_startColor.red),
+                      ((m_endColor.green - m_startColor.green) * offset + m_startColor.green),
+                      ((m_endColor.blue - m_startColor.blue) * offset + m_startColor.blue));
+  }
 }
 
 CSlideEffect::CSlideEffect(const TiXmlElement *node) : CAnimEffect(node, EFFECT_TYPE_SLIDE)
@@ -396,6 +450,8 @@ CAnimation &CAnimation::operator =(const CAnimation &src)
     CAnimEffect *newEffect = NULL;
     if (src.m_effects[i]->GetType() == CAnimEffect::EFFECT_TYPE_FADE)
       newEffect = new CFadeEffect(*static_cast<CFadeEffect*>(src.m_effects[i]));
+    else if (src.m_effects[i]->GetType() == CAnimEffect::EFFECT_TYPE_FADE_DIFFUSE)
+      newEffect = new CFadeEffect(*static_cast<CFadeEffect*>(src.m_effects[i]));
     else if (src.m_effects[i]->GetType() == CAnimEffect::EFFECT_TYPE_ZOOM)
       newEffect = new CZoomEffect(*static_cast<CZoomEffect*>(src.m_effects[i]));
     else if (src.m_effects[i]->GetType() == CAnimEffect::EFFECT_TYPE_SLIDE)
@@ -569,14 +625,15 @@ CAnimation CAnimation::CreateFader(float start, float end, unsigned int delay, u
 
 bool CAnimation::CheckCondition()
 {
-  return !m_condition || m_condition->Get();
+  return !m_condition || m_condition->Get(INFO::DEFAULT_CONTEXT);
 }
 
-void CAnimation::UpdateCondition(const CGUIListItem *item)
+bool CAnimation::UpdateCondition(const CGUIListItem* item)
 {
   if (!m_condition)
-    return;
-  bool condition = m_condition->Get(item);
+    return false;
+  bool condition = m_condition->Get(INFO::DEFAULT_CONTEXT, item);
+  bool reset = false;
   if (condition && !m_lastCondition)
     QueueAnimation(ANIM_PROCESS_NORMAL);
   else if (!condition && m_lastCondition)
@@ -584,14 +641,18 @@ void CAnimation::UpdateCondition(const CGUIListItem *item)
     if (m_reversible)
       QueueAnimation(ANIM_PROCESS_REVERSE);
     else
+    {
       ResetAnimation();
+      reset = true;
+    }
   }
   m_lastCondition = condition;
+  return reset;
 }
 
 void CAnimation::SetInitialCondition()
 {
-  m_lastCondition = m_condition ? m_condition->Get() : false;
+  m_lastCondition = m_condition ? m_condition->Get(INFO::DEFAULT_CONTEXT) : false;
   if (m_lastCondition)
     ApplyAnimation();
   else
@@ -673,7 +734,9 @@ void CAnimation::AddEffect(const std::string &type, const TiXmlElement *node, co
 {
   CAnimEffect *effect = NULL;
   if (StringUtils::EqualsNoCase(type, "fade"))
-    effect = new CFadeEffect(node, m_type < 0);
+    effect = new CFadeEffect(node, m_type < 0, CAnimEffect::EFFECT_TYPE_FADE);
+  else if (StringUtils::EqualsNoCase(type, "fadediffuse"))
+    effect = new CFadeEffect(node, m_type < 0, CAnimEffect::EFFECT_TYPE_FADE_DIFFUSE);
   else if (StringUtils::EqualsNoCase(type, "slide"))
     effect = new CSlideEffect(node);
   else if (StringUtils::EqualsNoCase(type, "rotate"))
@@ -689,7 +752,9 @@ void CAnimation::AddEffect(const std::string &type, const TiXmlElement *node, co
     m_effects.push_back(effect);
 }
 
-CScroller::CScroller(unsigned int duration /* = 200 */, std::shared_ptr<Tweener> tweener /* = NULL */)
+CScroller::CScroller(unsigned int duration /* = 200 */,
+                     std::shared_ptr<Tweener> tweener /* = NULL */)
+  : m_pTweener(std::move(tweener))
 {
   m_scrollValue = 0;
   m_delta = 0;
@@ -697,7 +762,6 @@ CScroller::CScroller(unsigned int duration /* = 200 */, std::shared_ptr<Tweener>
   m_startPosition = 0;
   m_hasResumePoint = false;
   m_duration = duration > 0 ? duration : 1;
-  m_pTweener = std::move(tweener);
 }
 
 CScroller::CScroller(const CScroller& right)

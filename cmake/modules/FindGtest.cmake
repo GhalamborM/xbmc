@@ -3,82 +3,76 @@
 # --------
 # Finds the gtest library
 #
-# This will define the following variables::
+# This will define the following imported targets::
 #
-# GTEST_FOUND - system has gtest
-# GTEST_INCLUDE_DIRS - the gtest include directories
-# GTEST_LIBRARIES - the gtest libraries
-#
-# and the following imported targets:
-#
-#   Gtest::Gtest   - The gtest library
+#   LIBRARY::Gtest   - The gtest library
 
-if(ENABLE_INTERNAL_GTEST)
-  include(ExternalProject)
+if(NOT TARGET LIBRARY::${CMAKE_FIND_PACKAGE_NAME})
 
-  file(STRINGS ${CMAKE_SOURCE_DIR}/tools/depends/target/googletest/Makefile VER)
-  string(REGEX MATCH "VERSION=[^ ]*" GTEST_VERSION "${VER}")
-  list(GET GTEST_VERSION 0 GTEST_VERSION)
-  string(SUBSTRING "${GTEST_VERSION}" 8 -1 GTEST_VERSION)
+  include(cmake/scripts/common/ModuleHelpers.cmake)
 
-  # allow user to override the download URL with a local tarball
-  # needed for offline build envs
-  if(GTEST_URL)
-    get_filename_component(GTEST_URL "${GTEST_URL}" ABSOLUTE)
+  macro(buildmacroGtest)
+
+    set(${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_DEBUG_POSTFIX d)
+
+    if(WIN32 OR WINDOWS_STORE)
+      set(CMAKE_OPTIONS -Dgtest_force_shared_crt=ON)
+
+      set(patches "${CMAKE_SOURCE_DIR}/tools/depends/target/${${CMAKE_FIND_PACKAGE_NAME}_MODULE_LC}/01-win-stl_algorithms_cxxflag.patch"
+                  "${CMAKE_SOURCE_DIR}/tools/depends/target/${${CMAKE_FIND_PACKAGE_NAME}_MODULE_LC}/02-win-pdb_install_paths.patch")
+      generate_patchcommand("${patches}")
+      unset(patches)
+    endif()
+
+    if(CORE_SYSTEM_NAME STREQUAL "osx")
+      # Generator explression for semi colon required to pass the quoted list through.
+      set(CMAKE_OPTIONS -DCMAKE_OSX_ARCHITECTURES=arm64$<SEMICOLON>x86_64)
+    endif()
+
+    set(CMAKE_ARGS -DBUILD_GMOCK=OFF
+                   -DINSTALL_GTEST=ON
+                   -DBUILD_SHARED_LIBS=OFF
+                   -DCMAKE_DEBUG_POSTFIX=${${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_DEBUG_POSTFIX}
+                   ${CMAKE_OPTIONS})
+
+    BUILD_DEP_TARGET()
+  endmacro()
+
+  set(${CMAKE_FIND_PACKAGE_NAME}_MODULE_LC gtest)
+  # search calls are case sensitive
+  set(${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME GTest)
+  set(${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME_PC gtest)
+
+  SETUP_BUILD_VARS()
+
+  SETUP_FIND_SPECS()
+
+  SEARCH_EXISTING_PACKAGES()
+
+  if("${${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME}_VERSION}" VERSION_LESS ${${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_VER} AND ENABLE_INTERNAL_GTEST)
+    message(STATUS "Building ${${CMAKE_FIND_PACKAGE_NAME}_MODULE_LC}: \(version \"${${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_VER}\"\)")
+    cmake_language(EVAL CODE "
+      buildmacro${CMAKE_FIND_PACKAGE_NAME}()
+    ")
+  endif()
+
+  if(${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME}_FOUND)
+    # cmake config found
+    if(TARGET GTest::gtest AND NOT TARGET ${${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_BUILD_NAME})
+      add_library(LIBRARY::${CMAKE_FIND_PACKAGE_NAME} ALIAS GTest::gtest)
+    elseif(TARGET PkgConfig::${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME} AND NOT TARGET ${${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_BUILD_NAME})
+      add_library(LIBRARY::${CMAKE_FIND_PACKAGE_NAME} ALIAS PkgConfig::${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME})
+    else()
+      set(${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_TYPE LIBRARY)
+      SETUP_BUILD_TARGET()
+
+      add_dependencies(LIBRARY::${CMAKE_FIND_PACKAGE_NAME} ${${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_BUILD_NAME})
+    endif()
+
+    ADD_MULTICONFIG_BUILDMACRO()
   else()
-    set(GTEST_URL http://mirrors.kodi.tv/build-deps/sources/googletest-${GTEST_VERSION}.tar.gz)
+    if(Gtest_FIND_REQUIRED)
+      message(FATAL_ERROR "Gtest libraries were not found. You can either disable testing with -DENABLE_TESTING=OFF or build gtest with -DENABLE_INTERNAL_GTEST=ON")
+    endif()
   endif()
-
-  if(VERBOSE)
-    message(STATUS "GTEST_URL: ${GTEST_URL}")
-  endif()
-
-  set(GTEST_LIBRARY ${CMAKE_BINARY_DIR}/${CORE_BUILD_DIR}/lib/libgtest.a)
-  set(GTEST_INCLUDE_DIR ${CMAKE_BINARY_DIR}/${CORE_BUILD_DIR}/include)
-
-  externalproject_add(gtest
-                      URL ${GTEST_URL}
-                      DOWNLOAD_DIR ${CMAKE_BINARY_DIR}/${CORE_BUILD_DIR}/download
-                      PREFIX ${CORE_BUILD_DIR}/gtest
-                      INSTALL_DIR ${CMAKE_BINARY_DIR}/${CORE_BUILD_DIR}
-                      CMAKE_ARGS -DCMAKE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE} -DBUILD_GMOCK=OFF -DINSTALL_GTEST=ON -DBUILD_SHARED_LIBS=OFF -DCMAKE_INSTALL_PREFIX=<INSTALL_DIR> -DCMAKE_INSTALL_LIBDIR=lib
-                      BUILD_BYPRODUCTS ${GTEST_LIBRARY})
-  set_target_properties(gtest PROPERTIES FOLDER "External Projects")
-else()
-  if(PKG_CONFIG_FOUND)
-    pkg_check_modules(PC_GTEST gtest>=1.10.0 QUIET)
-    set(GTEST_VERSION ${PC_GTEST_VERSION})
-  elseif(WIN32)
-    set(GTEST_VERSION 1.10.0)
-  endif()
-
-  find_path(GTEST_INCLUDE_DIR NAMES gtest/gtest.h
-                              PATHS ${PC_GTEST_INCLUDEDIR})
-
-  find_library(GTEST_LIBRARY_RELEASE NAMES gtest
-                                     PATHS ${PC_GTEST_LIBDIR})
-  find_library(GTEST_LIBRARY_DEBUG NAMES gtestd
-                                   PATHS ${PC_GTEST_LIBDIR})
-
-  include(SelectLibraryConfigurations)
-  select_library_configurations(GTEST)
 endif()
-
-include(FindPackageHandleStandardArgs)
-find_package_handle_standard_args(Gtest
-                                  REQUIRED_VARS GTEST_LIBRARY GTEST_INCLUDE_DIR
-                                  VERSION_VAR GTEST_VERSION)
-
-if(GTEST_FOUND)
-  set(GTEST_LIBRARIES ${GTEST_LIBRARY})
-  set(GTEST_INCLUDE_DIRS ${GTEST_INCLUDE_DIR})
-endif()
-
-if(NOT TARGET Gtest::Gtest)
-  add_library(Gtest::Gtest UNKNOWN IMPORTED)
-  set_target_properties(Gtest::Gtest PROPERTIES
-                                     IMPORTED_LOCATION "${GTEST_LIBRARY}"
-                                     INTERFACE_INCLUDE_DIRECTORIES "${GTEST_INCLUDE_DIR}")
-endif()
-
-mark_as_advanced(GTEST_INCLUDE_DIR GTEST_LIBRARY)

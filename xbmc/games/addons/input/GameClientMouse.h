@@ -9,6 +9,7 @@
 #pragma once
 
 #include "input/mouse/interfaces/IMouseInputHandler.h"
+#include "peripherals/PeripheralTypes.h"
 
 namespace KODI
 {
@@ -19,10 +20,12 @@ class IMouseInputProvider;
 
 namespace GAME
 {
+class CControllerActivity;
 class CGameClient;
 
 /*!
  * \ingroup games
+ *
  * \brief Handles mouse events for games.
  *
  * Listens to mouse events and forwards them to the games (as game_input_event).
@@ -36,10 +39,13 @@ public:
    * \param controllerId The controller profile used for input
    * \param dllStruct The emulator or game to which the events are sent.
    * \param inputProvider The interface providing us with mouse input.
+   * \param portAddress The port the input is sent to: the mouse port, or a
+   *        controller port with a mouse connected
    */
   CGameClientMouse(CGameClient& gameClient,
                    std::string controllerId,
-                   MOUSE::IMouseInputProvider* inputProvider);
+                   MOUSE::IMouseInputProvider* inputProvider,
+                   std::string portAddress);
 
   /*!
    * \brief Destructor unregisters from mouse events from CInputManager.
@@ -48,15 +54,34 @@ public:
 
   // implementation of IMouseInputHandler
   std::string ControllerID() const override;
-  bool OnMotion(const std::string& relpointer, int dx, int dy) override;
+  bool OnPosition(const std::string& relpointer, int positionX, int positionY) override
+  {
+    return false;
+  }
+  bool OnMotion(const std::string& relpointer, int differenceX, int differenceY) override;
   bool OnButtonPress(const std::string& button) override;
   void OnButtonRelease(const std::string& button) override;
+  void OnInputFrame() override;
+
+  // Input accessors
+  const std::string& GetControllerID() const { return m_controllerId; }
+  const PERIPHERALS::PeripheralPtr& GetSource() const { return m_sourcePeripheral; }
+  float GetActivation() const;
+
+  // Input mutators
+  void SetSource(PERIPHERALS::PeripheralPtr sourcePeripheral);
+  void ClearSource();
 
 private:
   // Construction parameters
   CGameClient& m_gameClient;
   const std::string m_controllerId;
   MOUSE::IMouseInputProvider* const m_inputProvider;
+  const std::string m_portAddress;
+
+  // Input parameters
+  PERIPHERALS::PeripheralPtr m_sourcePeripheral;
+  std::unique_ptr<CControllerActivity> m_mouseActivity;
 };
 } // namespace GAME
 } // namespace KODI

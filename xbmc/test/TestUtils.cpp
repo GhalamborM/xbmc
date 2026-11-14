@@ -7,10 +7,15 @@
  */
 
 #include "TestUtils.h"
+
+#include "ServiceBroker.h"
 #include "Util.h"
 #include "filesystem/File.h"
 #include "filesystem/SpecialProtocol.h"
 #include "platform/Filesystem.h"
+#include "settings/Settings.h"
+#include "settings/SettingsComponent.h"
+#include "settings/lib/Setting.h"
 #include "utils/StringUtils.h"
 #include "utils/URIUtils.h"
 
@@ -23,6 +28,8 @@
 #endif
 
 #include <system_error>
+
+#include <gtest/gtest.h>
 
 namespace fs = KODI::PLATFORM::FILESYSTEM;
 
@@ -44,7 +51,7 @@ public:
     if (m_ptempFilePath.empty())
       return false;
 
-    OpenForWrite(m_ptempFilePath.c_str(), true);
+    OpenForWrite(m_ptempFilePath, true);
     return true;
   }
   bool Delete()
@@ -52,10 +59,7 @@ public:
     Close();
     return CFile::Delete(m_ptempFilePath);
   };
-  std::string getTempFilePath() const
-  {
-    return m_ptempFilePath;
-  }
+  const std::string& getTempFilePath() const { return m_ptempFilePath; }
   std::string getTempFileDirectory() const
   {
     return URIUtils::GetDirectory(m_ptempFilePath);
@@ -89,7 +93,6 @@ bool CXBMCTestUtils::SetReferenceFileBasePath()
   /* Set xbmc, xbmcbin and home path */
   CSpecialProtocol::SetXBMCPath(xbmcPath);
   CSpecialProtocol::SetXBMCBinPath(xbmcPath);
-  CSpecialProtocol::SetHomePath(URIUtils::AddFileToFolder(xbmcPath, "portable_data"));
 
   return true;
 }
@@ -117,7 +120,7 @@ std::string CXBMCTestUtils::TempFilePath(XFILE::CFile const* const tempfile)
 {
   if (!tempfile)
     return "";
-  CTempFile const* const f = static_cast<CTempFile const* const>(tempfile);
+  CTempFile const* const f = static_cast<CTempFile const*>(tempfile);
   return f->getTempFilePath();
 }
 
@@ -125,7 +128,7 @@ std::string CXBMCTestUtils::TempFileDirectory(XFILE::CFile const* const tempfile
 {
   if (!tempfile)
     return "";
-  CTempFile const* const f = static_cast<CTempFile const* const>(tempfile);
+  CTempFile const* const f = static_cast<CTempFile const*>(tempfile);
   return f->getTempFileDirectory();
 }
 
@@ -321,4 +324,35 @@ std::string CXBMCTestUtils::getNewLineCharacters() const
 #else
   return "\n";
 #endif
+}
+
+namespace
+{
+std::shared_ptr<CSettings> CurrentSettings()
+{
+  return CServiceBroker::GetSettingsComponent()->GetSettings();
+}
+} // namespace
+
+CScopedSetting::CScopedSetting(const std::string& id)
+  : m_id(id),
+    m_previous(CurrentSettings()->GetSetting(id)->ToString())
+{
+}
+
+CScopedSetting::CScopedSetting(const std::string& id, bool value) : CScopedSetting(id)
+{
+  if (!CurrentSettings()->SetBool(id, value))
+    ADD_FAILURE() << "could not set " << id;
+}
+
+CScopedSetting::CScopedSetting(const std::string& id, const std::string& value) : CScopedSetting(id)
+{
+  if (!CurrentSettings()->SetString(id, value))
+    ADD_FAILURE() << "could not set " << id;
+}
+
+CScopedSetting::~CScopedSetting()
+{
+  CurrentSettings()->GetSetting(m_id)->FromString(m_previous);
 }

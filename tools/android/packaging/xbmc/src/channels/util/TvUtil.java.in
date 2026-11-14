@@ -48,11 +48,10 @@ import @APP_PACKAGE@.channels.model.Subscription;
 public class TvUtil
 {
 
-  private static final String TAG = "TvUtil";
+  private static final String TAG = "@APP_NAME@";
   private static final int CHANNEL_JOB_ID = 500;
   private static final int CHANNEL_TRIGGERED_JOB_ID_OFFSET = 1000;
   private static final int CHANNEL_TIMED_JOB_ID_OFFSET = 2000;
-  private static final int CHANNEL_IMMEDIATE_JOB_ID_OFFSET = 3000;
 
   private static final String[] CHANNELS_PROJECTION = {
           TvContractCompat.Channels._ID,
@@ -88,7 +87,7 @@ public class TvUtil
         {
           Log.d(
                   TAG,
-                  "Channel already exists. Returning channel "
+                  "TvUtil: Channel already exists. Returning channel "
                           + channel.getId()
                           + " from TV Provider.");
           return channel.getId();
@@ -112,7 +111,7 @@ public class TvUtil
             .setDisplayName(subscription.getName())
             .setAppLinkIntent(playlistIntent);
 
-    Log.d(TAG, "Creating channel: " + subscription.getName());
+    Log.d(TAG, "TvUtil: Creating channel: " + subscription.getName());
     Uri channelUrl = null;
     try
     {
@@ -122,16 +121,16 @@ public class TvUtil
                               TvContractCompat.Channels.CONTENT_URI,
                               builder.build().toContentValues());
     } catch (IllegalArgumentException e) {
-      Log.e(TAG, "Failed to add channel to the tv provider");
+      Log.e(TAG, "TvUtil: Failed to add channel to the tv provider");
       e.printStackTrace();
     }
 
     if (channelUrl == null)
       return 0;
 
-    Log.d(TAG, "channel insert at " + channelUrl);
+    Log.d(TAG, "TvUtil: channel insert at " + channelUrl);
     long channelId = ContentUris.parseId(channelUrl);
-    Log.d(TAG, "channel id " + channelId);
+    Log.d(TAG, "TvUtil: channel id " + channelId);
 
     Bitmap bitmap = convertToBitmap(context, subscription.getChannelLogo());
     ChannelLogoUtils.storeChannelLogo(context, channelId, bitmap);
@@ -181,6 +180,18 @@ public class TvUtil
   }
 
   /**
+   * Cancel all jobs scheduled by this app via a {@link JobScheduler}.
+   *
+   * @param context for accessing the {@link JobScheduler}.
+   */
+  public static void cancelAllScheduledJobs(Context context)
+  {
+    JobScheduler scheduler =
+            (JobScheduler) context.getSystemService(Context.JOB_SCHEDULER_SERVICE);
+    scheduler.cancelAll();
+  }
+
+  /**
    * Schedules syncing channels via a {@link JobScheduler}.
    *
    * @param context for accessing the {@link JobScheduler}.
@@ -197,8 +208,13 @@ public class TvUtil
     builder.setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY);
     builder.setMinimumLatency(10000);
 
-    Log.d(TAG, "Scheduled channel creation.");
-    scheduler.schedule(builder.build());
+    Log.d(TAG, "TvUtil: Scheduled channel creation.");
+
+    try {
+      scheduler.schedule(builder.build());
+    } catch (IllegalStateException e) {
+      Log.w(TAG, "TvUtil: scheduleSyncingChannel - Exception: " + e.getMessage());
+    }
   }
 
   /**
@@ -230,7 +246,12 @@ public class TvUtil
     builder.setExtras(bundle);
 
     scheduler.cancel(getTriggeredJobIdForChannelId(channelId));
-    scheduler.schedule(builder.build());
+
+    try {
+      scheduler.schedule(builder.build());
+    } catch (IllegalStateException e) {
+      Log.w(TAG, "TvUtil: scheduleTriggeredSyncingProgramsForChannel - Exception: " + e.getMessage());
+    }
   }
 
   /**
@@ -258,48 +279,22 @@ public class TvUtil
     builder.setExtras(bundle);
 
     JobInfo job = builder.build();
-    Log.d(TAG, "scheduleTimedSyncingProgramsForChannel: minperiod=" + job.getMinPeriodMillis());
+    Log.d(TAG, "TvUtil: scheduleTimedSyncingProgramsForChannel: minperiod=" + job.getMinPeriodMillis());
 
-    scheduler.schedule(job);
-  }
-
-  /**
-   * Schedulers syncing programs for a channel on a time base. The scheduler will listen to a {@link Uri} for a
-   * particular channel.
-   *
-   * @param context   for accessing the {@link JobScheduler}.
-   * @param channelId for the channel to listen for changes.
-   */
-  public static void scheduleSyncingProgramsForChannel(Context context, long channelId)
-  {
-    JobScheduler scheduler =
-            (JobScheduler) context.getSystemService(Context.JOB_SCHEDULER_SERVICE);
-    if (scheduler.getPendingJob(getImmediateJobIdForChannelId(channelId)) != null)
-      return;
-
-    ComponentName componentName = new ComponentName(context, SyncProgramsJobService.class);
-
-    JobInfo.Builder builder =
-            new JobInfo.Builder(getImmediateJobIdForChannelId(channelId), componentName);
-    builder.setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY);
-
-    PersistableBundle bundle = new PersistableBundle();
-    bundle.putLong(TvContractCompat.EXTRA_CHANNEL_ID, channelId);
-    builder.setExtras(bundle);
-
-    scheduler.schedule(builder.build());
+    try {
+      scheduler.schedule(job);
+    } catch (IllegalStateException e) {
+      Log.w(TAG, "TvUtil: scheduleTimedSyncingProgramsForChannel - Exception: " + e.getMessage());
+    }
   }
 
   public static int getTriggeredJobIdForChannelId(long channelId)
   {
     return (int) (CHANNEL_TRIGGERED_JOB_ID_OFFSET + channelId);
   }
+
   public static int getTimedJobIdForChannelId(long channelId)
   {
     return (int) (CHANNEL_TIMED_JOB_ID_OFFSET + channelId);
-  }
-  public static int getImmediateJobIdForChannelId(long channelId)
-  {
-    return (int) (CHANNEL_IMMEDIATE_JOB_ID_OFFSET + channelId);
   }
 }

@@ -9,7 +9,7 @@
 #pragma once
 
 #include "storage/IStorageProvider.h"
-#include "utils/Job.h"
+#include "threads/CriticalSection.h"
 
 #include <vector>
 
@@ -30,33 +30,48 @@ public:
 
   virtual void Initialize();
   virtual void Stop() { }
+  virtual void ScanForPresentMedia();
 
-  virtual void GetLocalDrives(VECSOURCES &localDrives);
-  virtual void GetRemovableDrives(VECSOURCES &removableDrives);
+  virtual void GetLocalDrives(std::vector<CMediaSource>& localDrives);
+  virtual void GetRemovableDrives(std::vector<CMediaSource>& removableDrives);
   virtual std::string GetFirstOpticalDeviceFileName();
 
   virtual bool Eject(const std::string& mountpath);
 
   virtual std::vector<std::string> GetDiskUsage();
 
-  virtual bool PumpDriveChangeEvents(IStorageEventsCallback *callback);
+  virtual bool PumpDriveChangeEvents(IStorageEventsCallback* callback);
+
+  // Translated from Windows messages
+  enum class StorageEventType
+  {
+    ADDED,
+    SAFELY_REMOVED,
+    UNSAFELY_REMOVED,
+  };
+
+  // Build a StorageDevice descriptor from a drive root (eg. "D:")
+  static MEDIA_DETECT::STORAGE::StorageDevice GetStorageDevice(const std::string& drive);
+
+  // Called from the windowing thread to queue a change for the next pump
+  static void QueueStorageEvent(StorageEventType type,
+                                const MEDIA_DETECT::STORAGE::StorageDevice& device);
 
   static void SetEvent() { xbevent = true; }
   static bool xbevent;
 
 private:
-  static void GetDrivesByType(VECSOURCES &localDrives, Drive_Types eDriveType=ALL_DRIVES, bool bonlywithmedia=false);
+  static void GetDrivesByType(std::vector<CMediaSource>& localDrives,
+                              Drive_Types eDriveType = ALL_DRIVES,
+                              bool bonlywithmedia = false);
   static DEVINST GetDrivesDevInstByDiskNumber(long DiskNumber);
+
+  struct StorageEvent
+  {
+    StorageEventType type;
+    MEDIA_DETECT::STORAGE::StorageDevice device;
+  };
+
+  inline static std::vector<StorageEvent> m_events;
+  inline static CCriticalSection m_eventsSection;
 };
-
-class CDetectDisc : public CJob
-{
-public:
-  CDetectDisc(const std::string &strPath, const bool bautorun);
-  bool DoWork();
-
-private:
-  std::string  m_strPath;
-  bool        m_bautorun;
-};
-

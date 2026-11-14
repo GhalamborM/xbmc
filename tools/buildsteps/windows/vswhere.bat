@@ -20,56 +20,50 @@ PUSHD %~dp0\..\..\..\project\BuildDependencies
 SET builddeps=%CD%
 POPD
 
-SET arch=%1
-SET vcarch=amd64
-SET vcstore=%2
 SET vcvars=no
-SET sdkver=
-
 SET vsver=
-SET toolsdir=%arch%
 
-IF "%arch%" NEQ "x64" (
-  SET vcarch=%vcarch%_%arch%
-)
+SET vswhere="%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
 
-IF "%arch%"=="x86" (
-  SET toolsdir=win32
-)
+SET "args=-latest -property installationPath"
+IF "%prerelease%"=="true" SET "args=%args% -prerelease"
 
-IF "%vcstore%"=="store" (
-  SET sdkver=10.0.18362.0
-  SET toolsdir="win10-%toolsdir%"
-)
-
-SET vswhere="%builddeps%\%toolsdir%\tools\vswhere\vswhere.exe"
-
-FOR /f "usebackq tokens=1* delims=" %%i in (`%vswhere% -latest -property installationPath`) do (
+FOR /f "usebackq tokens=1* delims=" %%i in (`%vswhere% %args%`) do (
   IF EXIST "%%i\VC\Auxiliary\Build\vcvarsall.bat" (
     SET vcvars="%%i\VC\Auxiliary\Build\vcvarsall.bat"
-    SET vsver=15 2017
-    ECHO %%i | findstr "2019" >NUL 2>NUL
-    IF NOT ERRORLEVEL 1 SET vsver=16 2019
-    ECHO %%i | findstr "2022" >NUL 2>NUL
-    IF NOT ERRORLEVEL 1 SET vsver=17 2022
-  )
-)
-
-IF %vcvars%==no (
-  FOR /f "usebackq tokens=1* delims=" %%i in (`%vswhere% -legacy -property installationPath`) do (
-    ECHO %%i | findstr "14" >NUL 2>NUL
-    IF NOT ERRORLEVEL 1 (
-      IF EXIST "%%i\VC\vcvarsall.bat" (
-        SET vcvars="%%i\VC\vcvarsall.bat"
-        SET vsver=14 2015
-      )
-    )
+    SET vsver=17 2022
+    rem Default path for VS2026 does not include text 2026
+    ECHO %%i | findstr "\\18\\" >NUL 2>NUL
+    IF NOT ERRORLEVEL 1 SET vsver=18 2026
   )
 )
 
 IF %vcvars%==no (
   ECHO "ERROR! Could not find vcvarsall.bat"
   EXIT /B 1
+)
+
+FOR /F "tokens=1 delims= " %%a IN ("%vsver%") DO (
+  SET vsvernumber=%%a
+)
+
+SET arch=%1
+SET vcstore=%2
+SET sdkver=
+SET vcarch=
+
+rem PROCESSOR_ARCHITECTURE has possible options of x86, AMD64, ARM64
+rem vcvarsall.bat recognises x64 interchangebly with AMD64
+rem we set vcarch for AMD64 to x64 to work with our expected value
+if "%PROCESSOR_ARCHITECTURE%" == "AMD64" (
+  SET vcarch=x64
+) else (
+  rem arm host tools work in VS 17 2022+
+  FOR /F "usebackq tokens=*" %%A IN (`powershell.exe -Command "('%PROCESSOR_ARCHITECTURE%').ToLower( )"`) DO SET vcarch=%%A
+)
+
+IF "%arch%" NEQ "%vcarch%" (
+  SET vcarch=%vcarch%_%arch%
 )
 
 REM vcvars changes the cwd so we need to store it and restore it

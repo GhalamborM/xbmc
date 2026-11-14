@@ -9,53 +9,45 @@
 #pragma once
 
 #include "TextureManager.h"
+#include "TextureScaling.h"
 #include "guiinfo/GUIInfoColor.h"
+#include "guilib/AspectRatio.h"
 #include "utils/ColorUtils.h"
 #include "utils/Geometry.h"
+#include "windowing/GraphicContext.h"
 
 #include <functional>
-
-// image alignment for <aspect>keep</aspect>, <aspect>scale</aspect> or <aspect>center</aspect>
-#define ASPECT_ALIGN_CENTER  0
-#define ASPECT_ALIGN_LEFT    1
-#define ASPECT_ALIGN_RIGHT   2
-#define ASPECT_ALIGNY_CENTER 0
-#define ASPECT_ALIGNY_TOP    4
-#define ASPECT_ALIGNY_BOTTOM 8
-#define ASPECT_ALIGN_MASK    3
-#define ASPECT_ALIGNY_MASK  ~3
-
-class CAspectRatio
-{
-public:
-  enum ASPECT_RATIO { AR_STRETCH = 0, AR_SCALE, AR_KEEP, AR_CENTER };
-  CAspectRatio(ASPECT_RATIO aspect = AR_STRETCH)
-  {
-    ratio = aspect;
-    align = ASPECT_ALIGN_CENTER | ASPECT_ALIGNY_CENTER;
-    scaleDiffuse = true;
-  };
-  bool operator!=(const CAspectRatio &right) const
-  {
-    if (ratio != right.ratio) return true;
-    if (align != right.align) return true;
-    if (scaleDiffuse != right.scaleDiffuse) return true;
-    return false;
-  };
-
-  ASPECT_RATIO ratio;
-  uint32_t     align;
-  bool         scaleDiffuse;
-};
+#include <optional>
+#include <vector>
 
 class CTextureInfo
 {
 public:
   CTextureInfo();
   explicit CTextureInfo(const std::string &file);
-  CTextureInfo& operator=(const CTextureInfo& right) = default;
+  CTextureInfo(bool large,
+               CRect bord,
+               bool fill,
+               int orient,
+               std::string diff,
+               KODI::GUILIB::GUIINFO::CGUIInfoColor color,
+               std::string f)
+    : useLarge(large),
+      border(bord),
+      m_infill(fill),
+      orientation(orient),
+      diffuse(std::move(diff)),
+      diffuseColor(color),
+      filename(std::move(f))
+  {
+  }
+
   bool       useLarge;
   CRect      border;          // scaled  - unneeded if we get rid of scale on load
+  bool m_infill{
+      true}; // if false, the main body of a texture is not drawn. useful for borders with no inner filling
+  bool m_mipmap{false}; // if true, mipmaps are generated, for smooth downscaling
+  bool m_subpixel{false}; // if true, corners are not snapped to whole pixels while moving
   int        orientation;     // orientation of the texture (0 - 7 == EXIForientation - 1)
   std::string diffuse;         // diffuse overlay texture
   KODI::GUILIB::GUIINFO::CGUIInfoColor diffuseColor; // diffuse color
@@ -66,8 +58,14 @@ class CGUITexture;
 
 using CreateGUITextureFunc = std::function<CGUITexture*(
     float posX, float posY, float width, float height, const CTextureInfo& texture)>;
-using DrawQuadFunc = std::function<void(
-    const CRect& coords, UTILS::COLOR::Color color, CTexture* texture, const CRect* texCoords)>;
+using DrawQuadFunc = std::function<void(const CRect& coords,
+                                        KODI::UTILS::COLOR::Color color,
+                                        CTexture* texture,
+                                        const CRect* texCoords,
+                                        const float depth,
+                                        const bool blending)>;
+
+using DrawStencilQuadFunc = std::function<void(const CRect& coords, const STENCIL_LAYER mask)>;
 
 class CGUITexture
 {
@@ -76,33 +74,51 @@ public:
 
   static void Register(const CreateGUITextureFunc& createFunction,
                        const DrawQuadFunc& drawQuadFunction);
+  static void Register(const CreateGUITextureFunc& createFunction,
+                       const DrawQuadFunc& drawQuadFunction,
+                       const DrawStencilQuadFunc& drawStencilQuadFunction);
+  static void UnregisterDrawQuad();
 
   static CGUITexture* CreateTexture(
       float posX, float posY, float width, float height, const CTextureInfo& texture);
   virtual CGUITexture* Clone() const = 0;
 
+  /*! \brief Screen coordinate of a texture corner.
+   \param coord the unsnapped screen coordinate
+   \param subpixel whether the texture keeps its fractional position
+   \return coord rounded to a whole pixel, or unchanged if subpixel
+   */
+  static float SnapToPixel(float coord, bool subpixel);
+
   static void DrawQuad(const CRect& coords,
-                       UTILS::COLOR::Color color,
+                       KODI::UTILS::COLOR::Color color,
                        CTexture* texture = nullptr,
-                       const CRect* texCoords = nullptr);
+                       const CRect* texCoords = nullptr,
+                       const float depth = 1.0,
+                       const bool blending = true);
+
+  static void DrawStencilQuad(const CRect& coords, const STENCIL_LAYER mask);
 
   bool Process(unsigned int currentTime);
-  void Render();
+  void Render(int32_t depthOffset = 0, int32_t overrideDepth = -1);
 
   void DynamicResourceAlloc(bool bOnOff);
   bool AllocResources();
   void FreeResources(bool immediately = false);
   void SetInvalid();
+  void OnWindowResize();
 
   bool SetVisible(bool visible);
   bool SetAlpha(unsigned char alpha);
-  bool SetDiffuseColor(UTILS::COLOR::Color color, const CGUIListItem* item = nullptr);
+  bool SetDiffuseColor(KODI::UTILS::COLOR::Color color, const CGUIListItem* item = nullptr);
   bool SetPosition(float x, float y);
   bool SetWidth(float width);
   bool SetHeight(float height);
   bool SetFileName(const std::string &filename);
   void SetUseCache(const bool useCache = true);
   bool SetAspectRatio(const CAspectRatio &aspect);
+  void SetScalingMethod(TEXTURE_SCALING scalingMethod);
+  void SetDiffuseScalingMethod(TEXTURE_SCALING scalingMethod);
 
   const std::string& GetFileName() const { return m_info.filename; }
   float GetTextureWidth() const { return m_frameWidth; }
@@ -115,6 +131,12 @@ public:
   const CRect& GetRenderRect() const { return m_vertex; }
   bool IsLazyLoaded() const { return m_info.useLarge; }
 
+  /*!
+   * @brief Get the diffuse color (info color) associated to this texture
+   * @return the infocolor associated to this texture
+  */
+  KODI::GUILIB::GUIINFO::CGUIInfoColor GetDiffuseColor() const { return m_info.diffuseColor; }
+
   bool HitTest(const CPoint& point) const
   {
     return CRect(m_posX, m_posY, m_posX + m_width, m_posY + m_height).PtInRect(point);
@@ -124,33 +146,39 @@ public:
   {
     return m_isAllocated == NORMAL_FAILED || m_isAllocated == LARGE_FAILED;
   }
+  bool IsLoading() const { return m_isAllocated == LARGE && (!m_texture.size() || m_largeInterim); }
   bool ReadyToRender() const;
 
 protected:
   CGUITexture(float posX, float posY, float width, float height, const CTextureInfo& texture);
   CGUITexture(const CGUITexture& left);
 
+  /*!
+   * @brief One quad of the texture, independent of the texture's position and size.
+   *
+   * Each edge lies at rect.x1 + anchor * rect.Width() + offset (and likewise vertically), where
+   * rect is the texture's render rectangle in skin coordinates.
+   */
+  struct Quad
+  {
+    CRect anchor;
+    CRect offset;
+    CRect texture;
+    CRect diffuse;
+
+    bool operator==(const Quad& other) const = default;
+  };
+
   bool CalculateSize();
-  void LoadDiffuseImage();
   bool AllocateOnDemand();
   bool UpdateAnimFrame(unsigned int currentTime);
-  void Render(float left,
-              float top,
-              float right,
-              float bottom,
-              float u1,
-              float v1,
-              float u2,
-              float v2,
-              float u3,
-              float v3);
   static void OrientateTexture(CRect &rect, float width, float height, int orientation);
   void ResetAnimState();
 
   // functions that our implementation classes handle
   virtual void Allocate() {}; ///< called after our textures have been allocated
   virtual void Free() {};     ///< called after our textures have been freed
-  virtual void Begin(UTILS::COLOR::Color color) = 0;
+  virtual void Begin(KODI::UTILS::COLOR::Color color) = 0;
   virtual void Draw(float* x,
                     float* y,
                     float* z,
@@ -159,17 +187,42 @@ protected:
                     int orientation) = 0;
   virtual void End() = 0;
 
+  /*!
+   * @brief Draw the quads at @p rect with the current clip region and GUI transform applied by
+   * the GPU.
+   *
+   * Called between Begin() and End(). The quads only change when @p version does, so they can be
+   * kept in GPU memory while @p rect moves or resizes. If this returns false, the quads are
+   * clipped and transformed on the CPU and passed to Draw() instead.
+   */
+  virtual bool DrawQuads(const std::vector<Quad>& quads, unsigned int version, const CRect& rect)
+  {
+    return false;
+  }
+
   bool m_visible;
-  UTILS::COLOR::Color m_diffuseColor;
+  KODI::UTILS::COLOR::Color m_diffuseColor;
 
   float m_posX;         // size of the frame
   float m_posY;
   float m_width;
   float m_height;
+  float m_depth{0};
+
+  // size used to get and release image from LargeTextureManager
+  int m_requestWidth = REQUEST_SIZE_UNSET;
+  int m_requestHeight = REQUEST_SIZE_UNSET;
+  bool m_largeInterim{false};
+  static constexpr int REQUEST_SIZE_UNSET = -1;
 
   CRect m_vertex;       // vertex coords to render
   bool m_invalid;       // if true, we need to recalculate
   bool m_use_cache;
+  std::optional<bool> m_lastReadyState; // cached ready state for change detection
+  std::optional<CRect> m_lastScreenRect; // unsnapped screen rect of the last process
+  unsigned int m_lastMoveTime{0}; // when that rect last changed
+  bool m_moving{false}; // corners stay fractional while set
+  static constexpr unsigned int SUBPIXEL_SETTLE_MS = 200; // a few frames at 24 Hz, yet immediate
   unsigned char m_alpha;
 
   float m_frameWidth, m_frameHeight;          // size in pixels of the actual frame within the texture
@@ -188,6 +241,9 @@ protected:
   enum ALLOCATE_TYPE { NO = 0, NORMAL, LARGE, NORMAL_FAILED, LARGE_FAILED };
   ALLOCATE_TYPE m_isAllocated;
 
+  TEXTURE_SCALING m_scalingMethod{TEXTURE_SCALING::UNKNOWN};
+  TEXTURE_SCALING m_diffuseScalingMethod{TEXTURE_SCALING::UNKNOWN};
+
   CTextureInfo m_info;
   CAspectRatio m_aspect;
 
@@ -195,6 +251,24 @@ protected:
   CTextureArray m_texture;
 
 private:
+  struct Segment
+  {
+    CRect vertex;
+    CRect texture;
+  };
+
+  void UpdateSegments();
+  void Render(const Segment& segment);
+  void OrientateTexCoords(CRect& texture, CRect* diffuse, int orientation) const;
+
+  std::vector<Segment> m_segments;
+  std::vector<Quad> m_quads;
+  float m_frameU{0}; // frame size in texture coordinates
+  float m_frameV{0};
+  bool m_segmentsDirty{true};
+  unsigned int m_quadsVersion{0};
+
   static CreateGUITextureFunc m_createGUITextureFunc;
   static DrawQuadFunc m_drawQuadFunc;
+  static DrawStencilQuadFunc m_drawStencilQuadFunc;
 };

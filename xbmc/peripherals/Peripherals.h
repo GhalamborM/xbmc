@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2005-2018 Team Kodi
+ *  Copyright (C) 2005-2024 Team Kodi
  *  This file is part of Kodi - https://kodi.tv
  *
  *  SPDX-License-Identifier: GPL-2.0-or-later
@@ -8,16 +8,18 @@
 
 #pragma once
 
-#include "IEventScannerCallback.h"
 #include "bus/PeripheralBus.h"
 #include "devices/Peripheral.h"
+#include "guilib/IMsgTargetCallback.h"
 #include "interfaces/IAnnouncer.h"
 #include "messaging/IMessageTarget.h"
+#include "peripherals/events/interfaces/IEventScannerCallback.h"
 #include "settings/lib/ISettingCallback.h"
 #include "threads/CriticalSection.h"
 #include "threads/Thread.h"
 #include "utils/Observer.h"
 
+#include <atomic>
 #include <memory>
 #include <vector>
 
@@ -25,9 +27,14 @@ class CFileItemList;
 class CInputManager;
 class CSetting;
 class CSettingsCategory;
-class TiXmlElement;
 class CAction;
 class CKey;
+class CEvent;
+
+namespace tinyxml2
+{
+class XMLElement;
+}
 
 namespace KODI
 {
@@ -46,11 +53,15 @@ namespace PERIPHERALS
 {
 class CEventScanner;
 
+/*!
+ * \ingroup peripherals
+ */
 class CPeripherals : public ISettingCallback,
                      public Observable,
                      public KODI::MESSAGING::IMessageTarget,
                      public IEventScannerCallback,
-                     public ANNOUNCEMENT::IAnnouncer
+                     public ANNOUNCEMENT::IAnnouncer,
+                     public IMsgTargetCallback
 {
 public:
   explicit CPeripherals(CInputManager& inputManager,
@@ -152,6 +163,15 @@ public:
   void GetSettingsFromMapping(CPeripheral& peripheral) const;
 
   /*!
+   * @brief Get the default values defined in the mappings file for a peripheral, without
+   * applying them to it.
+   * @param peripheral The peripheral to get the defaults for.
+   * @return The default value of each setting, keyed by setting id.
+   */
+  std::map<std::string, std::string> GetDefaultSettingsFromMapping(
+      const CPeripheral& peripheral) const;
+
+  /*!
    * @brief Trigger a device scan on all known busses
    */
   void TriggerDeviceScan(const PeripheralBusType type = PERIPHERAL_BUS_UNKNOWN);
@@ -206,6 +226,23 @@ public:
   bool ToggleDeviceState(const CecStateChange mode = STATE_SWITCH_TOGGLE);
 
   /*!
+   * @brief Query the power status of the device attached via HDMI-CEC.
+   * @param adapterName The name of the CEC adapter to query, matched case insensitively against
+   * the adapter's device name and against its location, so unnamed adapters can be addressed by
+   * port. When empty, the first adapter that reports a status is queried.
+   * @return The reported power status, or CecPowerStatus::NO_ADAPTER when no CEC adapter is
+   * present, when no adapter matches the name, or when the matching adapter isn't running.
+   */
+  CecPowerStatus GetDevicePowerStatus(const std::string& adapterName = "");
+
+  /*!
+   * @brief Get the names of the CEC adapters that are present.
+   * @return The name of each adapter, or its location when the bus didn't name it. These are the
+   * names that GetDevicePowerStatus() matches against.
+   */
+  std::vector<std::string> GetCecAdapterNames() const;
+
+  /*!
    * @brief Try to mute the audio via a peripheral.
    * @return True when this change was handled by a peripheral (and should not be handled by
    * anything else), false otherwise.
@@ -224,14 +261,6 @@ public:
   {
     return ToggleMute();
   } //! @todo CEC only supports toggling the mute status at this time
-
-  /*!
-   * @brief Try to get a keypress from a peripheral.
-   * @param frameTime The current frametime.
-   * @param key The fetched key.
-   * @return True when a keypress was fetched, false otherwise.
-   */
-  bool GetNextKeypress(float frameTime, CKey& key);
 
   /*!
    * @brief Register with the event scanner to control scan timing
@@ -331,6 +360,9 @@ public:
                 const std::string& message,
                 const CVariant& data) override;
 
+  // Implementation of IMsgTargetCallback
+  bool OnMessage(CGUIMessage& message) override;
+
   /*!
    * \brief Access the input manager passed to the constructor
    */
@@ -341,11 +373,32 @@ public:
    */
   KODI::GAME::CControllerManager& GetControllerProfiles() { return m_controllerProfiles; }
 
+  /*!
+   * \brief Get a mutex that allows for add-on install tasks to block on each other
+   */
+  CCriticalSection& GetAddonInstallMutex() { return m_addonInstallMutex; }
+
+  /*!
+   * \brief Get the current activation of a peripheral
+   *
+   * \param peripheralPath The peripherals:// URI of the peripheral's location
+   *
+   * \return The current activation, on a scale of 0.0 to 1.0
+   */
+  float GetPeripheralActivation(const std::string& peripheralPath) const;
+
+  // GUI functions
+  bool WaitForGUI();
+
 private:
+  friend class TestPeripheralMappings;
+
   bool LoadMappings();
+  static bool MappingMatchesPeripheral(const PeripheralDeviceMapping& mapping,
+                                       const CPeripheral& peripheral);
   bool GetMappingForDevice(const CPeripheralBus& bus, PeripheralScanResult& result) const;
   static void GetSettingsFromMappingsFile(
-      TiXmlElement* xmlNode, std::map<std::string, PeripheralDeviceSetting>& m_settings);
+      tinyxml2::XMLElement* xmlNode, std::map<std::string, PeripheralDeviceSetting>& m_settings);
 
   void OnDeviceChanged();
 
@@ -361,5 +414,8 @@ private:
   std::unique_ptr<CEventScanner> m_eventScanner;
   mutable CCriticalSection m_critSectionBusses;
   mutable CCriticalSection m_critSectionMappings;
+  CCriticalSection m_addonInstallMutex;
+  std::atomic<bool> m_guiReady{false};
+  std::unique_ptr<CEvent> m_guiReadyEvent;
 };
 } // namespace PERIPHERALS

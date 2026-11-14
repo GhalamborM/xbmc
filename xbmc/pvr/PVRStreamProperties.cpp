@@ -11,34 +11,35 @@
 #include "addons/kodi-dev-kit/include/kodi/c-api/addon-instance/pvr/pvr_general.h"
 #include "utils/StringUtils.h"
 
+#include <algorithm>
+
 using namespace PVR;
+
+namespace
+{
+constexpr auto KeyProjection = &std::pair<std::string, std::string>::first;
+}
 
 std::string CPVRStreamProperties::GetStreamURL() const
 {
-  for (const auto& prop : *this)
-  {
-    if (prop.first == PVR_STREAM_PROPERTY_STREAMURL)
-      return prop.second;
-  }
-  return {};
+  const auto it = std::ranges::find(*this, PVR_STREAM_PROPERTY_STREAMURL, KeyProjection);
+  return it != cend() ? (*it).second : std::string();
 }
 
 std::string CPVRStreamProperties::GetStreamMimeType() const
 {
-  for (const auto& prop : *this)
-  {
-    if (prop.first == PVR_STREAM_PROPERTY_MIMETYPE)
-      return prop.second;
-  }
-  return {};
+  const auto it = std::ranges::find(*this, PVR_STREAM_PROPERTY_MIMETYPE, KeyProjection);
+  return it != cend() ? (*it).second : std::string();
 }
 
 bool CPVRStreamProperties::EPGPlaybackAsLive() const
 {
-  for (const auto& prop : *this)
-  {
-    if (prop.first == PVR_STREAM_PROPERTY_EPGPLAYBACKASLIVE)
-      return StringUtils::EqualsNoCase(prop.second, "true");
-  }
-  return false;
+  const auto it = std::ranges::find(*this, PVR_STREAM_PROPERTY_EPGPLAYBACKASLIVE, KeyProjection);
+  return it != cend() ? StringUtils::EqualsNoCase((*it).second, "true") : false;
+}
+
+bool CPVRStreamProperties::LivePlaybackAsEPG() const
+{
+  const auto it = std::ranges::find(*this, PVR_STREAM_PROPERTY_LIVEPLAYBACKASEPG, KeyProjection);
+  return it != cend() ? StringUtils::EqualsNoCase((*it).second, "true") : false;
 }

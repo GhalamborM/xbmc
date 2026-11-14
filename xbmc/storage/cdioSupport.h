@@ -97,6 +97,19 @@ typedef struct TRACKINFO
 }
 trackinfo;
 
+/*! \brief Helper enum class for the MMC tray state
+*/
+enum class CdioTrayStatus
+{
+  /* The MMC tray state is reported closed */
+  CLOSED,
+  /* The MMC tray state is reported open */
+  OPEN,
+  /* The MMC tray status operation is not supported */
+  UNKNOWN,
+  /* Generic driver error */
+  DRIVER_ERROR
+};
 
 class CCdInfo
 {
@@ -108,7 +121,7 @@ public:
   }
 
   trackinfo GetTrackInformation( int nTrack ) { return m_ti[nTrack -1]; }
-  xbmc_cdtext_t GetDiscCDTextInformation() { return m_cdtext; }
+  const xbmc_cdtext_t& GetDiscCDTextInformation() const { return m_cdtext; }
 
   bool HasDataTracks() { return (m_nNumData > 0); }
   bool HasAudioTracks() { return (m_nNumAudio > 0); }
@@ -120,7 +133,7 @@ public:
   int GetAudioTrackCount() { return m_nNumAudio; }
   uint32_t GetCddbDiscId() { return m_ulCddbDiscId; }
   int GetDiscLength() { return m_nLength; }
-  std::string GetDiscLabel(){ return m_strDiscLabel; }
+  const std::string& GetDiscLabel() const { return m_strDiscLabel; }
 
   // CD-ROM with ISO 9660 filesystem
   bool IsIso9660( int nTrack ) { return ((m_ti[nTrack - 1].nfsInfo & FS_MASK) == FS_ISO_9660); }
@@ -251,12 +264,14 @@ public:
   CdIo_t* cdio_open_win32(const char *psz_source);
   void cdio_destroy(CdIo_t *p_cdio);
   discmode_t cdio_get_discmode(CdIo_t *p_cdio);
-  int mmc_get_tray_status(const CdIo_t *p_cdio);
-  int cdio_eject_media(CdIo_t **p_cdio);
+  CdioTrayStatus mmc_get_tray_status(const CdIo_t* p_cdio);
+  driver_return_code_t cdio_eject_media(CdIo_t** p_cdio);
   track_t cdio_get_last_track_num(const CdIo_t *p_cdio);
   lsn_t cdio_get_track_lsn(const CdIo_t *p_cdio, track_t i_track);
   lsn_t cdio_get_track_last_lsn(const CdIo_t *p_cdio, track_t i_track);
   driver_return_code_t cdio_read_audio_sectors(const CdIo_t *p_cdio, void *p_buf, lsn_t i_lsn, uint32_t i_blocks);
+  driver_return_code_t cdio_close_tray(const char* psz_source, driver_id_t* driver_id);
+  const char* cdio_driver_errmsg(driver_return_code_t drc);
 
   char* GetDeviceFileName();
 

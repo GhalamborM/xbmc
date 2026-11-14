@@ -10,17 +10,14 @@
 
 #include "Directory.h"
 #include "FileItem.h"
-#include "ServiceBroker.h"
+#include "FileItemList.h"
 #include "URL.h"
 #include "Util.h"
-#include "dialogs/GUIDialogProgress.h"
-#include "guilib/GUIComponent.h"
-#include "guilib/GUIWindowManager.h"
-#include "threads/SystemClock.h"
 #include "utils/StringUtils.h"
 #include "utils/URIUtils.h"
-#include "utils/Variant.h"
 #include "utils/log.h"
+
+#include <chrono>
 
 using namespace XFILE;
 
@@ -43,36 +40,9 @@ bool CMultiPathDirectory::GetDirectory(const CURL& url, CFileItemList &items)
   if (!GetPaths(url, vecPaths))
     return false;
 
-  XbmcThreads::EndTime progressTime(3000); // 3 seconds before showing progress bar
-  CGUIDialogProgress* dlgProgress = NULL;
-
   unsigned int iFailures = 0;
   for (unsigned int i = 0; i < vecPaths.size(); ++i)
   {
-    // show the progress dialog if we have passed our time limit
-    if (progressTime.IsTimePast() && !dlgProgress)
-    {
-      dlgProgress = CServiceBroker::GetGUI()->GetWindowManager().GetWindow<CGUIDialogProgress>(WINDOW_DIALOG_PROGRESS);
-      if (dlgProgress)
-      {
-        dlgProgress->SetHeading(CVariant{15310});
-        dlgProgress->SetLine(0, CVariant{15311});
-        dlgProgress->SetLine(1, CVariant{""});
-        dlgProgress->SetLine(2, CVariant{""});
-        dlgProgress->Open();
-        dlgProgress->ShowProgressBar(true);
-        dlgProgress->SetProgressMax((int)vecPaths.size()*2);
-        dlgProgress->Progress();
-      }
-    }
-    if (dlgProgress)
-    {
-      CURL url(vecPaths[i]);
-      dlgProgress->SetLine(1, CVariant{url.GetWithoutUserDetails()});
-      dlgProgress->SetProgressAdvance();
-      dlgProgress->Progress();
-    }
-
     CFileItemList tempItems;
     CLog::Log(LOGDEBUG, "Getting Directory ({})", CURL::GetRedacted(vecPaths[i]));
     if (CDirectory::GetDirectory(vecPaths[i], tempItems, m_strFileMask, m_flags))
@@ -82,16 +52,7 @@ bool CMultiPathDirectory::GetDirectory(const CURL& url, CFileItemList &items)
       CLog::Log(LOGERROR, "Error Getting Directory ({})", CURL::GetRedacted(vecPaths[i]));
       iFailures++;
     }
-
-    if (dlgProgress)
-    {
-      dlgProgress->SetProgressAdvance();
-      dlgProgress->Progress();
-    }
   }
-
-  if (dlgProgress)
-    dlgProgress->Close();
 
   if (iFailures == vecPaths.size())
     return false;
@@ -163,7 +124,7 @@ bool CMultiPathDirectory::GetPaths(const std::string& path, std::vector<std::str
 
   // URL decode each item
   paths.resize(temp.size());
-  std::transform(temp.begin(), temp.end(), paths.begin(), CURL::Decode);
+  std::ranges::transform(temp, paths.begin(), CURL::Decode);
   return true;
 }
 
@@ -239,18 +200,18 @@ void CMultiPathDirectory::MergeItems(CFileItemList &items)
     return;
   // sort items by label
   // folders are before files in this sort method
-  items.Sort(SortByLabel, SortOrderAscending);
+  items.Sort(SortBy::LABEL, SortOrder::ASCENDING);
   int i = 0;
 
   // if first item in the sorted list is a file, just abort
-  if (!items.Get(i)->m_bIsFolder)
+  if (!items.Get(i)->IsFolder())
     return;
 
   while (i + 1 < items.Size())
   {
     // there are no more folders left, so exit the loop
     CFileItemPtr pItem1 = items.Get(i);
-    if (!pItem1->m_bIsFolder)
+    if (!pItem1->IsFolder())
       break;
 
     std::vector<int> stack;

@@ -4,6 +4,8 @@ set(SOURCES AdvancedSettings.cpp
             LibExportSettings.cpp
             MediaSettings.cpp
             MediaSourceSettings.cpp
+            PlayerSettings.cpp
+            ServicesSettings.cpp
             SettingAddon.cpp
             SettingConditions.cpp
             SettingControl.cpp
@@ -27,6 +29,8 @@ set(HEADERS AdvancedSettings.h
             LibExportSettings.h
             MediaSettings.h
             MediaSourceSettings.h
+            PlayerSettings.h
+            ServicesSettings.h
             SettingAddon.h
             SettingConditions.h
             SettingControl.h
@@ -35,14 +39,16 @@ set(HEADERS AdvancedSettings.h
             SettingPath.h
             Settings.h
             SettingsBase.h
+            SettingsContainer.h
             SettingsValueFlatJsonSerializer.h
             SettingsValueXmlSerializer.h
             SettingUtils.h
             SkinSettings.h
             SettingsComponent.h
-            SubtitlesSettings.h)
+            SubtitlesSettings.h
+            VideoVersionsSettings.h)
 
-if(BLURAY_FOUND)
+if(TARGET ${APP_NAME_LC}::Bluray)
   list(APPEND SOURCES DiscSettings.cpp)
 endif()
 

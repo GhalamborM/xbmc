@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2010-2018 Team Kodi
+ *  Copyright (C) 2010-2026 Team Kodi
  *  This file is part of Kodi - https://kodi.tv
  *
  *  SPDX-License-Identifier: GPL-2.0-or-later
@@ -17,6 +17,7 @@
 #include "threads/Thread.h"
 #include "utils/ActorProtocol.h"
 
+#include <memory>
 #include <utility>
 
 class CAEBitstreamPacker;
@@ -37,6 +38,7 @@ struct SinkConfig
 struct SinkReply
 {
   AEAudioFormat format;
+  const std::string* device;
   float cacheTotal;
   float latency;
   bool hasVolume;
@@ -55,11 +57,13 @@ public:
     UNCONFIGURE,
     STREAMING,
     APPFOCUSED,
+    RESERVE,
     VOLUME,
     FLUSH,
     TIMEOUT,
     SETSILENCETIMEOUT,
     SETNOISETYPE,
+    ARMFILLER,
   };
   enum InSignal
   {
@@ -92,23 +96,30 @@ class CActiveAESink : private CThread
 {
 public:
   explicit CActiveAESink(CEvent *inMsgEvent);
+  ~CActiveAESink();
+
   void EnumerateSinkList(bool force, std::string driver);
   void EnumerateOutputDevices(AEDeviceList &devices, bool passthrough);
+  std::string ValidateOuputDevice(const std::string& device, bool passthrough) const;
   void Start();
   void Dispose();
   AEDeviceType GetDeviceType(const std::string &device);
   bool HasPassthroughDevice();
   bool SupportsFormat(const std::string &device, AEAudioFormat &format);
   bool DeviceExist(std::string driver, const std::string& device);
+  bool NeedIecPack() const { return m_needIecPack; }
   CSinkControlProtocol m_controlPort;
   CSinkDataProtocol m_dataPort;
 
 protected:
+  void OnStartup() override;
   void Process() override;
-  void StateMachine(int signal, Protocol *port, Message *msg);
+  void OnExit() override;
+  void StateMachine(int signal, Protocol* port, Message* msg);
   void PrintSinks(std::string& driver);
-  void GetDeviceFriendlyName(std::string &device);
+  void GetDeviceFriendlyName(const std::string& device);
   void OpenSink();
+  void CloseSink(bool drain = true);
   void ReturnBuffers();
   void SetSilenceTimer();
   bool NeedIECPacking();
@@ -122,13 +133,16 @@ protected:
   CEvent *m_inMsgEvent;
   int m_state;
   bool m_bStateMachineSelfTrigger;
-  int m_extTimeout;
-  int m_silenceTimeOut;
+  std::chrono::milliseconds m_extTimeout;
+  std::chrono::minutes m_silenceTimeOut{std::chrono::minutes::zero()};
   bool m_extError;
-  unsigned int m_extSilenceTimeout;
+  std::chrono::milliseconds m_extSilenceTimeout;
   bool m_extAppFocused;
   bool m_extStreaming;
-  XbmcThreads::EndTime m_extSilenceTimer;
+  bool m_extReserved{false};
+  std::chrono::duration<double> m_reservedCacheTotal{};
+  std::chrono::duration<double> m_reservedLatency{};
+  XbmcThreads::EndTime<> m_extSilenceTimer;
 
   CSampleBuffer m_sampleOfSilence;
   enum
@@ -139,18 +153,19 @@ protected:
     SKIP_SWAP,
   } m_swapState;
 
-  std::vector<uint8_t> m_mergeBuffer;
-
   std::string m_deviceFriendlyName;
   std::string m_device;
   std::vector<AE::AESinkInfo> m_sinkInfoList;
-  IAESink *m_sink;
+  std::unique_ptr<IAESink> m_sink;
   AEAudioFormat m_sinkFormat, m_requestedFormat;
   CEngineStats *m_stats;
   float m_volume;
   int m_sinkLatency;
-  CAEBitstreamPacker *m_packer;
-  bool m_needIecPack;
+  std::unique_ptr<CAEBitstreamPacker> m_packer;
+  bool m_needIecPack{false};
+  bool m_silenceFiller{false};
+  //! \brief Armed when a stream is held for a format change, dropped by the next content.
+  bool m_fillerArmed{false};
   bool m_streamNoise;
 };
 

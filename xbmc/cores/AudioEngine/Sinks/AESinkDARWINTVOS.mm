@@ -21,10 +21,14 @@
 
 #include "platform/darwin/DarwinUtils.h"
 
+#include <mutex>
 #include <sstream>
 
 #import <AVFoundation/AVAudioSession.h>
 #include <AudioToolbox/AudioToolbox.h>
+#include <unistd.h>
+
+using namespace std::chrono_literals;
 
 enum CAChannelIndex
 {
@@ -296,7 +300,7 @@ bool CAAudioUnitSink::deactivate()
     AudioUnitReset(m_audioUnit, kAudioUnitScope_Global, 0);
 
     // this is a delayed call, the OS will block here
-    // until the autio unit actually is stopped.
+    // until the audio unit actually is stopped.
     AudioOutputUnitStop(m_audioUnit);
 
     // detach the render callback on the unit
@@ -358,18 +362,18 @@ unsigned int CAAudioUnitSink::write(uint8_t* data, unsigned int frames, unsigned
   // CAAudioUnitSink owns them.
   if (m_buffer->GetWriteSize() < frames * framesize)
   { // no space to write - wait for a bit
-    CSingleLock lock(mutex);
-    unsigned int timeout = 900 * frames / m_sampleRate;
+    std::unique_lock lock(mutex);
+    auto timeout = std::chrono::milliseconds(900 * frames / m_sampleRate);
     if (!m_started)
-      timeout = 4500;
+      timeout = 4500ms;
 
     // we are using a timer here for being sure for timeouts
     // condvar can be woken spuriously as signaled
-    XbmcThreads::EndTime timer(timeout);
-    condVar.wait(mutex, std::chrono::milliseconds(timeout));
+    XbmcThreads::EndTime<> timer(timeout);
+    condVar.wait(mutex, timeout);
     if (!m_started && timer.IsTimePast())
     {
-      CLog::Log(LOGERROR, "{} engine didn't start in {} ms!", __FUNCTION__, timeout);
+      CLog::Log(LOGERROR, "{} engine didn't start in {} ms!", __FUNCTION__, timeout.count());
       return INT_MAX;
     }
   }
@@ -386,13 +390,13 @@ void CAAudioUnitSink::drain()
   unsigned int bytes = m_buffer->GetReadSize();
   unsigned int totalBytes = bytes;
   int maxNumTimeouts = 3;
-  unsigned int timeout = buffertime();
+  auto timeout = std::chrono::milliseconds(static_cast<int>(buffertime()));
 
   while (bytes && maxNumTimeouts > 0)
   {
-    CSingleLock lock(mutex);
-    XbmcThreads::EndTime timer(timeout);
-    condVar.wait(mutex, std::chrono::milliseconds(timeout));
+    std::unique_lock lock(mutex);
+    XbmcThreads::EndTime<> timer(timeout);
+    condVar.wait(mutex, timeout);
 
     bytes = m_buffer->GetReadSize();
     // if we timeout and do not consume bytes,
@@ -621,14 +625,14 @@ void CAESinkDARWINTVOS::Register()
   AE::CAESinkFactory::RegisterSink(reg);
 }
 
-IAESink* CAESinkDARWINTVOS::Create(std::string& device, AEAudioFormat& desiredFormat)
+std::unique_ptr<IAESink> CAESinkDARWINTVOS::Create(std::string& device,
+                                                   AEAudioFormat& desiredFormat)
 {
-  IAESink* sink = new CAESinkDARWINTVOS();
+  auto sink = std::make_unique<CAESinkDARWINTVOS>();
   if (sink->Initialize(desiredFormat, device))
     return sink;
 
-  delete sink;
-  return nullptr;
+  return {};
 }
 
 bool CAESinkDARWINTVOS::Initialize(AEAudioFormat& format, std::string& device)
@@ -780,15 +784,15 @@ bool CAESinkDARWINTVOS::Initialize(AEAudioFormat& format, std::string& device)
   switch (format.m_streamInfo.m_type)
   {
     case CAEStreamInfo::STREAM_TYPE_AC3:
-      if (!format.m_streamInfo.m_ac3FrameSize)
-        format.m_streamInfo.m_ac3FrameSize = 1536;
-      format.m_frames = format.m_streamInfo.m_ac3FrameSize;
+      if (!format.m_streamInfo.m_frameSize)
+        format.m_streamInfo.m_frameSize = 1536;
+      format.m_frames = format.m_streamInfo.m_frameSize;
       buffer_size = format.m_frames * 8;
       break;
     case CAEStreamInfo::STREAM_TYPE_EAC3:
-      if (!format.m_streamInfo.m_ac3FrameSize)
-        format.m_streamInfo.m_ac3FrameSize = 1536;
-      format.m_frames = format.m_streamInfo.m_ac3FrameSize;
+      if (!format.m_streamInfo.m_frameSize)
+        format.m_streamInfo.m_frameSize = 1536;
+      format.m_frames = format.m_streamInfo.m_frameSize;
       buffer_size = format.m_frames * 8;
       break;
     case CAEStreamInfo::STREAM_TYPE_DTS_512:

@@ -1,39 +1,35 @@
-include ../../Makefile.include
+include ../../Makefile.include XZ-VERSION ../../download-files.include
 PREFIX=$(NATIVEPREFIX)
 PLATFORM=$(NATIVEPLATFORM)
-DEPS= ../../Makefile.include Makefile
+DEPS = ../../Makefile.include Makefile XZ-VERSION ../../download-files.include
 
-# app name, version
-APPNAME=xz
-VERSION=5.2.5
-SOURCE=$(APPNAME)-$(VERSION)
-ARCHIVE=$(SOURCE).tar.gz
+# configuration settings
+CMAKE_OPTIONS=-DXZ_NLS=OFF \
+              -DBUILD_SHARED_LIBS=OFF \
+              -DXZ_TOOL_LZMAINFO=OFF \
+              -DXZ_DOC=OFF \
+              -DBUILD_TESTING=OFF
 
-export LIBTOOL=builds/unix/libtool
-export PATH:=$(PREFIX)/bin:$(PATH)
-CONFIGURE=./configure --prefix=$(PREFIX)
-
-APP=$(PLATFORM)/src/xz/xz
+APP=$(PLATFORM)/build/xz
 
 all: .installed-$(PLATFORM)
 
-$(TARBALLS_LOCATION)/$(ARCHIVE):
-	cd $(TARBALLS_LOCATION); $(RETRIEVE_TOOL) $(RETRIEVE_TOOL_FLAGS) $(BASE_URL)/$(ARCHIVE)
-
-$(PLATFORM): $(TARBALLS_LOCATION)/$(ARCHIVE) $(DEPS)
-	-rm -rf $(PLATFORM)/*; mkdir -p $(PLATFORM)
+.configured-$(PLATFORM): $(DEPS) | $(TARBALLS_LOCATION)/$(ARCHIVE).$(HASH_TYPE)
+	rm -rf $(PLATFORM); mkdir -p $(PLATFORM)/build
 	cd $(PLATFORM); $(ARCHIVE_TOOL) $(ARCHIVE_TOOL_FLAGS) $(TARBALLS_LOCATION)/$(ARCHIVE)
-	cd $(PLATFORM); $(CONFIGURE)
+	cd $(PLATFORM)/build; $(CMAKE_FOR_BUILD) $(CMAKE_OPTIONS) ..
+	touch $@
 
-$(APP): $(PLATFORM)
-	$(MAKE) -C $(PLATFORM)
+$(APP): .configured-$(PLATFORM)
+	$(MAKE) -C $(PLATFORM)/build
 
 .installed-$(PLATFORM): $(APP)
-	$(MAKE) -C $(PLATFORM) install
+	$(MAKE) -C $(PLATFORM)/build install
 	touch $@
 
 clean:
-	$(MAKE) -C $(PLATFORM) clean
+	$(MAKE) -C $(PLATFORM)/build clean
+	rm -f .installed-$(PLATFORM) .configured-$(PLATFORM)
 
 distclean::
-	rm -rf $(PLATFORM) .installed-$(PLATFORM)
+	rm -rf $(PLATFORM) .installed-$(PLATFORM) .configured-$(PLATFORM)

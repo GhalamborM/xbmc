@@ -9,18 +9,20 @@
 #include "GUIViewStateEventLog.h"
 
 #include "FileItem.h"
+#include "FileItemList.h"
 #include "guilib/WindowIDs.h"
 #include "view/ViewState.h"
 #include "windowing/GraphicContext.h"
 
 CGUIViewStateEventLog::CGUIViewStateEventLog(const CFileItemList& items) : CGUIViewState(items)
 {
-  AddSortMethod(SortByDate, 552, LABEL_MASKS("%L", "%d", "%L", "%d"));  // Label, Date | Label, Date
+  AddSortMethod(SortBy::DATE, 552,
+                LABEL_MASKS("%L", "%d", "%L", "%d")); // Label, Date | Label, Date
 
-  SetSortMethod(SortByDate);
+  SetSortMethod(SortBy::DATE);
   SetViewAsControl(DEFAULT_VIEW_AUTO);
 
-  SetSortOrder(SortOrderDescending);
+  SetSortOrder(SortOrder::DESCENDING);
   LoadViewState(items.GetPath(), WINDOW_EVENT_LOG);
 }
 

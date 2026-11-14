@@ -8,35 +8,40 @@
 
 #include "Webinterface.h"
 
-#include "ServiceBroker.h"
-#include "addons/AddonManager.h"
+#include "addons/addoninfo/AddonType.h"
 #include "utils/StringUtils.h"
 #include "utils/URIUtils.h"
 #include "utils/log.h"
 
 using namespace ADDON;
 
+namespace
+{
+constexpr const char* WEBINTERFACE_DEFAULT_ENTRY_POINT = "index.html";
+
+} // unnamed namespace
+
 CWebinterface::CWebinterface(const AddonInfoPtr& addonInfo)
-  : CAddon(addonInfo, ADDON_WEB_INTERFACE),
-    m_type(WebinterfaceTypeStatic),
-    m_entryPoint(WEBINTERFACE_DEFAULT_ENTRY_POINT)
+  : CAddon(addonInfo, AddonType::WEB_INTERFACE), m_entryPoint(WEBINTERFACE_DEFAULT_ENTRY_POINT)
+
 {
   // determine the type of the webinterface
-  std::string webinterfaceType = Type(ADDON_WEB_INTERFACE)->GetValue("@type").asString();
+  std::string webinterfaceType = Type(AddonType::WEB_INTERFACE)->GetValue("@type").asString();
   if (StringUtils::EqualsNoCase(webinterfaceType, "wsgi"))
-    m_type = WebinterfaceTypeWsgi;
+    m_type = WebinterfaceType::TYPE_WSGI;
   else if (!webinterfaceType.empty() && !StringUtils::EqualsNoCase(webinterfaceType, "static") && !StringUtils::EqualsNoCase(webinterfaceType, "html"))
-    CLog::Log(LOGWARNING, "CWebinterface::{}: Addon \"{}\" has specified an unsupported type \"{}\"", ID(), webinterfaceType);
+    CLog::LogF(LOGWARNING, R"(Addon "{}" has specified an unsupported type "{}")", ID(),
+               webinterfaceType);
 
   // determine the entry point of the webinterface
-  std::string entry = Type(ADDON_WEB_INTERFACE)->GetValue("@entry").asString();
+  std::string entry = Type(AddonType::WEB_INTERFACE)->GetValue("@entry").asString();
   if (!entry.empty())
     m_entryPoint = entry;
 }
 
 std::string CWebinterface::GetEntryPoint(const std::string &path) const
 {
-  if (m_type == WebinterfaceTypeWsgi)
+  if (m_type == WebinterfaceType::TYPE_WSGI)
     return LibPath();
 
   return URIUtils::AddFileToFolder(path, m_entryPoint);
@@ -44,7 +49,7 @@ std::string CWebinterface::GetEntryPoint(const std::string &path) const
 
 std::string CWebinterface::GetBaseLocation() const
 {
-  if (m_type == WebinterfaceTypeWsgi)
+  if (m_type == WebinterfaceType::TYPE_WSGI)
     return "/addons/" + ID();
 
   return "";

@@ -25,14 +25,71 @@ public:
   bool Mount();
   bool UnMount();
 
-  bool IsApproved();
+  /*! \brief Check if the device is approved/whitelisted
+    * @return true if the device is approved/whitelisted, false otherwise
+  */
+  bool IsApproved() const;
 
-  std::string toString();
+  /*! \brief Get the storage type of this device
+   * @return the storage type (e.g. OPTICAL) or UNKNOWN if
+   * the type couldn't be detected
+  */
+  MEDIA_DETECT::STORAGE::Type GetStorageType() const;
 
-  CMediaSource ToMediaShare();
+  /*! \brief Check if the device is optical
+    * @return true if the device is optical, false otherwise
+  */
+  bool IsOptical() const;
 
-  std::string m_UDI, m_DeviceKitUDI, m_MountPath, m_FileSystem, m_Label;
-  bool m_isMounted, m_isMountedByUs, m_isRemovable, m_isPartition, m_isFileSystem, m_isSystemInternal, m_isOptical;
+  /*! \brief Check if the device is mounted
+    * @return true if the device is mounted, false otherwise
+  */
+  bool IsMounted() const;
+
+  /*! \brief Check if the device is internal to the system
+    * @return true if the device is internal to the system, false otherwise
+  */
+  bool IsSystemInternal() const;
+
+  /*! \brief Get the device display name/label
+    * @return the device display name/label
+  */
+  const std::string& GetDisplayName() const { return m_Label; }
+
+  /*! \brief Get the device mount point
+    * @return the device mount point
+  */
+  const std::string& GetMountPoint() const { return m_MountPath; }
+
+  /*! \brief Get a representation of the device as a readable string
+    * @return device as a string
+  */
+  std::string ToString() const;
+
+  /*! \brief Get a representation of the device as a media share
+    * @return the media share
+  */
+  CMediaSource ToMediaShare() const;
+
+  /*! \brief Get a representation of the device as a storage device abstraction
+    * @return the storage device abstraction of the device
+  */
+  MEDIA_DETECT::STORAGE::StorageDevice ToStorageDevice() const;
+
+private:
+  std::string m_UDI;
+  std::string m_DeviceKitUDI;
+  std::string m_MountPath;
+  std::string m_DeviceFile;
+  std::string m_FileSystem;
+  std::string m_Label;
+  bool m_isMounted;
+  bool m_isMountedByUs;
+  bool m_isRemovable;
+  bool m_isPartition;
+  bool m_isFileSystem;
+  bool m_isSystemInternal;
+  bool m_isOptical;
   int64_t m_PartitionSize;
 };
 
@@ -45,8 +102,14 @@ public:
   void Initialize() override;
   void Stop() override { }
 
-  void GetLocalDrives(VECSOURCES &localDrives) override { GetDisks(localDrives, false); }
-  void GetRemovableDrives(VECSOURCES &removableDrives) override { GetDisks(removableDrives, true); }
+  void GetLocalDrives(std::vector<CMediaSource>& localDrives) override
+  {
+    GetDisks(localDrives, false);
+  }
+  void GetRemovableDrives(std::vector<CMediaSource>& removableDrives) override
+  {
+    GetDisks(removableDrives, true);
+  }
 
   bool Eject(const std::string& mountpath) override;
 
@@ -65,7 +128,7 @@ private:
 
   std::vector<std::string> EnumerateDisks();
 
-  void GetDisks(VECSOURCES& devices, bool EnumerateRemovable);
+  void GetDisks(std::vector<CMediaSource>& devices, bool EnumerateRemovable);
 
   int m_DaemonVersion;
 

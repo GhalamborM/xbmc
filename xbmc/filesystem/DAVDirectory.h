@@ -8,9 +8,15 @@
 
 #pragma once
 
-#include "FileItem.h"
 #include "IDirectory.h"
-#include "utils/XBMCTinyXML.h"
+
+class CFileItem;
+class CFileItemList;
+
+namespace tinyxml2
+{
+class XMLElement;
+}
 
 namespace XFILE
 {
@@ -23,9 +29,9 @@ namespace XFILE
       bool Create(const CURL& url) override;
       bool Exists(const CURL& url) override;
       bool Remove(const CURL& url) override;
-      DIR_CACHE_TYPE GetCacheType(const CURL& url) const override { return DIR_CACHE_ONCE; }
+      CacheType GetCacheType(const CURL& url) const override { return CacheType::ONCE; }
 
     private:
-      void ParseResponse(const TiXmlElement *pElement, CFileItem &item);
+      void ParseResponse(const tinyxml2::XMLElement* element, CFileItem& item);
   };
 }

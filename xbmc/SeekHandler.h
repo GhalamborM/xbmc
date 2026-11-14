@@ -8,48 +8,53 @@
 
 #pragma once
 
-#include "input/Key.h"
-#include "interfaces/IActionListener.h"
+#include "input/actions/interfaces/IActionListener.h"
 #include "settings/lib/ISettingCallback.h"
 #include "threads/CriticalSection.h"
 #include "utils/Stopwatch.h"
 
+#include <array>
 #include <map>
-#include <utility>
 #include <vector>
 
 struct IntegerSettingOption;
 
-enum SeekType
+enum class SeekType
 {
-  SEEK_TYPE_VIDEO = 0,
-  SEEK_TYPE_MUSIC = 1
+  VIDEO = 0,
+  MUSIC = 1
 };
 
-class CSeekHandler : public ISettingCallback, public IActionListener
+class CSeekHandler : public ISettingCallback, public KODI::ACTION::IActionListener
 {
 public:
   CSeekHandler() = default;
-  ~CSeekHandler() override;
 
   static void SettingOptionsSeekStepsFiller(const std::shared_ptr<const CSetting>& setting,
                                             std::vector<IntegerSettingOption>& list,
-                                            int& current,
-                                            void* data);
+                                            int& current);
 
   void OnSettingChanged(const std::shared_ptr<const CSetting>& setting) override;
   bool OnAction(const CAction &action) override;
 
-  void Seek(bool forward, float amount, float duration = 0, bool analogSeek = false, SeekType type = SEEK_TYPE_VIDEO);
-  void SeekSeconds(int seconds);
+  void Seek(bool forward,
+            float amount,
+            float duration = 0,
+            bool analogSeek = false,
+            SeekType type = SeekType::VIDEO);
+  void SeekSeconds(int seconds, int seekStepValue = 0);
   void FrameMove();
   void Reset();
   void Configure();
+  void ClearSeekStepValue();
+  void CancelSeekAndClearSeekStepValue();
+  void ResetAndClearSeekStepValue();
 
   int GetSeekSize() const;
+  int GetSeekStepValue() const;
   bool InProgress() const;
 
-  bool HasTimeCode() const { return m_timeCodePosition > 0; }
+  bool HasTimeCode() const;
   int GetTimeCodeSeconds() const;
 
 protected:
@@ -62,21 +67,23 @@ private:
   static const int analogSeekDelay = 500;
 
   void SetSeekSize(double seekSize);
-  int GetSeekStepSize(SeekType type, int step);
+  int GetSeekStepSize(SeekType type, int step) const;
+  int GetSeekStepValue(SeekType type, int step) const;
 
   int m_seekDelay = 500;
-  std::map<SeekType, int > m_seekDelays;
+  std::map<SeekType, int> m_seekDelays;
   bool m_requireSeek = false;
   bool m_seekChanged = false;
   bool m_analogSeek = false;
   double m_seekSize = 0;
   int m_seekStep = 0;
-  std::map<SeekType, std::vector<int> > m_forwardSeekSteps;
-  std::map<SeekType, std::vector<int> > m_backwardSeekSteps;
+  int m_seekStepValue = 0;
+  std::map<SeekType, std::vector<int>> m_forwardSeekSteps;
+  std::map<SeekType, std::vector<int>> m_backwardSeekSteps;
   CStopWatch m_timer;
   CStopWatch m_timerTimeCode;
-  int m_timeCodeStamp[6];
-  int m_timeCodePosition;
+  std::array<int, 6> m_timeCodeStamp{};
+  int m_timeCodePosition = 0;
 
-  CCriticalSection m_critSection;
+  mutable CCriticalSection m_critSection;
 };

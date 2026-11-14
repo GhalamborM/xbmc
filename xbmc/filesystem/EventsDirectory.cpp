@@ -9,9 +9,12 @@
 
 #include "EventsDirectory.h"
 
+#include "FileItem.h"
+#include "FileItemList.h"
 #include "ServiceBroker.h"
 #include "URL.h"
 #include "events/EventLog.h"
+#include "utils/ContentNames.h"
 #include "utils/StringUtils.h"
 
 using namespace XFILE;
@@ -19,7 +22,7 @@ using namespace XFILE;
 bool CEventsDirectory::GetDirectory(const CURL& url, CFileItemList &items)
 {
   items.ClearProperties();
-  items.SetContent("events");
+  items.SetContent(KODI::MEDIA::CONTENT::EVENTS);
 
   auto log = CServiceBroker::GetEventLog();
   Events events;
@@ -37,7 +40,7 @@ bool CEventsDirectory::GetDirectory(const CURL& url, CFileItemList &items)
       includeHigherLevels = true;
 
       // remove the "+" from the end of the hostname
-      hostname = hostname.substr(0, hostname.size() - 1);
+      hostname.pop_back();
     }
 
     EventLevel level = CEventLog::EventLevelFromString(hostname);
@@ -52,7 +55,8 @@ bool CEventsDirectory::GetDirectory(const CURL& url, CFileItemList &items)
   return true;
 }
 
-CFileItemPtr CEventsDirectory::EventToFileItem(const EventPtr& eventItem)
+std::shared_ptr<CFileItem> CEventsDirectory::EventToFileItem(
+    const std::shared_ptr<const IEvent>& eventItem)
 {
   if (!eventItem)
     return CFileItemPtr();

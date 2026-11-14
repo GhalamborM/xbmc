@@ -1,7 +1,8 @@
 if test "@cross_compiling@" = "yes"; then
 cross_compiling=yes
-host=@use_host@
-host_alias=@use_host@
+# Defaults, not overrides: a package passing its own --host must win.
+: ${host=@use_host@}
+: ${host_alias=@use_host@}
 fi
 
 LD="@LD@"
@@ -14,16 +15,18 @@ NM="@NM@"
 STRIP="@STRIP@"
 RANLIB="@RANLIB@"
 OBJDUMP="@OBJDUMP@"
+EMCONFIG="@EMCONFIG@"
 
 if test "@platform_os@" = "darwin_embedded" ; then
   export AS="@prefix@/@tool_dir@/bin/gas-preprocessor.pl @CCACHE@ @CC@ -arch @use_cpu@"
   export CCAS="--tag CC @prefix@/@tool_dir@/bin/gas-preprocessor.pl @CCACHE@ @CC@ -arch @use_cpu@"
 fi
 
+ASFLAGS="@platform_asflags@"
 CFLAGS="@platform_cflags@ @platform_includes@ -isystem @prefix@/@deps_dir@/include $CFLAGS"
 LDFLAGS="-L@prefix@/@deps_dir@/lib @platform_ldflags@ $LDFLAGS"
 CXXFLAGS="@platform_cxxflags@ @platform_includes@ -isystem @prefix@/@deps_dir@/include $CXXFLAGS"
-CPPFLAGS="@platform_cflags@ @platform_includes@ -isystem @prefix@/@deps_dir@/include $CPPFLAGS"
+CPPFLAGS="@platform_cppflags@ @platform_includes@ -isystem @prefix@/@deps_dir@/include $CPPFLAGS"
 
 export PKG_CONFIG=@prefix@/@tool_dir@/bin/pkg-config
 export PKG_CONFIG_LIBDIR=@prefix@/@deps_dir@/lib/pkgconfig
@@ -32,12 +35,9 @@ LIBGCRYPT_CONFIG=@prefix@/@deps_dir@/bin/libgcrypt-config
 
 PATH=@prefix@/@tool_dir@/bin:@use_toolchain@/usr/bin:@use_toolchain@/bin:$PATH
 LD_LIBRARY_PATH=@prefix@/@tool_dir@/lib:$LD_LIBRARY_PATH
+export EMCONFIG
 
-PYTHON_VERSION=3.9
 NATIVE_ROOT=@prefix@/@tool_dir@
-
-#libomxil-bellagio
-ac_cv_func_malloc_0_nonnull=yes
 
 #curl
 ac_cv_file__dev_urandom=yes
@@ -48,13 +48,6 @@ gl_cv_header_working_stdint_h=yes
 
 #libcec
 ac_cv_search_dlopen=-ldl
-
-#libgcrypt
-if test "${PACKAGE_NAME}" = "libgcrypt"; then
-  ac_cv_path_GPG_ERROR_CONFIG=@prefix@/@deps_dir@/bin/gpg-error-config
-  ac_cv_sys_symbol_underscore=no
-  CFLAGS="$CFLAGS -std=gnu99"
-fi
 
 #python
 ac_cv_func_gethostbyname_r=no
@@ -69,7 +62,6 @@ gl_cv_func_gettimeofday_clobber=no
 if test "${PACKAGE_NAME}" = "wayland"; then
   # wayland insists on building tests which rely on assert, which cannot work with -DNDEBUG
   # Maybe it would be better not to define -DNDEBUG globally for release builds?
-  export CFLAGS=`echo ${CFLAGS} | sed 's/-DNDEBUG=1//g'`
   export CPPFLAGS=`echo ${CPPFLAGS} | sed 's/-DNDEBUG=1//g'`
 fi
 
@@ -87,15 +79,16 @@ if test "@platform_os@" = "darwin_embedded"; then
   if test "${ac_unique_file}" = "src/flac/main.c" ; then
     # compiler barfs if we use -O3/O2 for flac
     export CFLAGS=`echo ${CFLAGS} | sed 's/-O3/-Os/'`
-    export CPPFLAGS=`echo ${CPPFLAGS} | sed 's/-O3/-Os/'`
   fi
 fi
 
-if test "@target_platform@" = "appletvos"; then
-  ac_cv_func_sigaltstack=no
-  ac_cv_func_vfork_works=no
-  ac_cv_func_fork=no
-fi
+case "@target_platform@" in
+  appletv*)
+    ac_cv_func_sigaltstack=no
+    ac_cv_func_vfork_works=no
+    ac_cv_func_fork=no
+    ;;
+esac
 
 #Fix for older, broken android toolchains
 if test "${PACKAGE_NAME}" = "FreeType" -a "@platform_os@" = "android"; then
@@ -109,4 +102,12 @@ if test "${ac_unique_file}" = "src/flac/main.c" || \
    test "${ac_unique_file}" = "src/libdvdcss.c" || \
    test "${PACKAGE_NAME}" = "libssh2" ; then
      CFLAGS="$CFLAGS -fvisibility=default"
+fi
+
+if test "@platform_os@" = "wasm"; then
+  ac_cv_func_fork=no
+  ac_cv_func_vfork=no
+  ac_cv_func_sigaltstack=no
+  ac_cv_file__dev_urandom=no
+  ac_cv_lib_ssl_SSL_connect=yes
 fi

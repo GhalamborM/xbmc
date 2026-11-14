@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2014-2018 Team Kodi
+ *  Copyright (C) 2014-2024 Team Kodi
  *  This file is part of Kodi - https://kodi.tv
  *
  *  SPDX-License-Identifier: GPL-2.0-or-later
@@ -12,6 +12,7 @@
 #include "games/controllers/Controller.h"
 #include "games/controllers/ControllerManager.h"
 #include "input/joysticks/DriverPrimitive.h"
+#include "input/joysticks/JoystickUtils.h"
 #include "input/joysticks/interfaces/IButtonMap.h"
 #include "input/joysticks/interfaces/IInputHandler.h"
 #include "utils/log.h"
@@ -81,11 +82,7 @@ unsigned int CJoystickFeature::MotionTimeMs() const
 CScalarFeature::CScalarFeature(const FeatureName& name,
                                IInputHandler* handler,
                                IButtonMap* buttonMap)
-  : CJoystickFeature(name, handler, buttonMap),
-    m_bDigitalState(false),
-    m_analogState(0.0f),
-    m_bActivated(false),
-    m_bDiscrete(true)
+  : CJoystickFeature(name, handler, buttonMap)
 {
   GAME::ControllerPtr controller =
       CServiceBroker::GetGameControllerManager().GetController(handler->ControllerID());
@@ -226,7 +223,7 @@ void CScalarFeature::ProcessAnalogMotion()
 // --- CAxisFeature ------------------------------------------------------------
 
 CAxisFeature::CAxisFeature(const FeatureName& name, IInputHandler* handler, IButtonMap* buttonMap)
-  : CJoystickFeature(name, handler, buttonMap), m_state(0.0f)
+  : CJoystickFeature(name, handler, buttonMap)
 {
 }
 
@@ -247,7 +244,7 @@ void CAxisFeature::ProcessMotions(void)
   const bool bWasActivated = (m_state != 0.0f);
 
   if (!bActivated && bWasActivated)
-    CLog::Log(LOGDEBUG, "Feature [ {} ] on {} deactivated", m_name);
+    CLog::Log(LOGDEBUG, "Feature [ {} ] on {} deactivated", m_name, m_handler->ControllerID());
   else if (bActivated && !bWasActivated)
   {
     CLog::Log(LOGDEBUG, "Feature [ {} ] on {} activated {}", m_name, m_handler->ControllerID(),
@@ -379,7 +376,7 @@ bool CThrottle::OnAnalogMotion(const CDriverPrimitive& source, float magnitude)
 // --- CAnalogStick ------------------------------------------------------------
 
 CAnalogStick::CAnalogStick(const FeatureName& name, IInputHandler* handler, IButtonMap* buttonMap)
-  : CJoystickFeature(name, handler, buttonMap), m_vertState(0.0f), m_horizState(0.0f)
+  : CJoystickFeature(name, handler, buttonMap)
 {
 }
 
@@ -442,10 +439,6 @@ void CAnalogStick::ProcessMotions(void)
   const float newHorizState = m_horizAxis.GetPosition();
 
   const bool bActivated = (newVertState != 0.0f || newHorizState != 0.0f);
-
-  if (!AcceptsInput(bActivated))
-    return;
-
   const bool bWasActivated = (m_vertState != 0.0f || m_horizState != 0.0f);
 
   if (bActivated ^ bWasActivated)
@@ -482,10 +475,7 @@ void CAnalogStick::ProcessMotions(void)
 CAccelerometer::CAccelerometer(const FeatureName& name,
                                IInputHandler* handler,
                                IButtonMap* buttonMap)
-  : CJoystickFeature(name, handler, buttonMap),
-    m_xAxisState(0.0f),
-    m_yAxisState(0.0f),
-    m_zAxisState(0.0f)
+  : CJoystickFeature(name, handler, buttonMap)
 {
 }
 
@@ -505,24 +495,40 @@ bool CAccelerometer::OnAnalogMotion(const CDriverPrimitive& source, float magnit
 
   m_buttonMap->GetAccelerometer(m_name, positiveX, positiveY, positiveZ);
 
+  // The button map routes each axis's negative semiaxis here too
+  auto opposite = [](const CDriverPrimitive& semiaxis)
+  { return CDriverPrimitive(semiaxis.Index(), 0, semiaxis.SemiAxisDirection() * -1, 1); };
+
   if (source == positiveX)
   {
     m_xAxis.SetPositiveDistance(magnitude);
+  }
+  else if (source == opposite(positiveX))
+  {
+    m_xAxis.SetNegativeDistance(magnitude);
   }
   else if (source == positiveY)
   {
     m_yAxis.SetPositiveDistance(magnitude);
   }
+  else if (source == opposite(positiveY))
+  {
+    m_yAxis.SetNegativeDistance(magnitude);
+  }
   else if (source == positiveZ)
   {
     m_zAxis.SetPositiveDistance(magnitude);
+  }
+  else if (source == opposite(positiveZ))
+  {
+    m_zAxis.SetNegativeDistance(magnitude);
   }
   else
   {
     // Just in case, avoid sticking
     m_xAxis.Reset();
-    m_xAxis.Reset();
     m_yAxis.Reset();
+    m_zAxis.Reset();
   }
 
   return bHandled;

@@ -10,14 +10,12 @@
 
 #include "CompileInfo.h"
 #include "ServiceBroker.h"
-#include "Util.h"
 #include "XBDateTime.h"
 #include "filesystem/File.h"
 #include "network/httprequesthandler/HTTPRequestHandlerUtils.h"
 #include "network/httprequesthandler/IHTTPRequestHandler.h"
 #include "settings/Settings.h"
 #include "settings/SettingsComponent.h"
-#include "threads/SingleLock.h"
 #include "utils/FileUtils.h"
 #include "utils/Mime.h"
 #include "utils/StringUtils.h"
@@ -27,6 +25,7 @@
 
 #include <algorithm>
 #include <memory>
+#include <mutex>
 #include <stdexcept>
 #include <utility>
 
@@ -125,7 +124,7 @@ MHD_RESULT CWebServer::AskForAuthentication(const HTTPRequest& request) const
 
 bool CWebServer::IsAuthenticated(const HTTPRequest& request) const
 {
-  CSingleLock lock(m_critSection);
+  std::unique_lock lock(m_critSection);
 
   if (!m_authenticationRequired)
     return true;
@@ -163,11 +162,6 @@ MHD_RESULT CWebServer::AnswerToConnection(void* cls,
   }
 
   CWebServer* webServer = reinterpret_cast<CWebServer*>(cls);
-  if (webServer == nullptr)
-  {
-    GetLogger()->error("invalid request received");
-    return MHD_NO;
-  }
 
   ConnectionHandler* connectionHandler = reinterpret_cast<ConnectionHandler*>(*con_cls);
   HTTPMethod methodType = GetHTTPMethod(method);
@@ -209,7 +203,7 @@ MHD_RESULT CWebServer::HandlePartialRequest(struct MHD_Connection* connection,
     if (handler != nullptr)
     {
       // if we got a GET request we need to check if it should be cached
-      if (request.method == GET)
+      if (request.method == GET || request.method == HEAD)
       {
         if (handler->CanBeCached())
         {
@@ -441,11 +435,6 @@ MHD_RESULT CWebServer::FinalizeRequest(const std::shared_ptr<IHTTPRequestHandler
   else
     handler->AddResponseHeader(MHD_HTTP_HEADER_ACCEPT_RANGES, "none");
 
-  // add MHD_HTTP_HEADER_CONTENT_LENGTH
-  if (responseDetails.totalLength > 0)
-    handler->AddResponseHeader(MHD_HTTP_HEADER_CONTENT_LENGTH,
-                               std::to_string(responseDetails.totalLength));
-
   // add all headers set by the request handler
   for (const auto& it : responseDetails.headers)
     AddHeader(response, it.first, it.second);
@@ -597,7 +586,9 @@ bool CWebServer::ProcessPostData(const HTTPRequest& request,
     if (!postDataHandled)
     {
       m_logger->error("failed to handle HTTP POST data for {}", request.pathUrl);
-#if (MHD_VERSION >= 0x00095213)
+#if (MHD_VERSION >= 0x00097400)
+      connectionHandler->errorStatus = MHD_HTTP_CONTENT_TOO_LARGE;
+#elif (MHD_VERSION >= 0x00095213)
       connectionHandler->errorStatus = MHD_HTTP_PAYLOAD_TOO_LARGE;
 #else
       connectionHandler->errorStatus = MHD_HTTP_REQUEST_ENTITY_TOO_LARGE;
@@ -647,7 +638,7 @@ MHD_RESULT CWebServer::CreateMemoryDownloadResponse(
   // we MUST NOT send a multipart response
   if (request.ranges.Size() <= 1)
   {
-    CHttpResponseRange responseRange = responseRanges.front();
+    const CHttpResponseRange& responseRange = responseRanges.front();
     // check if the range is valid
     if (!responseRange.IsValid())
     {
@@ -825,111 +816,95 @@ MHD_RESULT CWebServer::CreateFileDownloadResponse(
     mimeType = CreateMimeTypeFromExtension(ext.c_str());
   }
 
-  if (request.method != HEAD)
+  uint64_t totalLength = 0;
+  std::unique_ptr<HttpFileDownloadContext> context = std::make_unique<HttpFileDownloadContext>();
+  context->file = file;
+  context->contentType = mimeType;
+  context->boundaryWritten = false;
+  context->writePosition = 0;
+
+  if (handler->IsRequestRanged())
   {
-    uint64_t totalLength = 0;
-    std::unique_ptr<HttpFileDownloadContext> context(new HttpFileDownloadContext());
-    context->file = file;
-    context->contentType = mimeType;
-    context->boundaryWritten = false;
-    context->writePosition = 0;
-
-    if (handler->IsRequestRanged())
-    {
-      if (!request.ranges.IsEmpty())
-        context->ranges = request.ranges;
-      else
-        HTTPRequestHandlerUtils::GetRequestedRanges(request.connection, fileLength,
-                                                    context->ranges);
-    }
-
-    uint64_t firstPosition = 0;
-    uint64_t lastPosition = 0;
-    // if there are no ranges, add the whole range
-    if (context->ranges.IsEmpty())
-      context->ranges.Add(CHttpRange(0, fileLength - 1));
+    if (!request.ranges.IsEmpty())
+      context->ranges = request.ranges;
     else
-    {
-      handler->SetResponseStatus(MHD_HTTP_PARTIAL_CONTENT);
-
-      // we need to remember that we are ranged because the range length might change and won't be
-      // reliable anymore for length comparisons
-      ranged = true;
-
-      context->ranges.GetFirstPosition(firstPosition);
-      context->ranges.GetLastPosition(lastPosition);
-    }
-
-    // remember the total number of ranges
-    context->rangeCountTotal = context->ranges.Size();
-    // remember the total length
-    totalLength = context->ranges.GetLength();
-
-    // adjust the MIME type and range length in case of multiple ranges which requires multipart
-    // boundaries
-    if (context->rangeCountTotal > 1)
-    {
-      context->boundary = HttpRangeUtils::GenerateMultipartBoundary();
-      mimeType = HttpRangeUtils::GenerateMultipartBoundaryContentType(context->boundary);
-
-      // build part of the boundary with the optional Content-Type header
-      // "--<boundary>\r\nContent-Type: <content-type>\r\n
-      context->boundaryWithHeader = HttpRangeUtils::GenerateMultipartBoundaryWithHeader(
-          context->boundary, context->contentType);
-      context->boundaryEnd = HttpRangeUtils::GenerateMultipartBoundaryEnd(context->boundary);
-
-      // for every range, we need to add a boundary with header
-      for (HttpRanges::const_iterator range = context->ranges.Begin();
-           range != context->ranges.End(); ++range)
-      {
-        // we need to temporarily add the Content-Range header to the boundary to be able to
-        // determine the length
-        std::string completeBoundaryWithHeader =
-            HttpRangeUtils::GenerateMultipartBoundaryWithHeader(context->boundaryWithHeader,
-                                                                &*range);
-        totalLength += completeBoundaryWithHeader.size();
-
-        // add a newline before any new multipart boundary
-        if (range != context->ranges.Begin())
-          totalLength += strlen(HEADER_NEWLINE);
-      }
-      // and at the very end a special end-boundary "\r\n--<boundary>--"
-      totalLength += context->boundaryEnd.size();
-    }
-
-    // set the initial write position
-    context->ranges.GetFirstPosition(context->writePosition);
-
-    // create the response object
-    response =
-        MHD_create_response_from_callback(totalLength, 2048, &CWebServer::ContentReaderCallback,
-                                          context.get(), &CWebServer::ContentReaderFreeCallback);
-    if (response == nullptr)
-    {
-      m_logger->error("failed to create a HTTP response for {} to be filled from{}",
-                      request.pathUrl, filePath);
-      return MHD_NO;
-    }
-
-    context.release(); // ownership was passed to mhd
-
-    // add Content-Range header
-    if (ranged)
-      handler->AddResponseHeader(
-          MHD_HTTP_HEADER_CONTENT_RANGE,
-          HttpRangeUtils::GenerateContentRangeHeaderValue(firstPosition, lastPosition, fileLength));
+      HTTPRequestHandlerUtils::GetRequestedRanges(request.connection, fileLength, context->ranges);
   }
+
+  uint64_t firstPosition = 0;
+  uint64_t lastPosition = 0;
+  // if there are no ranges, add the whole range
+  if (context->ranges.IsEmpty())
+    context->ranges.Add(CHttpRange(0, fileLength - 1));
   else
   {
-    response = create_response(0, nullptr, MHD_NO, MHD_NO);
-    if (response == nullptr)
-    {
-      m_logger->error("failed to create a HTTP HEAD response for {}", request.pathUrl);
-      return MHD_NO;
-    }
+    handler->SetResponseStatus(MHD_HTTP_PARTIAL_CONTENT);
 
-    handler->AddResponseHeader(MHD_HTTP_HEADER_CONTENT_LENGTH, std::to_string(fileLength));
+    // we need to remember that we are ranged because the range length might change and won't be
+    // reliable anymore for length comparisons
+    ranged = true;
+
+    context->ranges.GetFirstPosition(firstPosition);
+    context->ranges.GetLastPosition(lastPosition);
   }
+
+  // remember the total number of ranges
+  context->rangeCountTotal = context->ranges.Size();
+  // remember the total length
+  totalLength = context->ranges.GetLength();
+
+  // adjust the MIME type and range length in case of multiple ranges which requires multipart
+  // boundaries
+  if (context->rangeCountTotal > 1)
+  {
+    context->boundary = HttpRangeUtils::GenerateMultipartBoundary();
+    mimeType = HttpRangeUtils::GenerateMultipartBoundaryContentType(context->boundary);
+
+    // build part of the boundary with the optional Content-Type header
+    // "--<boundary>\r\nContent-Type: <content-type>\r\n
+    context->boundaryWithHeader = HttpRangeUtils::GenerateMultipartBoundaryWithHeader(
+        context->boundary, context->contentType);
+    context->boundaryEnd = HttpRangeUtils::GenerateMultipartBoundaryEnd(context->boundary);
+
+    // for every range, we need to add a boundary with header
+    for (HttpRanges::const_iterator range = context->ranges.Begin(); range != context->ranges.End();
+         ++range)
+    {
+      // we need to temporarily add the Content-Range header to the boundary to be able to
+      // determine the length
+      std::string completeBoundaryWithHeader =
+          HttpRangeUtils::GenerateMultipartBoundaryWithHeader(context->boundaryWithHeader, &*range);
+      totalLength += completeBoundaryWithHeader.size();
+
+      // add a newline before any new multipart boundary
+      if (range != context->ranges.Begin())
+        totalLength += strlen(HEADER_NEWLINE);
+    }
+    // and at the very end a special end-boundary "\r\n--<boundary>--"
+    totalLength += context->boundaryEnd.size();
+  }
+
+  // set the initial write position
+  context->ranges.GetFirstPosition(context->writePosition);
+
+  // create the response object
+  response =
+      MHD_create_response_from_callback(totalLength, 2048, &CWebServer::ContentReaderCallback,
+                                        context.get(), &CWebServer::ContentReaderFreeCallback);
+  if (response == nullptr)
+  {
+    m_logger->error("failed to create a HTTP response for {} to be filled from{}", request.pathUrl,
+                    filePath);
+    return MHD_NO;
+  }
+
+  context.release(); // ownership was passed to mhd
+
+  // add Content-Range header
+  if (ranged)
+    handler->AddResponseHeader(
+        MHD_HTTP_HEADER_CONTENT_RANGE,
+        HttpRangeUtils::GenerateContentRangeHeaderValue(firstPosition, lastPosition, fileLength));
 
   // set the Content-Type header
   if (!mimeType.empty())
@@ -946,20 +921,17 @@ MHD_RESULT CWebServer::CreateErrorResponse(struct MHD_Connection* connection,
   size_t payloadSize = 0;
   const void* payload = nullptr;
 
-  if (method != HEAD)
+  switch (responseType)
   {
-    switch (responseType)
-    {
-      case MHD_HTTP_NOT_FOUND:
-        payloadSize = strlen(PAGE_FILE_NOT_FOUND);
-        payload = (const void*)PAGE_FILE_NOT_FOUND;
-        break;
+    case MHD_HTTP_NOT_FOUND:
+      payloadSize = strlen(PAGE_FILE_NOT_FOUND);
+      payload = (const void*)PAGE_FILE_NOT_FOUND;
+      break;
 
-      case MHD_HTTP_NOT_IMPLEMENTED:
-        payloadSize = strlen(NOT_SUPPORTED);
-        payload = (const void*)NOT_SUPPORTED;
-        break;
-    }
+    case MHD_HTTP_NOT_IMPLEMENTED:
+      payloadSize = strlen(NOT_SUPPORTED);
+      payload = (const void*)NOT_SUPPORTED;
+      break;
   }
 
   response = create_response(payloadSize, payload, MHD_NO, MHD_NO);
@@ -1220,7 +1192,9 @@ bool CWebServer::LoadCert(std::string& skey, std::string& scert)
 struct MHD_Daemon* CWebServer::StartMHD(unsigned int flags, int port)
 {
   unsigned int timeout = 60 * 60 * 24;
-  const char* ciphers = "NORMAL:-VERS-TLS1.0";
+  // PFS covers ECDHE and DHE alike, so the finite-field exchanges RFC 10015 forbids for
+  // TLS 1.2 have to be subtracted from it by name.
+  const char* ciphers = "PFS:-VERS-TLS1.0:-VERS-TLS1.1:-DHE-RSA:-DHE-DSS:-DHE-PSK";
 
   MHD_set_panic_func(&panicHandlerForMHD, nullptr);
 
@@ -1243,11 +1217,11 @@ struct MHD_Daemon* CWebServer::StartMHD(unsigned int flags, int port)
             | MHD_USE_SSL,
         port, 0, 0, &CWebServer::AnswerToConnection, this,
 
-        MHD_OPTION_CONNECTION_LIMIT, 512, MHD_OPTION_CONNECTION_TIMEOUT, timeout,
-        MHD_OPTION_URI_LOG_CALLBACK, &CWebServer::UriRequestLogger, this,
-        MHD_OPTION_EXTERNAL_LOGGER, &logFromMHD, 0, MHD_OPTION_THREAD_STACK_SIZE,
-        m_thread_stacksize, MHD_OPTION_HTTPS_MEM_KEY, m_key.c_str(), MHD_OPTION_HTTPS_MEM_CERT,
-        m_cert.c_str(), MHD_OPTION_HTTPS_PRIORITIES, ciphers, MHD_OPTION_END);
+        MHD_OPTION_EXTERNAL_LOGGER, &logFromMHD, 0, MHD_OPTION_CONNECTION_LIMIT, 512,
+        MHD_OPTION_CONNECTION_TIMEOUT, timeout, MHD_OPTION_URI_LOG_CALLBACK,
+        &CWebServer::UriRequestLogger, this, MHD_OPTION_THREAD_STACK_SIZE, m_thread_stacksize,
+        MHD_OPTION_HTTPS_MEM_KEY, m_key.c_str(), MHD_OPTION_HTTPS_MEM_CERT, m_cert.c_str(),
+        MHD_OPTION_HTTPS_PRIORITIES, ciphers, MHD_OPTION_END);
 
   // No SSL
   return MHD_start_daemon(
@@ -1264,10 +1238,26 @@ struct MHD_Daemon* CWebServer::StartMHD(unsigned int flags, int port)
       ,
       port, 0, 0, &CWebServer::AnswerToConnection, this,
 
-      MHD_OPTION_CONNECTION_LIMIT, 512, MHD_OPTION_CONNECTION_TIMEOUT, timeout,
-      MHD_OPTION_URI_LOG_CALLBACK, &CWebServer::UriRequestLogger, this, MHD_OPTION_EXTERNAL_LOGGER,
-      &logFromMHD, 0, MHD_OPTION_THREAD_STACK_SIZE, m_thread_stacksize, MHD_OPTION_END);
+      MHD_OPTION_EXTERNAL_LOGGER, &logFromMHD, 0, MHD_OPTION_CONNECTION_LIMIT, 512,
+      MHD_OPTION_CONNECTION_TIMEOUT, timeout, MHD_OPTION_URI_LOG_CALLBACK,
+      &CWebServer::UriRequestLogger, this, MHD_OPTION_THREAD_STACK_SIZE, m_thread_stacksize,
+      MHD_OPTION_END);
 }
+
+namespace
+{
+uint16_t GetDaemonPort(struct MHD_Daemon* daemon)
+{
+  if (daemon == nullptr)
+    return 0;
+
+  const union MHD_DaemonInfo* info = MHD_get_daemon_info(daemon, MHD_DAEMON_INFO_BIND_PORT);
+  if (info == nullptr)
+    return 0;
+
+  return info->port;
+}
+} // namespace
 
 bool CWebServer::Start(uint16_t port, const std::string& username, const std::string& password)
 {
@@ -1283,13 +1273,27 @@ bool CWebServer::Start(uint16_t port, const std::string& username, const std::st
       closesocket(v6testSock);
       m_daemon_ip6 = StartMHD(MHD_USE_IPv6, port);
     }
-    m_daemon_ip4 = StartMHD(0, port);
+
+    // both daemons have to listen on the same port, so when the operating system picks it the
+    // IPv4 daemon must be given the port the IPv6 daemon was assigned rather than picking again
+    uint16_t listenPort = port;
+    if (port == 0 && m_daemon_ip6 != nullptr)
+    {
+      listenPort = GetDaemonPort(m_daemon_ip6);
+      if (listenPort == 0)
+      {
+        MHD_stop_daemon(m_daemon_ip6);
+        m_daemon_ip6 = nullptr;
+      }
+    }
+
+    m_daemon_ip4 = StartMHD(0, listenPort);
 
     m_running = (m_daemon_ip6 != nullptr) || (m_daemon_ip4 != nullptr);
     if (m_running)
     {
-      m_port = port;
-      m_logger->info("Started");
+      m_port = listenPort != 0 ? listenPort : GetDaemonPort(m_daemon_ip4);
+      m_logger->info("Started on port {}", m_port);
     }
     else
       m_logger->error("Failed to start");
@@ -1304,10 +1308,16 @@ bool CWebServer::Stop()
     return true;
 
   if (m_daemon_ip6 != nullptr)
+  {
     MHD_stop_daemon(m_daemon_ip6);
+    m_daemon_ip6 = nullptr;
+  }
 
   if (m_daemon_ip4 != nullptr)
+  {
     MHD_stop_daemon(m_daemon_ip4);
+    m_daemon_ip4 = nullptr;
+  }
 
   m_running = false;
   m_logger->info("Stopped");
@@ -1321,6 +1331,11 @@ bool CWebServer::IsStarted()
   return m_running;
 }
 
+uint16_t CWebServer::GetPort() const
+{
+  return m_port;
+}
+
 bool CWebServer::WebServerSupportsSSL()
 {
   return MHD_is_feature_supported(MHD_FEATURE_SSL) == MHD_YES;
@@ -1328,7 +1343,7 @@ bool CWebServer::WebServerSupportsSSL()
 
 void CWebServer::SetCredentials(const std::string& username, const std::string& password)
 {
-  CSingleLock lock(m_critSection);
+  std::unique_lock lock(m_critSection);
 
   m_authenticationUsername = username;
   m_authenticationPassword = password;
@@ -1340,7 +1355,7 @@ void CWebServer::RegisterRequestHandler(IHTTPRequestHandler* handler)
   if (handler == nullptr)
     return;
 
-  const auto& it = std::find(m_requestHandlers.cbegin(), m_requestHandlers.cend(), handler);
+  const auto& it = std::ranges::find(m_requestHandlers, handler);
   if (it != m_requestHandlers.cend())
     return;
 
@@ -1423,12 +1438,9 @@ MHD_RESULT CWebServer::AddHeader(struct MHD_Response* response,
   if (CServiceBroker::GetLogging().CanLogComponent(LOGWEBSERVER))
     m_logger->debug("[OUT] {}: {}", name, value);
 
-#if MHD_VERSION >= 0x00096800
   if (name == MHD_HTTP_HEADER_CONTENT_LENGTH)
-  {
-    MHD_set_response_options(response, MHD_RF_INSANITY_HEADER_CONTENT_LENGTH, MHD_RO_END);
-  }
-#endif
+    m_logger->warn("Attempt to override MHD automatic \"Content-Length\" header");
+
   return MHD_add_response_header(response, name.c_str(), value.c_str());
 }
 

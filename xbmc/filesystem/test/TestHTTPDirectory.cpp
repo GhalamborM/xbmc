@@ -7,9 +7,12 @@
  */
 
 #include "FileItem.h"
+#include "FileItemList.h"
+#include "ServiceBroker.h"
 #include "URL.h"
 #include "filesystem/CurlFile.h"
 #include "filesystem/HTTPDirectory.h"
+#include "network/DNSNameCache.h"
 #include "network/WebServer.h"
 #include "network/httprequesthandler/HTTPVfsHandler.h"
 #include "settings/MediaSourceSettings.h"
@@ -18,14 +21,15 @@
 #include "utils/URIUtils.h"
 #include "utils/XTimeUtils.h"
 
-#include <random>
+#include <memory>
 #include <stdlib.h>
 
 #include <gtest/gtest.h>
 
 using namespace XFILE;
+using KODI::MEDIA::MediaSection;
 
-#define WEBSERVER_HOST "localhost"
+#define WEBSERVER_HOST "127.0.0.1"
 
 #define SOURCE_PATH "xbmc/filesystem/test/data/httpdirectory/"
 
@@ -65,35 +69,48 @@ using namespace XFILE;
 class TestHTTPDirectory : public testing::Test
 {
 protected:
-  TestHTTPDirectory() : m_sourcePath(XBMC_REF_FILE_PATH(SOURCE_PATH))
-  {
-    std::random_device rd;
-    std::mt19937 mt(rd());
-    std::uniform_int_distribution<uint16_t> dist(49152, 65535);
-    m_webServerPort = dist(mt);
-
-    m_baseUrl = StringUtils::Format("http://" WEBSERVER_HOST ":{}", m_webServerPort);
-  }
+  TestHTTPDirectory() : m_sourcePath(XBMC_REF_FILE_PATH(SOURCE_PATH)) {}
 
   ~TestHTTPDirectory() override = default;
 
 protected:
+  //! CWebServer's constructor needs the service broker's logger, which does not exist
+  //! during static initialisation.
+  static void SetUpTestSuite()
+  {
+    s_webServer = std::make_unique<CWebServer>();
+    s_vfsHandler = std::make_unique<CHTTPVfsHandler>();
+
+    ASSERT_TRUE(s_webServer->Start(0, "", ""));
+    s_baseUrl = StringUtils::Format("http://" WEBSERVER_HOST ":{}", s_webServer->GetPort());
+
+    s_webServer->RegisterRequestHandler(s_vfsHandler.get());
+  }
+
+  static void TearDownTestSuite()
+  {
+    if (s_webServer->IsStarted())
+      s_webServer->Stop();
+
+    s_webServer->UnregisterRequestHandler(s_vfsHandler.get());
+
+    s_vfsHandler.reset();
+    s_webServer.reset();
+    s_baseUrl.clear();
+  }
+
   void SetUp() override
   {
-    SetupMediaSources();
+    CServiceBroker::RegisterDNSNameCache(std::make_shared<CDNSNameCache>());
 
-    m_webServer.Start(m_webServerPort, "", "");
-    m_webServer.RegisterRequestHandler(&m_vfsHandler);
+    SetupMediaSources();
   }
 
   void TearDown() override
   {
-    if (m_webServer.IsStarted())
-      m_webServer.Stop();
-
-    m_webServer.UnregisterRequestHandler(&m_vfsHandler);
-
     TearDownMediaSources();
+
+    CServiceBroker::UnregisterDNSNameCache();
   }
 
   void SetupMediaSources()
@@ -103,11 +120,11 @@ protected:
     source.strPath = m_sourcePath;
     source.vecPaths.push_back(m_sourcePath);
     source.m_allowSharing = true;
-    source.m_iDriveType = CMediaSource::SOURCE_TYPE_LOCAL;
-    source.m_iLockMode = LOCK_MODE_EVERYONE;
+    source.m_iDriveType = SourceType::LOCAL;
+    source.GetLockInfo().SetMode(LockMode::EVERYONE);
     source.m_ignore = true;
 
-    CMediaSourceSettings::GetInstance().AddShare("videos", source);
+    CMediaSourceSettings::GetInstance().AddShare(MediaSection::VIDEO, source);
   }
 
   void TearDownMediaSources() { CMediaSourceSettings::GetInstance().Clear(); }
@@ -115,9 +132,9 @@ protected:
   std::string GetUrl(const std::string& path)
   {
     if (path.empty())
-      return m_baseUrl;
+      return s_baseUrl;
 
-    return URIUtils::AddFileToFolder(m_baseUrl, path);
+    return URIUtils::AddFileToFolder(s_baseUrl, path);
   }
 
   std::string GetUrlOfTestFile(const std::string& testFile)
@@ -137,14 +154,14 @@ protected:
     ASSERT_EQ(items.GetObjectCount(), SAMPLE_ITEM_COUNT);
 
     // folders
-    ASSERT_TRUE(items[0]->m_bIsFolder);
-    ASSERT_TRUE(items[1]->m_bIsFolder);
+    ASSERT_TRUE(items[0]->IsFolder());
+    ASSERT_TRUE(items[1]->IsFolder());
 
     // files
-    ASSERT_FALSE(items[2]->m_bIsFolder);
-    ASSERT_FALSE(items[3]->m_bIsFolder);
-    ASSERT_FALSE(items[4]->m_bIsFolder);
-    ASSERT_FALSE(items[5]->m_bIsFolder);
+    ASSERT_FALSE(items[2]->IsFolder());
+    ASSERT_FALSE(items[3]->IsFolder());
+    ASSERT_FALSE(items[4]->IsFolder());
+    ASSERT_FALSE(items[5]->IsFolder());
   }
 
   void CheckFileItemLabels(CFileItemList const& items)
@@ -163,12 +180,12 @@ protected:
   {
     ASSERT_EQ(items.GetObjectCount(), SAMPLE_ITEM_COUNT);
 
-    ASSERT_STREQ(items[0]->m_dateTime.GetAsDBDateTime().c_str(), SAMPLE_ITEM_1_DATETIME);
-    ASSERT_STREQ(items[1]->m_dateTime.GetAsDBDateTime().c_str(), SAMPLE_ITEM_2_DATETIME);
-    ASSERT_STREQ(items[2]->m_dateTime.GetAsDBDateTime().c_str(), SAMPLE_ITEM_3_DATETIME);
-    ASSERT_STREQ(items[3]->m_dateTime.GetAsDBDateTime().c_str(), SAMPLE_ITEM_4_DATETIME);
-    ASSERT_STREQ(items[4]->m_dateTime.GetAsDBDateTime().c_str(), SAMPLE_ITEM_5_DATETIME);
-    ASSERT_STREQ(items[5]->m_dateTime.GetAsDBDateTime().c_str(), SAMPLE_ITEM_6_DATETIME);
+    ASSERT_STREQ(items[0]->GetDateTime().GetAsDBDateTime().c_str(), SAMPLE_ITEM_1_DATETIME);
+    ASSERT_STREQ(items[1]->GetDateTime().GetAsDBDateTime().c_str(), SAMPLE_ITEM_2_DATETIME);
+    ASSERT_STREQ(items[2]->GetDateTime().GetAsDBDateTime().c_str(), SAMPLE_ITEM_3_DATETIME);
+    ASSERT_STREQ(items[3]->GetDateTime().GetAsDBDateTime().c_str(), SAMPLE_ITEM_4_DATETIME);
+    ASSERT_STREQ(items[4]->GetDateTime().GetAsDBDateTime().c_str(), SAMPLE_ITEM_5_DATETIME);
+    ASSERT_STREQ(items[5]->GetDateTime().GetAsDBDateTime().c_str(), SAMPLE_ITEM_6_DATETIME);
   }
 
   void CheckFileItemSizes(CFileItemList const& items)
@@ -176,19 +193,19 @@ protected:
     ASSERT_EQ(items.GetObjectCount(), SAMPLE_ITEM_COUNT);
 
     // folders
-    ASSERT_EQ(items[0]->m_dwSize, SAMPLE_ITEM_1_SIZE);
-    ASSERT_EQ(items[1]->m_dwSize, SAMPLE_ITEM_2_SIZE);
+    ASSERT_EQ(items[0]->GetSize(), SAMPLE_ITEM_1_SIZE);
+    ASSERT_EQ(items[1]->GetSize(), SAMPLE_ITEM_2_SIZE);
 
     // files - due to K/M/G conversions provided by some formats, allow for
     // non-zero values that are less than or equal to the expected file size
-    ASSERT_NE(items[2]->m_dwSize, 0);
-    ASSERT_LE(items[2]->m_dwSize, SAMPLE_ITEM_3_SIZE);
-    ASSERT_NE(items[3]->m_dwSize, 0);
-    ASSERT_LE(items[3]->m_dwSize, SAMPLE_ITEM_4_SIZE);
-    ASSERT_NE(items[4]->m_dwSize, 0);
-    ASSERT_LE(items[4]->m_dwSize, SAMPLE_ITEM_5_SIZE);
-    ASSERT_NE(items[5]->m_dwSize, 0);
-    ASSERT_LE(items[5]->m_dwSize, SAMPLE_ITEM_6_SIZE);
+    ASSERT_NE(items[2]->GetSize(), 0);
+    ASSERT_LE(items[2]->GetSize(), SAMPLE_ITEM_3_SIZE);
+    ASSERT_NE(items[3]->GetSize(), 0);
+    ASSERT_LE(items[3]->GetSize(), SAMPLE_ITEM_4_SIZE);
+    ASSERT_NE(items[4]->GetSize(), 0);
+    ASSERT_LE(items[4]->GetSize(), SAMPLE_ITEM_5_SIZE);
+    ASSERT_NE(items[5]->GetSize(), 0);
+    ASSERT_LE(items[5]->GetSize(), SAMPLE_ITEM_6_SIZE);
   }
 
   void CheckFileItems(CFileItemList const& items)
@@ -204,17 +221,20 @@ protected:
     CheckFileItemSizes(items);
   }
 
-  CWebServer m_webServer;
-  uint16_t m_webServerPort;
-  std::string m_baseUrl;
+  static std::unique_ptr<CWebServer> s_webServer;
+  static std::string s_baseUrl;
   std::string const m_sourcePath;
-  CHTTPVfsHandler m_vfsHandler;
+  static std::unique_ptr<CHTTPVfsHandler> s_vfsHandler;
   CHTTPDirectory m_httpDirectory;
 };
 
+std::unique_ptr<CWebServer> TestHTTPDirectory::s_webServer;
+std::string TestHTTPDirectory::s_baseUrl;
+std::unique_ptr<CHTTPVfsHandler> TestHTTPDirectory::s_vfsHandler;
+
 TEST_F(TestHTTPDirectory, IsStarted)
 {
-  ASSERT_TRUE(m_webServer.IsStarted());
+  ASSERT_TRUE(s_webServer->IsStarted());
 }
 
 TEST_F(TestHTTPDirectory, ApacheDefaultIndex)

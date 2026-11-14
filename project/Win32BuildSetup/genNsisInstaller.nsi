@@ -21,6 +21,8 @@
   ;Default installation folder
 !ifdef x64
   InstallDir "$PROGRAMFILES64\${APP_NAME}"
+!else ifdef arm64
+  InstallDir "$PROGRAMFILES64\${APP_NAME}"
 !else
   InstallDir "$PROGRAMFILES\${APP_NAME}"
 !endif
@@ -328,14 +330,14 @@ SectionEnd
 ;vs redist installer Section
 SectionGroup "Microsoft Visual C++ packages" SEC_VCREDIST
 
-Section "VS2017-2019 C++ re-distributable Package (${TARGET_ARCHITECTURE})" SEC_VCREDIST1
-DetailPrint "Running VS2017-2019 re-distributable setup..."
+Section "Visual C++ 2017-2026 Redistributable Package (${TARGET_ARCHITECTURE})" SEC_VCREDIST1
+DetailPrint "Running Visual C++ 2017-2026 Redistributable setup..."
   SectionIn 1 2 #section is in install type Full
-  SetOutPath "$TEMP\vc2019"
-  File "${app_root}\..\..\BuildDependencies\downloads\vcredist\2017-2019\vcredist_${TARGET_ARCHITECTURE}.exe"
-  ExecWait '"$TEMP\vc2019\vcredist_${TARGET_ARCHITECTURE}.exe" /install /quiet /norestart' $VSRedistSetupError
-  RMDir /r "$TEMP\vc2019"
-  DetailPrint "Finished VS2017-2019 re-distributable setup"
+  SetOutPath "$TEMP\vcredist"
+  File "${app_root}\..\..\BuildDependencies\downloads\vcredist\2017-2026\vcredist_${TARGET_ARCHITECTURE}.exe"
+  ExecWait '"$TEMP\vcredist\vcredist_${TARGET_ARCHITECTURE}.exe" /install /quiet /norestart' $VSRedistSetupError
+  RMDir /r "$TEMP\vcredist"
+  DetailPrint "Finished Visual C++ 2017-2026 Redistributable setup"
   SetOutPath "$INSTDIR"
 SectionEnd
 
@@ -348,55 +350,39 @@ Function .onInit
       MessageBox MB_OK|MB_ICONSTOP 'This is the 64-bit ${APP_NAME} installer.$\nPlease download the 32-bit version from ${WEBSITE}.$\n$\nClick Ok to quit Setup.'
       Quit
     ${Endif}
-  !else
-    ${If} ${RunningX64}
-      MessageBox MB_YESNO|MB_ICONEXCLAMATION|MB_DEFBUTTON2 'There is a specific 64-bit ${APP_NAME} version available for download. Please consider installing the 64-bit version instead.$\nFor details visit ${WEBSITE}.$\nProceed with 32-bit installation anyway?' IDYES noprob
+
+    ; x64 will run in emulation on ARM64
+    ${If} ${IsNativeARM64}
+      MessageBox MB_YESNO|MB_ICONEXCLAMATION|MB_DEFBUTTON2 'There is a specific ARM64 ${APP_NAME} version available for download. Please consider installing the ARM64 version instead.$\nFor details visit ${WEBSITE}.$\nProceed with x64 installation anyway?' /SD IDYES IDYES noprobx64arm
       Quit
-      noprob:
-    ${Endif}
+      noprobx64arm:
+    ${Endif} 
+  !else ifdef arm64
+    SetRegView 64
+    ${IfNot} ${IsNativeARM64}
+      MessageBox MB_OK|MB_ICONSTOP 'This is the ARM64 ${APP_NAME} installer.$\nPlease download the x86 or x64 version from ${WEBSITE}.$\n$\nClick Ok to quit Setup.'
+      Quit
+    ${Endif}  
+  !else
+    ; x86 will run in emulation on ARM64
+    ${If} ${IsNativeARM64}
+      MessageBox MB_YESNO|MB_ICONEXCLAMATION|MB_DEFBUTTON2 'There is a specific ARM64 ${APP_NAME} version available for download. Please consider installing the ARM64 version instead.$\nFor details visit ${WEBSITE}.$\nProceed with x86 installation anyway?' /SD IDYES IDYES noprobx86arm
+      Quit
+      noprobx86arm:
+    ${Else}
+      ${If} ${RunningX64}
+        MessageBox MB_YESNO|MB_ICONEXCLAMATION|MB_DEFBUTTON2 'There is a specific 64-bit ${APP_NAME} version available for download. Please consider installing the 64-bit version instead.$\nFor details visit ${WEBSITE}.$\nProceed with 32-bit installation anyway?' /SD IDYES IDYES noprobx86x64
+        Quit
+        noprobx86x64:
+      ${Endif}
+    ${Endif}  
   !endif
 
-  ; Win7 SP1 is minimum requirement
-  ${IfNot} ${AtLeastWin7}
-  ${OrIf} ${IsWin7}
-  ${AndIfNot} ${AtLeastServicePack} 1
-    MessageBox MB_OK|MB_ICONSTOP|MB_TOPMOST|MB_SETFOREGROUND "Windows 7 SP1 or above required.$\nInstall Service Pack 1 for Windows 7 and run setup again."
+  ; Windows 8.1 is minimum requirement
+  ${IfNot} ${AtLeastWin8.1}
+    MessageBox MB_OK|MB_ICONSTOP|MB_TOPMOST|MB_SETFOREGROUND "Windows 8.1 or above required."
     Quit
   ${EndIf}
 
-  Var /GLOBAL HotFixID
-  ${If} ${IsWin7}
-    StrCpy $HotFixID "2670838" ; Platform Update for Windows 7 SP1
-  ${Else}
-    StrCpy $HotFixID ""
-  ${Endif}
-  ${If} $HotFixID != ""
-    nsExec::ExecToStack 'cmd /Q /C "%SYSTEMROOT%\System32\wbem\wmic.exe /?"'
-    Pop $0 ; return value (it always 0 even if an error occurred)
-    Pop $1 ; command output
-    ${If} $0 != 0
-    ${OrIf} $1 == ""
-      MessageBox MB_OK|MB_ICONSTOP|MB_TOPMOST|MB_SETFOREGROUND "Unable to run the Windows program wmic.exe to verify that Windows Update KB$HotFixID is installed.$\nWmic is not installed correctly.$\nPlease fix this issue and try again to install Kodi."
-      Quit
-    ${EndIf}
-    nsExec::ExecToStack 'cmd /Q /C "%SYSTEMROOT%\System32\findstr.exe /?"'
-    Pop $0 ; return value (it always 0 even if an error occurred)
-    Pop $1 ; command output
-    ${If} $0 != 0
-    ${OrIf} $1 == ""
-      MessageBox MB_OK|MB_ICONSTOP|MB_TOPMOST|MB_SETFOREGROUND "Unable to run the Windows program findstr.exe to verify that Windows Update KB$HotFixID is installed.$\nFindstr is not installed correctly.$\nPlease fix this issue and try again to install Kodi."
-      Quit
-    ${EndIf}
-    nsExec::ExecToStack 'cmd /Q /C "%SYSTEMROOT%\System32\wbem\wmic.exe qfe get hotfixid | %SYSTEMROOT%\System32\findstr.exe "^KB$HotFixID[^0-9]""'
-    Pop $0 ; return value (it always 0 even if an error occurred)
-    Pop $1 ; command output
-    ${If} $0 != 0
-    ${OrIf} $1 == ""
-      MessageBox MB_OK|MB_ICONSTOP|MB_TOPMOST|MB_SETFOREGROUND "Platform Update for Windows (KB$HotFixID) is required.$\nDownload and install Platform Update for Windows then run setup again."
-      ExecShell "open" "http://support.microsoft.com/kb/$HotFixID"
-      Quit
-    ${EndIf}
-    SetOutPath "$INSTDIR"
-  ${EndIf}
   StrCpy $CleanDestDir "-1"
 FunctionEnd

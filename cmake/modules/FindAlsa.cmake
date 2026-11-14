@@ -3,44 +3,29 @@
 # --------
 # Finds the Alsa library
 #
-# This will define the following variables::
+# This will define the following target:
 #
-# ALSA_FOUND - system has Alsa
-# ALSA_INCLUDE_DIRS - the Alsa include directory
-# ALSA_LIBRARIES - the Alsa libraries
-# ALSA_DEFINITIONS - the Alsa compile definitions
-#
-# and the following imported targets::
-#
-#   ALSA::ALSA   - The Alsa library
+#   ${APP_NAME_LC}::Alsa   - The Alsa library
 
-if(PKG_CONFIG_FOUND)
-  pkg_check_modules(PC_ALSA alsa>=1.0.27 QUIET)
-endif()
+if(NOT TARGET ${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME})
+  include(cmake/scripts/common/ModuleHelpers.cmake)
 
-find_path(ALSA_INCLUDE_DIR NAMES alsa/asoundlib.h
-                           PATHS ${PC_ALSA_INCLUDEDIR})
-find_library(ALSA_LIBRARY NAMES asound
-                          PATHS ${PC_ALSA_LIBDIR})
+  set(${CMAKE_FIND_PACKAGE_NAME}_MODULE_LC alsa)
+  set(${${CMAKE_FIND_PACKAGE_NAME}_MODULE_LC}_DISABLE_VERSION ON)
 
-set(ALSA_VERSION ${PC_ALSA_VERSION})
+  SETUP_BUILD_VARS()
 
-include(FindPackageHandleStandardArgs)
-find_package_handle_standard_args(Alsa
-                                  REQUIRED_VARS ALSA_LIBRARY ALSA_INCLUDE_DIR
-                                  VERSION_VAR ALSA_VERSION)
+  SETUP_FIND_SPECS()
 
-if(ALSA_FOUND)
-  set(ALSA_INCLUDE_DIRS "") # Don't want these added as 'timer.h' is a dangerous file
-  set(ALSA_LIBRARIES ${ALSA_LIBRARY})
-  set(ALSA_DEFINITIONS -DHAS_ALSA=1)
+  SEARCH_EXISTING_PACKAGES()
 
-  if(NOT TARGET ALSA::ALSA)
-    add_library(ALSA::ALSA UNKNOWN IMPORTED)
-    set_target_properties(ALSA::ALSA PROPERTIES
-                                     IMPORTED_LOCATION "${ALSA_LIBRARY}"
-                                     INTERFACE_COMPILE_DEFINITIONS "${ALSA_DEFINITIONS}")
+  if(${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME}_FOUND)
+    list(APPEND AUDIO_BACKENDS_LIST "alsa")
+    set(AUDIO_BACKENDS_LIST ${AUDIO_BACKENDS_LIST} PARENT_SCOPE)
+
+    add_library(${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME} ALIAS PkgConfig::${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME})
+
+    set(${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_COMPILE_DEFINITIONS HAS_ALSA)
+    ADD_TARGET_COMPILE_DEFINITION()
   endif()
 endif()
-
-mark_as_advanced(ALSA_INCLUDE_DIR ALSA_LIBRARY)

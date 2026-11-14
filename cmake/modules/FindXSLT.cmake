@@ -3,48 +3,104 @@
 # --------
 # Finds the XSLT library
 #
-# This will define the following variables::
+# This will define the following target:
 #
-# XSLT_FOUND - system has XSLT
-# XSLT_INCLUDE_DIRS - the XSLT include directory
-# XSLT_LIBRARIES - the XSLT libraries
-# XSLT_DEFINITIONS - the XSLT definitions
-#
-# and the following imported targets::
-#
-#   XSLT::XSLT   - The XSLT library
+#   ${APP_NAME_LC}::XSLT - The XSLT library
 
-find_package(LibXml2 REQUIRED)
+if(NOT TARGET ${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME})
+  include(cmake/scripts/common/ModuleHelpers.cmake)
 
-if(PKG_CONFIG_FOUND)
-  pkg_check_modules(PC_XSLT libxslt QUIET)
-endif()
+  macro(buildmacroXSLT)
 
-find_path(XSLT_INCLUDE_DIR NAMES libxslt/xslt.h
-                           PATHS ${PC_XSLT_INCLUDEDIR})
-find_library(XSLT_LIBRARY NAMES xslt libxslt
-                          PATHS ${PC_XSLT_LIBDIR})
+    find_package(LibXml2 REQUIRED ${SEARCH_QUIET})
 
-set(XSLT_VERSION ${PC_XSLT_VERSION})
+    set(${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_VERSION ${${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_VER})
 
-include(FindPackageHandleStandardArgs)
-find_package_handle_standard_args(XSLT
-                                  REQUIRED_VARS XSLT_LIBRARY XSLT_INCLUDE_DIR
-                                  VERSION_VAR XSLT_VERSION)
+    if(WIN32 OR WINDOWS_STORE)
+      # xslt only uses debug postfix for windows
+      set(${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_DEBUG_POSTFIX d)
+      set(${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_SHARED_LIB TRUE)
 
-if(XSLT_FOUND)
-  set(XSLT_LIBRARIES ${XSLT_LIBRARY} ${LIBXML2_LIBRARIES})
-  set(XSLT_INCLUDE_DIRS ${XSLT_INCLUDE_DIR} ${LIBXML2_INCLUDE_DIR})
-  set(XSLT_DEFINITIONS -DHAVE_LIBXSLT=1)
+      if(WINDOWS_STORE)
+        # Required for UWP
+        set(${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_C_FLAGS /D_CRT_SECURE_NO_WARNINGS)
+      endif()
+    endif()
 
-  if(NOT TARGET XSLT::XSLT)
-    add_library(XSLT::XSLT UNKNOWN IMPORTED)
-    set_target_properties(XSLT::XSLT PROPERTIES
-                                     IMPORTED_LOCATION "${XSLT_LIBRARY}"
-                                     INTERFACE_INCLUDE_DIRECTORIES "${XSLT_INCLUDE_DIR} ${LIBXML2_INCLUDE_DIR}"
-                                     INTERFACE_COMPILE_DEFINITIONS HAVE_LIBXSLT=1
-                                     INTERFACE_LINK_LIBRARIES "${LIBXML2_LIBRARIES}")
+    set(CMAKE_ARGS -DLIBXSLT_WITH_PROGRAMS=OFF
+                   -DLIBXSLT_WITH_PYTHON=OFF
+                   -DLIBXSLT_WITH_TESTS=OFF)
+
+    if(${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_SHARED_LIB)
+      list(APPEND CMAKE_ARGS -DBUILD_SHARED_LIBS=ON)
+    else()
+      list(APPEND CMAKE_ARGS -DBUILD_SHARED_LIBS=OFF)
+    endif()
+
+    set(patches "${CMAKE_SOURCE_DIR}/tools/depends/target/libxslt/01-cmake-libxml2-module-mode.patch")
+    generate_patchcommand("${patches}")
+    unset(patches)
+
+    BUILD_DEP_TARGET()
+
+    set(${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_LINK_LIBRARIES LibXml2::LibXml2)
+    add_dependencies(${${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_BUILD_NAME} LibXml2::LibXml2)
+  endmacro()
+
+  # If there is a potential this library can be built internally
+  # Check its dependencies to allow forcing this lib to be built if one of its
+  # dependencies requires being rebuilt
+  if(ENABLE_INTERNAL_XSLT)
+    # Dependency list of this find module for an INTERNAL build
+    set(${CMAKE_FIND_PACKAGE_NAME}_DEPLIST LibXml2)
+
+    check_dependency_build(${CMAKE_FIND_PACKAGE_NAME} "${${CMAKE_FIND_PACKAGE_NAME}_DEPLIST}")
+  endif()
+
+  set(${CMAKE_FIND_PACKAGE_NAME}_MODULE_LC libxslt)
+
+  SETUP_BUILD_VARS()
+
+  SETUP_FIND_SPECS()
+
+  SEARCH_EXISTING_PACKAGES()
+
+  # Differences in variable output of libxslt being built by cmake or autotools
+  if(${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME}_FOUND)
+    if(NOT ${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME}_VERSION)
+      set(${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME}_VERSION ${LIBXSLT_VERSION})
+    endif()
+  endif()
+
+  if(("${${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME}_VERSION}" VERSION_LESS ${${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_VER} AND ENABLE_INTERNAL_XSLT) OR
+     (((CORE_SYSTEM_NAME STREQUAL linux AND NOT "webos" IN_LIST CORE_PLATFORM_NAME_LC) OR CORE_SYSTEM_NAME STREQUAL freebsd) AND ENABLE_INTERNAL_XSLT) OR
+     (DEFINED ${CMAKE_FIND_PACKAGE_NAME}_FORCE_BUILD))
+    message(STATUS "Building ${${CMAKE_FIND_PACKAGE_NAME}_MODULE_LC}: \(version \"${${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_VER}\"\)")
+    # Build lib
+    cmake_language(EVAL CODE "
+      buildmacro${CMAKE_FIND_PACKAGE_NAME}()
+    ")
+  endif()
+
+  if(${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME}_FOUND)
+    set(${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_COMPILE_DEFINITIONS HAVE_LIBXSLT)
+
+    if(TARGET LibXslt::LibXslt AND NOT TARGET ${${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_BUILD_NAME})
+      add_library(${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME} ALIAS LibXslt::LibXslt)
+    elseif(TARGET PkgConfig::${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME} AND NOT TARGET ${${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_BUILD_NAME})
+      add_library(${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME} ALIAS PkgConfig::${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME})
+    else()
+      SETUP_BUILD_TARGET()
+
+      add_dependencies(${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME} ${${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_BUILD_NAME})
+    endif()
+
+    ADD_TARGET_COMPILE_DEFINITION()
+
+    ADD_MULTICONFIG_BUILDMACRO()
+  else()
+    if(XSLT_FIND_REQUIRED)
+      message(FATAL_ERROR "XSLT library was not found. You may want to try -DENABLE_INTERNAL_XSLT=ON")
+    endif()
   endif()
 endif()
-
-mark_as_advanced(XSLT_INCLUDE_DIR XSLT_LIBRARY)

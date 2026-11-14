@@ -14,14 +14,13 @@
 
 using namespace KODI::GUILIB::GUIINFO;
 
-CGUIInfoBool::CGUIInfoBool(bool value)
+CGUIInfoBool::CGUIInfoBool(bool value) : m_value(value)
 {
-  m_value = value;
 }
 
 CGUIInfoBool::~CGUIInfoBool() = default;
 
-void CGUIInfoBool::Parse(const std::string &expression, int context)
+void CGUIInfoBool::Parse(const std::string& expression, int context)
 {
   if (expression == "true")
     m_value = true;
@@ -30,12 +29,12 @@ void CGUIInfoBool::Parse(const std::string &expression, int context)
   else
   {
     m_info = CServiceBroker::GetGUI()->GetInfoManager().Register(expression, context);
-    Update();
+    Update(context);
   }
 }
 
-void CGUIInfoBool::Update(const CGUIListItem *item /*= NULL*/)
+void CGUIInfoBool::Update(int contextWindow, const CGUIListItem* item /*= nullptr*/)
 {
   if (m_info)
-    m_value = m_info->Get(item);
+    m_value = m_info->Get(contextWindow, item);
 }

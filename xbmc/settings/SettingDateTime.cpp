@@ -9,27 +9,33 @@
 #include "SettingDateTime.h"
 
 #include "XBDateTime.h"
+#include "utils/TimeUtils.h"
 
-CSettingDate::CSettingDate(const std::string &id, CSettingsManager *settingsManager /* = NULL */)
+#include <shared_mutex>
+
+CSettingDate::CSettingDate(const std::string& id, CSettingsManager* settingsManager /* = nullptr */)
   : CSettingString(id, settingsManager)
 { }
 
-CSettingDate::CSettingDate(const std::string &id, int label, const std::string &value, CSettingsManager *settingsManager /* = NULL */)
+CSettingDate::CSettingDate(const std::string& id,
+                           int label,
+                           const std::string& value,
+                           CSettingsManager* settingsManager /* = nullptr */)
   : CSettingString(id, label, value, settingsManager)
 { }
 
-CSettingDate::CSettingDate(const std::string &id, const CSettingDate &setting)
+CSettingDate::CSettingDate(std::string_view id, const CSettingDate& setting)
   : CSettingString(id, setting)
 { }
 
-SettingPtr CSettingDate::Clone(const std::string &id) const
+SettingPtr CSettingDate::Clone(std::string_view id) const
 {
   return std::make_shared<CSettingDate>(id, *this);
 }
 
 bool CSettingDate::CheckValidity(const std::string &value) const
 {
-  CSharedLock lock(m_critical);
+  std::shared_lock lock(m_critical);
 
   if (!CSettingString::CheckValidity(value))
     return false;
@@ -37,29 +43,52 @@ bool CSettingDate::CheckValidity(const std::string &value) const
   return CDateTime::FromDBDate(value).IsValid();
 }
 
-CSettingTime::CSettingTime(const std::string &id, CSettingsManager *settingsManager /* = NULL */)
+CDateTime CSettingDate::GetDate() const
+{
+  return CDateTime::FromDBDate(GetValue());
+}
+
+bool CSettingDate::SetDate(const CDateTime& date)
+{
+  return SetValue(date.GetAsDBDate());
+}
+
+CSettingTime::CSettingTime(std::string_view id, CSettingsManager* settingsManager /* = nullptr */)
   : CSettingString(id, settingsManager)
 { }
 
-CSettingTime::CSettingTime(const std::string &id, int label, const std::string &value, CSettingsManager *settingsManager /* = NULL */)
+CSettingTime::CSettingTime(std::string_view id,
+                           int label,
+                           const std::string& value,
+                           CSettingsManager* settingsManager /* = nullptr */)
   : CSettingString(id, label, value, settingsManager)
 { }
 
-CSettingTime::CSettingTime(const std::string &id, const CSettingTime &setting)
+CSettingTime::CSettingTime(std::string_view id, const CSettingTime& setting)
   : CSettingString(id, setting)
 { }
 
-SettingPtr CSettingTime::Clone(const std::string &id) const
+SettingPtr CSettingTime::Clone(std::string_view id) const
 {
   return std::make_shared<CSettingTime>(id, *this);
 }
 
 bool CSettingTime::CheckValidity(const std::string &value) const
 {
-  CSharedLock lock(m_critical);
+  std::shared_lock lock(m_critical);
 
   if (!CSettingString::CheckValidity(value))
     return false;
 
   return CDateTime::FromDBTime(value).IsValid();
+}
+
+CDateTime CSettingTime::GetTime() const
+{
+  return CDateTime::FromDBTime(GetValue());
+}
+
+bool CSettingTime::SetTime(const CDateTime& time)
+{
+  return SetValue(CTimeUtils::WithoutSeconds(time.GetAsDBTime()));
 }

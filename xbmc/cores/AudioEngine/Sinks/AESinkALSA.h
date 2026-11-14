@@ -10,17 +10,11 @@
 
 #include "cores/AudioEngine/Interfaces/AESink.h"
 #include "cores/AudioEngine/Utils/AEDeviceInfo.h"
-#include "cores/AudioEngine/Sinks/alsa/ALSADeviceMonitor.h"
-#include "cores/AudioEngine/Sinks/alsa/ALSAHControlMonitor.h"
+#include "threads/CriticalSection.h"
+
 #include <stdint.h>
 
 #include <alsa/asoundlib.h>
-
-#include "threads/CriticalSection.h"
-
-// ARGH... this is apparently needed to avoid FDEventMonitor
-// being destructed before CALSA*Monitor below.
-#include "platform/linux/FDEventMonitor.h"
 
 #define AE_MIN_PERIODSIZE 256
 
@@ -33,7 +27,7 @@ public:
   ~CAESinkALSA() override;
 
   static void Register();
-  static IAESink* Create(std::string &device, AEAudioFormat &desiredFormat);
+  static std::unique_ptr<IAESink> Create(std::string& device, AEAudioFormat& desiredFormat);
   static void EnumerateDevicesEx(AEDeviceInfoList &list, bool force = false);
   static void Cleanup();
 
@@ -75,11 +69,6 @@ private:
   // support fragmentation, e.g. looping in the sink to get a certain amount of data onto the device
   bool m_fragmented = false;
   unsigned int m_originalPeriodSize = AE_MIN_PERIODSIZE;
-
-#if HAVE_LIBUDEV
-  static CALSADeviceMonitor m_deviceMonitor;
-#endif
-  static CALSAHControlMonitor m_controlMonitor;
 
   struct ALSAConfig
   {

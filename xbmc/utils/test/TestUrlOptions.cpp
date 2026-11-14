@@ -176,7 +176,7 @@ TEST(TestUrlOptions, GetOptions)
   EXPECT_TRUE(it1 != options.end());
   CUrlOptions::UrlOptions::const_iterator it2 = options.find(key2);
   EXPECT_TRUE(it2 != options.end());
-  EXPECT_FALSE(options.find("wrong") != options.end());
+  EXPECT_FALSE(options.contains("wrong"));
   EXPECT_TRUE(it1->second.isString());
   EXPECT_TRUE(it2->second.isString());
   EXPECT_STREQ(value1, it1->second.asString().c_str());
@@ -190,4 +190,16 @@ TEST(TestUrlOptions, GetOptionsString)
   CUrlOptions urlOptions(ref);
   std::string value = urlOptions.GetOptionsString();
   EXPECT_STREQ(ref, value.c_str());
+}
+
+TEST(TestUrlOptions, FoundationLegacyFormSemantics)
+{
+  CUrlOptions options("?z=1&a=one+two&a=last&empty=&bare&&escaped=%2f");
+  CVariant value;
+  ASSERT_TRUE(options.GetOption("a", value));
+  EXPECT_EQ("last", value.asString());
+  EXPECT_EQ("?a=last&bare&empty&escaped=%2f&z=1", options.GetOptionsString(true));
+  CUrlOptions plus("?value=a+b");
+  ASSERT_TRUE(plus.GetOption("value", value));
+  EXPECT_EQ("a b", value.asString());
 }

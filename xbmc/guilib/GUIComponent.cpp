@@ -12,22 +12,32 @@
 #include "GUIColorManager.h"
 #include "GUIInfoManager.h"
 #include "GUILargeTextureManager.h"
+#include "GUITextureCallbackManager.h"
 #include "GUIWindowManager.h"
 #include "ServiceBroker.h"
 #include "StereoscopicsManager.h"
 #include "TextureManager.h"
 #include "URL.h"
 #include "dialogs/GUIDialogYesNo.h"
+#include "handlers/GUIAnnouncementHandlerContainer.h"
+
+#include <memory>
 
 CGUIComponent::CGUIComponent()
+  : m_pWindowManager(std::make_unique<CGUIWindowManager>()),
+    m_pTextureManager(std::make_unique<CGUITextureManager>()),
+    m_pLargeTextureManager(std::make_unique<CGUILargeTextureManager>()),
+    m_pTextureCallbackManager(std::make_unique<CGUITextureCallbackManager>()),
+    m_stereoscopicsManager(std::make_unique<CStereoscopicsManager>()),
+    m_guiInfoManager(std::make_unique<CGUIInfoManager>()),
+    m_guiColorManager(std::make_unique<CGUIColorManager>()),
+    m_guiAudioManager(std::make_unique<CGUIAudioManager>()),
+    m_announcementHandlerContainer(std::make_unique<CGUIAnnouncementHandlerContainer>())
 {
-  m_pWindowManager.reset(new CGUIWindowManager());
-  m_pTextureManager.reset(new CGUITextureManager());
-  m_pLargeTextureManager.reset(new CGUILargeTextureManager());
-  m_stereoscopicsManager.reset(new CStereoscopicsManager());
-  m_guiInfoManager.reset(new CGUIInfoManager());
-  m_guiColorManager.reset(new CGUIColorManager());
-  m_guiAudioManager.reset(new CGUIAudioManager());
+}
+
+CGUIComponent::CGUIComponent(bool)
+{
 }
 
 CGUIComponent::~CGUIComponent()
@@ -46,9 +56,14 @@ void CGUIComponent::Init()
 
 void CGUIComponent::Deinit()
 {
+  // must precede UnregisterGUI: window teardown releases textures through GetGUI()
+  if (m_pWindowManager)
+    m_pWindowManager->DeInitialize();
+
   CServiceBroker::UnregisterGUI();
 
-  m_pWindowManager->DeInitialize();
+  // Now safe to release skin - all windows deinitialized
+  m_skinInfo.reset();
 }
 
 CGUIWindowManager& CGUIComponent::GetWindowManager()
@@ -66,12 +81,22 @@ CGUILargeTextureManager& CGUIComponent::GetLargeTextureManager()
   return *m_pLargeTextureManager;
 }
 
+CGUITextureCallbackManager& CGUIComponent::GetTextureCallbackManager()
+{
+  return *m_pTextureCallbackManager;
+}
+
 CStereoscopicsManager &CGUIComponent::GetStereoscopicsManager()
 {
   return *m_stereoscopicsManager;
 }
 
 CGUIInfoManager &CGUIComponent::GetInfoManager()
+{
+  return *m_guiInfoManager;
+}
+
+const CGUIInfoManager& CGUIComponent::GetInfoManager() const
 {
   return *m_guiInfoManager;
 }
@@ -84,6 +109,21 @@ CGUIColorManager &CGUIComponent::GetColorManager()
 CGUIAudioManager &CGUIComponent::GetAudioManager()
 {
   return *m_guiAudioManager;
+}
+
+std::shared_ptr<ADDON::CSkinInfo> CGUIComponent::GetSkinInfo()
+{
+  return m_skinInfo;
+}
+
+void CGUIComponent::SetSkinInfo(std::shared_ptr<ADDON::CSkinInfo> skin)
+{
+  m_skinInfo = std::move(skin);
+}
+
+void CGUIComponent::UnloadSkin()
+{
+  m_skinInfo.reset();
 }
 
 bool CGUIComponent::ConfirmDelete(const std::string& path)

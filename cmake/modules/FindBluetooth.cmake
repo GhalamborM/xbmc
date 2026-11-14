@@ -3,42 +3,28 @@
 # ---------
 # Finds the Bluetooth library
 #
-# This will define the following variables::
+# This will define the following target:
 #
-# BLUETOOTH_FOUND - system has Bluetooth
-# BLUETOOTH_INCLUDE_DIRS - the Bluetooth include directory
-# BLUETOOTH_LIBRARIES - the Bluetooth libraries
-#
-# and the following imported targets::
-#
-#   Bluetooth::Bluetooth   - The Bluetooth library
+#   ${APP_NAME_LC}::Bluetooth   - The Bluetooth library
 
-if(PKG_CONFIG_FOUND)
-  pkg_check_modules(PC_BLUETOOTH bluez bluetooth QUIET)
-endif()
+if(NOT TARGET ${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME})
 
-find_path(BLUETOOTH_INCLUDE_DIR NAMES bluetooth/bluetooth.h
-                                PATHS ${PC_BLUETOOTH_INCLUDEDIR})
-find_library(BLUETOOTH_LIBRARY NAMES bluetooth libbluetooth
-                               PATHS ${PC_BLUETOOTH_LIBDIR})
+  include(cmake/scripts/common/ModuleHelpers.cmake)
 
-set(BLUETOOTH_VERSION ${PC_BLUETOOTH_VERSION})
+  set(${CMAKE_FIND_PACKAGE_NAME}_MODULE_LC bluetooth)
+  set(${${CMAKE_FIND_PACKAGE_NAME}_MODULE_LC}_DISABLE_VERSION ON)
 
-include(FindPackageHandleStandardArgs)
-find_package_handle_standard_args(Bluetooth
-                                  REQUIRED_VARS BLUETOOTH_LIBRARY BLUETOOTH_INCLUDE_DIR
-                                  VERSION_VAR BLUETOOTH_VERSION)
+  SETUP_BUILD_VARS()
 
-if(BLUETOOTH_FOUND)
-  set(BLUETOOTH_INCLUDE_DIRS ${BLUETOOTH_INCLUDE_DIR})
-  set(BLUETOOTH_LIBRARIES ${BLUETOOTH_LIBRARY})
+  find_package(PkgConfig ${SEARCH_QUIET})
+  if(PKG_CONFIG_FOUND)
+    pkg_check_modules(${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME} bluez IMPORTED_TARGET ${SEARCH_QUIET})
+  endif()
 
-  if(NOT TARGET Bluetooth::Bluetooth)
-    add_library(Bluetooth::Bluetooth UNKNOWN IMPORTED)
-    set_target_properties(Bluetooth::Bluetooth PROPERTIES
-                                               IMPORTED_LOCATION "${BLUETOOTH_LIBRARY}"
-                                               INTERFACE_INCLUDE_DIRECTORIES "${BLUETOOTH_INCLUDE_DIR}")
+  if(${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME}_FOUND)
+    add_library(${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME} ALIAS PkgConfig::${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME})
+
+    set(${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_COMPILE_DEFINITIONS HAVE_LIBBLUETOOTH)
+    ADD_TARGET_COMPILE_DEFINITION()
   endif()
 endif()
-
-mark_as_advanced(BLUETOOTH_INCLUDE_DIR BLUETOOTH_LIBRARY)

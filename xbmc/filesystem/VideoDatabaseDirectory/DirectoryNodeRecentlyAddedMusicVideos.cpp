@@ -8,12 +8,16 @@
 
 #include "DirectoryNodeRecentlyAddedMusicVideos.h"
 
+#include "FileItem.h"
+#include "FileItemList.h"
+#include "utils/ItemProperties.h"
 #include "video/VideoDatabase.h"
 
 using namespace XFILE::VIDEODATABASEDIRECTORY;
 
-CDirectoryNodeRecentlyAddedMusicVideos::CDirectoryNodeRecentlyAddedMusicVideos(const std::string& strName, CDirectoryNode* pParent)
-  : CDirectoryNode(NODE_TYPE_RECENTLY_ADDED_MUSICVIDEOS, strName, pParent)
+CDirectoryNodeRecentlyAddedMusicVideos::CDirectoryNodeRecentlyAddedMusicVideos(
+    const std::string& strName, CDirectoryNode* pParent)
+  : CDirectoryNode(NodeType::RECENTLY_ADDED_MUSICVIDEOS, strName, pParent)
 {
 
 }
@@ -24,7 +28,9 @@ bool CDirectoryNodeRecentlyAddedMusicVideos::GetContent(CFileItemList& items) co
   if (!videodatabase.Open())
     return false;
 
-  bool bSuccess=videodatabase.GetRecentlyAddedMusicVideosNav(BuildPath(), items);
+  const int details =
+      items.GetProperty(KODI::ITEM::PROPERTY::SET_VIDEODB_DETAILS).asInteger32(VideoDbDetailsNone);
+  bool bSuccess = videodatabase.GetRecentlyAddedMusicVideosNav(BuildPath(), items, 0, details);
 
   videodatabase.Close();
 

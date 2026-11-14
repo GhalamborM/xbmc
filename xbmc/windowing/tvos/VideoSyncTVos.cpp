@@ -8,6 +8,7 @@
 
 #include "VideoSyncTVos.h"
 
+#include "ServiceBroker.h"
 #include "cores/VideoPlayer/VideoReferenceClock.h"
 #include "utils/MathUtils.h"
 #include "utils/TimeUtils.h"
@@ -15,13 +16,12 @@
 #include "windowing/GraphicContext.h"
 #import "windowing/tvos/WinSystemTVOS.h"
 
-bool CVideoSyncTVos::Setup(PUPDATECLOCK func)
+bool CVideoSyncTVos::Setup()
 {
   CLog::Log(LOGDEBUG, "CVideoSyncTVos::{} setting up TVOS", __FUNCTION__);
 
   //init the vblank timestamp
   m_LastVBlankTime = CurrentHostCounter();
-  UpdateClock = func;
   m_abortEvent.Reset();
 
   bool setupOk = InitDisplayLink();
@@ -72,7 +72,7 @@ void CVideoSyncTVos::TVosVblankHandler()
   m_LastVBlankTime = nowtime;
 
   //update the vblank timestamp, update the clock and send a signal that we got a vblank
-  UpdateClock(NrVBlanks, nowtime, m_refClock);
+  m_refClock->UpdateClock(NrVBlanks, nowtime);
 }
 
 bool CVideoSyncTVos::InitDisplayLink()

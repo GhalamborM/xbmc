@@ -16,6 +16,8 @@
 #include "GUIControl.h"
 #include "GUITexture.h"
 
+#include <optional>
+
 /*!
  \ingroup controls
  \brief
@@ -47,7 +49,7 @@ public:
   std::string GetDescription() const override;
   bool IsVisible() const override;
 protected:
-  EVENT_RESULT OnMouseEvent(const CPoint &point, const CMouseEvent &event) override;
+  EVENT_RESULT OnMouseEvent(const CPoint& point, const KODI::MOUSE::CMouseEvent& event) override;
   bool UpdateColors(const CGUIListItem* item) override;
   bool UpdateBarSize();
   bool Move(int iNumSteps);
@@ -65,6 +67,11 @@ protected:
 
   bool m_showOnePage;
   ORIENTATION m_orientation;
+
+  // Cached values for UpdateBarSize() optimization
+  std::optional<int> m_lastOffset;
+  std::optional<int> m_lastPageSize;
+  std::optional<int> m_lastNumItems;
 
 private:
   GUIScrollBarControl(const GUIScrollBarControl& control);

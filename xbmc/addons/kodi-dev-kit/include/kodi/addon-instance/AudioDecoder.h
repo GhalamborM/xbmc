@@ -79,25 +79,25 @@ public:
   void SetTitle(const std::string& title) { m_title = title; }
 
   /// @brief Get title name
-  std::string GetTitle() const { return m_title; }
+  const std::string& GetTitle() const { return m_title; }
 
   /// @brief Set artist name
   void SetArtist(const std::string& artist) { m_artist = artist; }
 
   /// @brief Get artist name
-  std::string GetArtist() const { return m_artist; }
+  const std::string& GetArtist() const { return m_artist; }
 
   /// @brief Set album name
   void SetAlbum(const std::string& album) { m_album = album; }
 
   /// @brief Set album name
-  std::string GetAlbum() const { return m_album; }
+  const std::string& GetAlbum() const { return m_album; }
 
   /// @brief Set album artist name
   void SetAlbumArtist(const std::string& albumArtist) { m_album_artist = albumArtist; }
 
   /// @brief Get album artist name
-  std::string GetAlbumArtist() const { return m_album_artist; }
+  const std::string& GetAlbumArtist() const { return m_album_artist; }
 
   /// @brief Set the media type of the music item.
   ///
@@ -112,13 +112,13 @@ public:
   void SetMediaType(const std::string& mediaType) { m_media_type = mediaType; }
 
   /// @brief Get the media type of the music item.
-  std::string GetMediaType() const { return m_media_type; }
+  const std::string& GetMediaType() const { return m_media_type; }
 
   /// @brief Set genre name from music as string if present.
   void SetGenre(const std::string& genre) { m_genre = genre; }
 
   /// @brief Get genre name from music as string if present.
-  std::string GetGenre() const { return m_genre; }
+  const std::string& GetGenre() const { return m_genre; }
 
   /// @brief Set the duration of music as integer from info.
   void SetDuration(int duration) { m_duration = duration; }
@@ -142,7 +142,7 @@ public:
   void SetDiscSubtitle(const std::string& discSubtitle) { m_disc_subtitle = discSubtitle; }
 
   /// @brief Get disk subtitle name (if present) from music info.
-  std::string GetDiscSubtitle() const { return m_disc_subtitle; }
+  const std::string& GetDiscSubtitle() const { return m_disc_subtitle; }
 
   /// @brief Set disks amount quantity (if present) from music info as integer.
   void SetDiscTotal(int discTotal) { m_disc_total = discTotal; }
@@ -155,13 +155,13 @@ public:
   void SetReleaseDate(const std::string& releaseDate) { m_release_date = releaseDate; }
 
   /// @brief Get release date as string from music info (if present).
-  std::string GetReleaseDate() const { return m_release_date; }
+  const std::string& GetReleaseDate() const { return m_release_date; }
 
   /// @brief Set string from lyrics.
   void SetLyrics(const std::string& lyrics) { m_lyrics = lyrics; }
 
   /// @brief Get string from lyrics.
-  std::string GetLyrics() const { return m_lyrics; }
+  const std::string& GetLyrics() const { return m_lyrics; }
 
   /// @brief Set related stream samplerate.
   void SetSamplerate(int samplerate) { m_samplerate = samplerate; }
@@ -185,7 +185,7 @@ public:
   void SetComment(const std::string& comment) { m_comment = comment; }
 
   /// @brief Get additional information comment (if present).
-  std::string GetComment() const { return m_comment; }
+  const std::string& GetComment() const { return m_comment; }
 
   /// @brief Set cover art image by path.
   ///
@@ -201,7 +201,7 @@ public:
   /// @note Only be available if set before by @ref SetCoverArtByPath.
   /// Cannot be combined with @ref SetCoverArtByMem and @ref GetCoverArtByMem.
   ///
-  std::string GetCoverArtByPath() const { return m_cover_art_path; }
+  const std::string& GetCoverArtByPath() const { return m_cover_art_path; }
 
   /// @brief Set cover art image by memory.
   ///
@@ -360,18 +360,18 @@ private:
 /// class CMyAudioDecoder : public kodi::addon::CInstanceAudioDecoder
 /// {
 /// public:
-///   CMyAudioDecoder(KODI_HANDLE instance, const std::string& version);
+///   CMyAudioDecoder(const kodi::addon::IInstanceInfo& instance);
 ///
 ///   bool Init(const std::string& filename, unsigned int filecache,
 ///             int& channels, int& samplerate,
 ///             int& bitspersample, int64_t& totaltime,
 ///             int& bitrate, AudioEngineDataFormat& format,
 ///             std::vector<AudioEngineChannel>& channellist) override;
-///   int ReadPCM(uint8_t* buffer, int size, int& actualsize) override;
+///   int ReadPCM(uint8_t* buffer, size_t size, size_t& actualsize) override;
 /// };
 ///
-/// CMyAudioDecoder::CMyAudioDecoder(KODI_HANDLE instance, const std::string& version)
-///   : kodi::addon::CInstanceAudioDecoder(instance, version)
+/// CMyAudioDecoder::CMyAudioDecoder(const kodi::addon::IInstanceInfo& instance)
+///   : kodi::addon::CInstanceAudioDecoder(instance)
 /// {
 ///   ...
 /// }
@@ -386,7 +386,7 @@ private:
 ///   return true;
 /// }
 ///
-/// int CMyAudioDecoder::ReadPCM(uint8_t* buffer, int size, int& actualsize)
+/// int CMyAudioDecoder::ReadPCM(uint8_t* buffer, size_t size, size_t& actualsize)
 /// {
 ///   ...
 ///   return AUDIODECODER_READ_SUCCESS;
@@ -398,26 +398,20 @@ private:
 /// class CMyAddon : public kodi::addon::CAddonBase
 /// {
 /// public:
-///   CMyAddon() { }
-///   ADDON_STATUS CreateInstance(int instanceType,
-///                               const std::string& instanceID,
-///                               KODI_HANDLE instance,
-///                               const std::string& version,
-///                               KODI_HANDLE& addonInstance) override;
+///   CMyAddon() = default;
+///   ADDON_STATUS CreateInstance(const kodi::addon::IInstanceInfo& instance,
+///                               KODI_ADDON_INSTANCE_HDL& hdl) override;
 /// };
 ///
 /// // If you use only one instance in your add-on, can be instanceType and
 /// // instanceID ignored
-/// ADDON_STATUS CMyAddon::CreateInstance(int instanceType,
-///                                       const std::string& instanceID,
-///                                       KODI_HANDLE instance,
-///                                       const std::string& version,
-///                                       KODI_HANDLE& addonInstance)
+/// ADDON_STATUS CMyAddon::CreateInstance(const kodi::addon::IInstanceInfo& instance,
+///                                       KODI_ADDON_INSTANCE_HDL& hdl)
 /// {
-///   if (instanceType == ADDON_INSTANCE_AUDIODECODER)
+///   if (instance.IsType(ADDON_INSTANCE_AUDIODECODER))
 ///   {
 ///     kodi::Log(ADDON_LOG_INFO, "Creating my audio decoder");
-///     addonInstance = new CMyAudioDecoder(instance, version);
+///     hdl = new CMyAudioDecoder(instance);
 ///     return ADDON_STATUS_OK;
 ///   }
 ///   else if (...)
@@ -443,10 +437,6 @@ public:
   ///
   /// @param[in] instance The instance value given to
   ///                     <b>`kodi::addon::CAddonBase::CreateInstance(...)`</b>.
-  /// @param[in] kodiVersion [opt] Version used in Kodi for this instance, to
-  ///                        allow compatibility to older Kodi versions.
-  ///
-  /// @note Recommended to set <b>`kodiVersion`</b>.
   ///
   ///
   /// --------------------------------------------------------------------------
@@ -456,8 +446,8 @@ public:
   /// class CMyAudioDecoder : public kodi::addon::CInstanceAudioDecoder
   /// {
   /// public:
-  ///   CMyAudioDecoder(KODI_HANDLE instance, const std::string& kodiVersion)
-  ///     : kodi::addon::CInstanceAudioDecoder(instance, kodiVersion)
+  ///   CMyAudioDecoder(KODI_HANDLE instance)
+  ///     : kodi::addon::CInstanceAudioDecoder(instance)
   ///   {
   ///      ...
   ///   }
@@ -465,25 +455,21 @@ public:
   ///   ...
   /// };
   ///
-  /// ADDON_STATUS CMyAddon::CreateInstance(int instanceType,
-  ///                                       const std::string& instanceID,
-  ///                                       KODI_HANDLE instance,
-  ///                                       const std::string& version,
-  ///                                       KODI_HANDLE& addonInstance)
+  /// ADDON_STATUS CMyAddon::CreateInstance(const kodi::addon::IInstanceInfo& instance,
+  ///                                       KODI_ADDON_INSTANCE_HDL& hdl)
   /// {
   ///   kodi::Log(ADDON_LOG_INFO, "Creating my audio decoder");
-  ///   addonInstance = new CMyAudioDecoder(instance, version);
+  ///   hdl = new CMyAudioDecoder(instance);
   ///   return ADDON_STATUS_OK;
   /// }
   /// ~~~~~~~~~~~~~
   ///
-  explicit CInstanceAudioDecoder(KODI_HANDLE instance, const std::string& kodiVersion = "")
-    : IAddonInstance(ADDON_INSTANCE_AUDIODECODER,
-                     !kodiVersion.empty() ? kodiVersion
-                                          : GetKodiTypeVersion(ADDON_INSTANCE_AUDIODECODER))
+  explicit CInstanceAudioDecoder(const kodi::addon::IInstanceInfo& instance)
+    : IAddonInstance(instance)
   {
     if (CPrivateBase::m_interface->globalSingleInstance != nullptr)
-      throw std::logic_error("kodi::addon::CInstanceAudioDecoder: Creation of multiple together with single instance way is not allowed!");
+      throw std::logic_error("kodi::addon::CInstanceAudioDecoder: Creation of multiple together "
+                             "with single instance way is not allowed!");
 
     SetAddonStruct(instance);
   }
@@ -623,20 +609,15 @@ public:
   //--------------------------------------------------------------------------
 
 private:
-  void SetAddonStruct(KODI_HANDLE instance)
+  void SetAddonStruct(KODI_ADDON_INSTANCE_STRUCT* instance)
   {
-    if (instance == nullptr)
-      throw std::logic_error("kodi::addon::CInstanceAudioDecoder: Creation with empty addon structure not allowed, table must be given from Kodi!");
-
-    m_instanceData = static_cast<AddonInstance_AudioDecoder*>(instance);
-
-    m_instanceData->toAddon->addonInstance = this;
-    m_instanceData->toAddon->supports_file = ADDON_supports_file;
-    m_instanceData->toAddon->init = ADDON_init;
-    m_instanceData->toAddon->read_pcm = ADDON_read_pcm;
-    m_instanceData->toAddon->seek = ADDON_seek;
-    m_instanceData->toAddon->read_tag = ADDON_read_tag;
-    m_instanceData->toAddon->track_count = ADDON_track_count;
+    instance->hdl = this;
+    instance->audiodecoder->toAddon->supports_file = ADDON_supports_file;
+    instance->audiodecoder->toAddon->init = ADDON_init;
+    instance->audiodecoder->toAddon->read_pcm = ADDON_read_pcm;
+    instance->audiodecoder->toAddon->seek = ADDON_seek;
+    instance->audiodecoder->toAddon->read_tag = ADDON_read_tag;
+    instance->audiodecoder->toAddon->track_count = ADDON_track_count;
   }
 
   inline static bool ADDON_supports_file(const KODI_ADDON_AUDIODECODER_HDL hdl, const char* file)
@@ -741,8 +722,6 @@ private:
   {
     return static_cast<CInstanceAudioDecoder*>(hdl)->TrackCount(file);
   }
-
-  AddonInstance_AudioDecoder* m_instanceData{nullptr};
 };
 
 } /* namespace addon */

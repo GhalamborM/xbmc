@@ -9,43 +9,45 @@
 #include "DirectoryNodeMusicVideosOverview.h"
 
 #include "FileItem.h"
-#include "guilib/LocalizeStrings.h"
+#include "FileItemList.h"
+#include "ServiceBroker.h"
+#include "resources/LocalizeStrings.h"
+#include "resources/ResourcesComponent.h"
 #include "utils/StringUtils.h"
 #include "video/VideoDbUrl.h"
 
 using namespace XFILE::VIDEODATABASEDIRECTORY;
 
-Node MusicVideoChildren[] = {
-                              { NODE_TYPE_GENRE,             "genres",    135 },
-                              { NODE_TYPE_TITLE_MUSICVIDEOS, "titles",    10024 },
-                              { NODE_TYPE_YEAR,              "years",     652 },
-                              { NODE_TYPE_ACTOR,             "artists",   133 },
-                              { NODE_TYPE_MUSICVIDEOS_ALBUM, "albums",    132 },
-                              { NODE_TYPE_DIRECTOR,          "directors", 20348 },
-                              { NODE_TYPE_STUDIO,            "studios",   20388 },
-                              { NODE_TYPE_TAGS,              "tags",      20459 }
-                            };
+Node MusicVideoChildren[] = {{NodeType::GENRE, "genres", 135},
+                             {NodeType::TITLE_MUSICVIDEOS, "titles", 10024},
+                             {NodeType::YEAR, "years", 652},
+                             {NodeType::ACTOR, "artists", 133},
+                             {NodeType::MUSICVIDEOS_ALBUM, "albums", 132},
+                             {NodeType::DIRECTOR, "directors", 20348},
+                             {NodeType::STUDIO, "studios", 20388},
+                             {NodeType::TAGS, "tags", 20459}};
 
-CDirectoryNodeMusicVideosOverview::CDirectoryNodeMusicVideosOverview(const std::string& strName, CDirectoryNode* pParent)
-  : CDirectoryNode(NODE_TYPE_MUSICVIDEOS_OVERVIEW, strName, pParent)
+CDirectoryNodeMusicVideosOverview::CDirectoryNodeMusicVideosOverview(const std::string& strName,
+                                                                     CDirectoryNode* pParent)
+  : CDirectoryNode(NodeType::MUSICVIDEOS_OVERVIEW, strName, pParent)
 {
 
 }
 
-NODE_TYPE CDirectoryNodeMusicVideosOverview::GetChildType() const
+NodeType CDirectoryNodeMusicVideosOverview::GetChildType() const
 {
   for (const Node& node : MusicVideoChildren)
     if (GetName() == node.id)
       return node.node;
 
-  return NODE_TYPE_NONE;
+  return NodeType::NONE;
 }
 
 std::string CDirectoryNodeMusicVideosOverview::GetLocalizedName() const
 {
   for (const Node& node : MusicVideoChildren)
     if (GetName() == node.id)
-      return g_localizeStrings.Get(node.label);
+      return CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(node.label);
   return "";
 }
 
@@ -57,16 +59,17 @@ bool CDirectoryNodeMusicVideosOverview::GetContent(CFileItemList& items) const
 
   for (const Node& node : MusicVideoChildren)
   {
-    CFileItemPtr pItem(new CFileItem(g_localizeStrings.Get(node.label)));
+    CFileItemPtr pItem(new CFileItem(
+        CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(node.label)));
 
     CVideoDbUrl itemUrl = videoUrl;
     std::string strDir = StringUtils::Format("{}/", node.id);
     itemUrl.AppendPath(strDir);
     pItem->SetPath(itemUrl.ToString());
 
-    pItem->m_bIsFolder = true;
+    pItem->SetFolder(true);
     pItem->SetCanQueue(false);
-    pItem->SetSpecialSort(SortSpecialOnTop);
+    pItem->SetSpecialSort(SortSpecial::TOP);
     items.Add(pItem);
   }
 

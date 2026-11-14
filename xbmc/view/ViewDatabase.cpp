@@ -8,21 +8,26 @@
 
 #include "ViewDatabase.h"
 
-#include <utility>
-
-#include "dbwrappers/dataset.h"
+#include "DatabaseTypes.h"
 #include "SortFileItem.h"
+#include "dbwrappers/dataset.h"
 #include "utils/LegacyPathTranslation.h"
-#include "utils/log.h"
 #include "utils/SortUtils.h"
 #include "utils/StringUtils.h"
 #include "utils/URIUtils.h"
+#include "utils/log.h"
 #include "view/ViewState.h"
+
+#include <utility>
+#include <vector>
 
 #ifdef TARGET_POSIX
 #include "platform/posix/ConvUtils.h"
 #endif
-CViewDatabase::CViewDatabase(void) = default;
+
+CViewDatabase::CViewDatabase() : CDatabase(KODI::DATABASE::TYPE_VIEWMODES)
+{
+}
 
 CViewDatabase::~CViewDatabase(void) = default;
 
@@ -68,7 +73,7 @@ void CViewDatabase::UpdateTables(int version)
         std::string path = originalPath;
         if (StringUtils::StartsWithNoCase(path, "musicdb://"))
           path = CLegacyPathTranslation::TranslateMusicDbPath(path);
-        else if (StringUtils::StartsWithNoCase(path, "videodb://"))
+        else if (URIUtils::IsVideoDb(path))
           path = CLegacyPathTranslation::TranslateVideoDbPath(path);
 
         if (!StringUtils::EqualsNoCase(path, originalPath))
@@ -99,7 +104,8 @@ void CViewDatabase::UpdateTables(int version)
     m_pDS->query("SELECT * FROM tmp_view");
     while (!m_pDS->eof())
     {
-      SortDescription sorting = SortUtils::TranslateOldSortMethod((SORT_METHOD)m_pDS->fv(4).get_asInt());
+      SortDescription sorting =
+          SortUtils::TranslateOldSortMethod(static_cast<SortMethod>(m_pDS->fv(4).get_asInt()));
 
       std::string sql = PrepareSQL("INSERT INTO view (idView, window, path, viewMode, sortMethod, sortOrder, sortAttributes, skin) VALUES (%i, %i, '%s', %i, %i, %i, %i, '%s')",
         m_pDS->fv(0).get_asInt(), m_pDS->fv(1).get_asInt(), m_pDS->fv(2).get_asString().c_str(), m_pDS->fv(3).get_asInt(),

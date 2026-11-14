@@ -10,7 +10,7 @@
 #include "filesystem/SpecialProtocol.h"
 #include "utils/URIUtils.h"
 
-#if defined(TARGET_LINUX)
+#if defined(TARGET_LINUX) || defined(TARGET_WASM)
 #include <sys/statvfs.h>
 #elif defined(TARGET_DARWIN) || defined(TARGET_FREEBSD)
 #include <sys/param.h>
@@ -19,6 +19,7 @@
 #include <sys/statfs.h>
 #endif
 
+#include <cstdint>
 #include <cstdlib>
 #include <limits.h>
 #include <string.h>
@@ -35,7 +36,7 @@ space_info space(const std::string& path, std::error_code& ec)
 {
   ec.clear();
   space_info sp;
-#if defined(TARGET_LINUX)
+#if defined(TARGET_LINUX) || defined(TARGET_WASM)
   struct statvfs64 fsInfo;
   auto result = statvfs64(CSpecialProtocol::TranslatePath(path).c_str(), &fsInfo);
 #else
@@ -67,7 +68,13 @@ std::string temp_directory_path(std::error_code &ec)
   if (result)
     return URIUtils::AppendSlash(result);
 
+#if defined(TARGET_FREEBSD)
+  // Use /var/tmp on FreeBSD as /tmp can be created in RAM
+  // This can be limiting for decompressing archives with large compressed files
+  return "/var/tmp/";
+#else
   return "/tmp/";
+#endif
 }
 
 std::string create_temp_directory(std::error_code &ec)

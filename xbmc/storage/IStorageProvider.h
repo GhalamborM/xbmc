@@ -8,22 +8,58 @@
 
 #pragma once
 
+#include "MediaSource.h"
+
+#include <memory>
 #include <string>
 #include <vector>
-
-#include "MediaSource.h"
-#ifdef HAS_DVD_DRIVE
+#ifdef HAS_OPTICAL_DRIVE
 #include "cdioSupport.h"
 #endif
+
+namespace MEDIA_DETECT
+{
+namespace STORAGE
+{
+/*! \brief Abstracts a generic storage device type*/
+enum class Type
+{
+  UNKNOWN, /*!< the storage type is unknown */
+  OPTICAL /*!< an optical device (e.g. DVD or Bluray) */
+};
+
+/*! \brief Abstracts a generic storage device */
+struct StorageDevice
+{
+  /*! Device name/label */
+  std::string label{};
+  /*! Device mountpoint/path */
+  std::string path{};
+  /*! The storage type (e.g. OPTICAL) */
+  STORAGE::Type type{STORAGE::Type::UNKNOWN};
+};
+} // namespace STORAGE
+} // namespace MEDIA_DETECT
 
 class IStorageEventsCallback
 {
 public:
   virtual ~IStorageEventsCallback() = default;
 
-  virtual void OnStorageAdded(const std::string &label, const std::string &path) = 0;
-  virtual void OnStorageSafelyRemoved(const std::string &label) = 0;
-  virtual void OnStorageUnsafelyRemoved(const std::string &label) = 0;
+  /*! \brief Callback executed when a new storage device is added
+    * @param device the storage device
+    */
+  virtual void OnStorageAdded(const MEDIA_DETECT::STORAGE::StorageDevice& device) = 0;
+
+  /*! \brief Callback executed when a new storage device is safely removed
+    * @param device the storage device
+    */
+  virtual void OnStorageSafelyRemoved(const MEDIA_DETECT::STORAGE::StorageDevice& device) = 0;
+
+  /*! \brief Callback executed when a new storage device is unsafely removed
+    * @param device the storage device
+    */
+  virtual void OnStorageUnsafelyRemoved(const MEDIA_DETECT::STORAGE::StorageDevice& device) = 0;
 };
 
 class IStorageProvider
@@ -34,11 +70,15 @@ public:
   virtual void Initialize() = 0;
   virtual void Stop() = 0;
 
-  virtual void GetLocalDrives(VECSOURCES &localDrives) = 0;
-  virtual void GetRemovableDrives(VECSOURCES &removableDrives) = 0;
+  //! Add the media already in the drives as sources. Separate from Initialize() because reading
+  //! a disc spins the drive up, and this runs after the splash is shown
+  virtual void ScanForPresentMedia() {}
+
+  virtual void GetLocalDrives(std::vector<CMediaSource>& localDrives) = 0;
+  virtual void GetRemovableDrives(std::vector<CMediaSource>& removableDrives) = 0;
   virtual std::string GetFirstOpticalDeviceFileName()
   {
-#ifdef HAS_DVD_DRIVE
+#ifdef HAS_OPTICAL_DRIVE
     return std::string(MEDIA_DETECT::CLibcdio::GetInstance()->GetDeviceFileName());
 #else
     return "";
@@ -55,5 +95,5 @@ public:
   *
   * This method used to create platform specified storage provider
   */
-  static IStorageProvider* CreateInstance();
+  static std::unique_ptr<IStorageProvider> CreateInstance();
 };

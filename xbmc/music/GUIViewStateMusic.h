@@ -8,18 +8,26 @@
 
 #pragma once
 
+#include "utils/SortUtils.h"
 #include "view/GUIViewState.h"
+
+class CSettings;
 
 class CGUIViewStateWindowMusic : public CGUIViewState
 {
 public:
   explicit CGUIViewStateWindowMusic(const CFileItemList& items) : CGUIViewState(items) {}
 protected:
-  VECSOURCES& GetSources() override;
-  int GetPlaylist() const override;
+  std::vector<CMediaSource>& GetSources() override;
+  KODI::PLAYLIST::Id GetPlaylist() const override;
   bool AutoPlayNextItem() override;
-  std::string GetLockType() override;
+  std::optional<KODI::MEDIA::MediaSection> GetLockType() override;
   std::string GetExtensions() override;
+
+  //! \brief Add the sort methods of a list of albums labelled with \p albumFormat.
+  void AddAlbumSortMethods(const std::string& albumFormat,
+                           SortAttribute sortAttribute,
+                           const CSettings& settings);
 };
 
 class CGUIViewStateMusicSearch : public CGUIViewStateWindowMusic
@@ -65,10 +73,7 @@ public:
 
 protected:
   void SaveViewState() override;
-  VECSOURCES& GetSources() override;
-
-private:
-  void AddOnlineShares();
+  std::vector<CMediaSource>& GetSources() override;
 };
 
 class CGUIViewStateWindowMusicPlaylist : public CGUIViewStateWindowMusic
@@ -78,8 +83,8 @@ public:
 
 protected:
   void SaveViewState() override;
-  int GetPlaylist() const override;
+  KODI::PLAYLIST::Id GetPlaylist() const override;
   bool AutoPlayNextItem() override;
   bool HideParentDirItems() override;
-  VECSOURCES& GetSources() override;
+  std::vector<CMediaSource>& GetSources() override;
 };

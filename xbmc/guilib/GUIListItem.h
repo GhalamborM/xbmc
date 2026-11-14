@@ -13,13 +13,17 @@
 \brief
 */
 
+#include "threads/CriticalSection.h"
+#include "utils/Artwork.h"
+
+#include <cstdint>
 #include <map>
 #include <memory>
 #include <string>
+#include <string_view>
 
 //  Forward
 class CGUIListItemLayout;
-using CGUIListItemLayoutPtr = std::unique_ptr<CGUIListItemLayout>;
 class CArchive;
 class CVariant;
 
@@ -30,8 +34,6 @@ class CVariant;
 class CGUIListItem
 {
 public:
-  typedef std::map<std::string, std::string> ArtMap;
-
   ///
   /// @ingroup controls python_xbmcgui_listitem
   /// @defgroup kodi_guilib_listitem_iconoverlay Overlay icon types
@@ -47,10 +49,10 @@ public:
                       };
   /// @}
 
-  CGUIListItem(void);
-  CGUIListItem(const CGUIListItem& item);
+  CGUIListItem();
+  explicit CGUIListItem(const CGUIListItem& item);
   explicit CGUIListItem(const std::string& strLabel);
-  virtual ~CGUIListItem(void);
+  virtual ~CGUIListItem();
   virtual CGUIListItem* Clone() const { return new CGUIListItem(*this); }
 
   CGUIListItem& operator =(const CGUIListItem& item);
@@ -58,37 +60,40 @@ public:
   virtual void SetLabel(const std::string& strLabel);
   const std::string& GetLabel() const;
 
-  void SetLabel2(const std::string& strLabel);
+  void SetLabel2(std::string_view strLabel);
   const std::string& GetLabel2() const;
 
-  void SetOverlayImage(GUIIconOverlay icon, bool bOnOff=false);
+  void SetFolder(bool isFolder) { m_bIsFolder = isFolder; }
+  bool IsFolder() const { return m_bIsFolder; }
+
+  void SetOverlayImage(GUIIconOverlay icon);
   std::string GetOverlayImage() const;
 
   /*! \brief Set a particular art type for an item
    \param type type of art to set.
    \param url the url of the art.
    */
-  void SetArt(const std::string &type, const std::string &url);
+  void SetArt(const std::string& type, std::string_view url);
 
   /*! \brief set artwork for an item
    \param art a type:url map for artwork
    \sa GetArt
    */
-  void SetArt(const ArtMap &art);
+  void SetArt(const KODI::ART::Artwork& art);
 
   /*! \brief append artwork to an item
    \param art a type:url map for artwork
    \param prefix a prefix for the art, if applicable.
    \sa GetArt
    */
-  void AppendArt(const ArtMap &art, const std::string &prefix = "");
+  void AppendArt(const KODI::ART::Artwork& art, const std::string& prefix = "");
 
   /*! \brief set a fallback image for art
    \param from the type to fallback from
    \param to the type to fallback to
    \sa SetArt
    */
-  void SetArtFallback(const std::string &from, const std::string &to);
+  void SetArtFallback(const std::string& from, std::string_view to);
 
   /*! \brief clear art on an item
    \sa SetArt
@@ -106,7 +111,7 @@ public:
    \return a type:url map for artwork
    \sa SetArt
    */
-  const ArtMap &GetArt() const;
+  const KODI::ART::Artwork& GetArt() const;
 
   /*! \brief Check whether an item has a particular piece of art
    Equivalent to !GetArt(type).empty()
@@ -125,17 +130,15 @@ public:
   bool HasOverlay() const;
   virtual bool IsFileItem() const { return false; }
 
-  void SetLayout(CGUIListItemLayoutPtr layout);
+  void SetLayout(std::unique_ptr<CGUIListItemLayout> layout);
   CGUIListItemLayout *GetLayout();
 
-  void SetFocusedLayout(CGUIListItemLayoutPtr layout);
+  void SetFocusedLayout(std::unique_ptr<CGUIListItemLayout> layout);
   CGUIListItemLayout *GetFocusedLayout();
 
   void FreeIcons();
   void FreeMemory(bool immediately = false);
   void SetInvalid();
-
-  bool m_bIsFolder;     ///< is item a folder or a file
 
   void SetProperty(const std::string &strKey, const CVariant &value);
 
@@ -153,13 +156,24 @@ public:
   void AppendProperties(const CGUIListItem &item);
 
   void Archive(CArchive& ar);
-  void Serialize(CVariant& value);
+  void Serialize(CVariant& value) const;
 
-  bool       HasProperty(const std::string &strKey) const;
+  bool HasProperty(const std::string& strKey) const;
   bool HasProperties() const { return !m_mapProperties.empty(); }
-  void       ClearProperty(const std::string &strKey);
+  void ClearProperty(const std::string& strKey);
 
   const CVariant &GetProperty(const std::string &strKey) const;
+
+  struct CaseInsensitiveCompare
+  {
+    using is_transparent = void; // Enables heterogeneous operations.
+    bool operator()(const std::string_view& s1, const std::string_view& s2) const;
+  };
+
+  using PropertyMap = std::map<std::string, CVariant, CaseInsensitiveCompare>;
+  const PropertyMap& GetProperties() const { return m_mapProperties; }
+
+  void SetProperties(const PropertyMap& props);
 
   /*! \brief Set the current item number within it's container
    Our container classes will set this member with the items position
@@ -175,27 +189,20 @@ public:
    */
   unsigned int GetCurrentItem() const;
 
-protected:
-  std::string m_strLabel2;     // text of column2
-  GUIIconOverlay m_overlayIcon; // type of overlay icon
-
-  CGUIListItemLayoutPtr m_layout;
-  CGUIListItemLayoutPtr m_focusedLayout;
-  bool m_bSelected;     // item is selected or not
-  unsigned int m_currentItem; // current item number within container (starting at 1)
-
-  struct icompare
-  {
-    bool operator()(const std::string &s1, const std::string &s2) const;
-  };
-
-  typedef std::map<std::string, CVariant, icompare> PropertyMap;
-  PropertyMap m_mapProperties;
 private:
-  std::wstring m_sortLabel;    // text for sorting. Need to be UTF16 for proper sorting
-  std::string m_strLabel;      // text of column1
+  bool m_bIsFolder{false}; ///< is item a folder or a file
+  std::wstring m_sortLabel; // text for sorting. Need to be UTF16 for proper sorting
+  std::string m_strLabel; // text of column1
+  std::string m_strLabel2; // text of column2
+  GUIIconOverlay m_overlayIcon{ICON_OVERLAY_NONE}; // type of overlay icon
+  std::unique_ptr<CGUIListItemLayout> m_layout;
+  std::unique_ptr<CGUIListItemLayout> m_focusedLayout;
+  CCriticalSection m_layoutSection; // SetInvalid() is called from other threads
+  bool m_bSelected{false}; // item is selected or not
+  unsigned int m_currentItem{1}; // current item number within container (starting at 1)
 
-  ArtMap m_art;
-  ArtMap m_artFallbacks;
+  PropertyMap m_mapProperties;
+
+  KODI::ART::Artwork m_art;
+  KODI::ART::Artwork m_artFallbacks;
 };
-

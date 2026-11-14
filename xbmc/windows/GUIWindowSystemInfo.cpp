@@ -12,14 +12,20 @@
 #include "ServiceBroker.h"
 #include "guilib/GUIComponent.h"
 #include "guilib/GUIMessage.h"
-#include "guilib/LocalizeStrings.h"
 #include "guilib/WindowIDs.h"
 #include "guilib/guiinfo/GUIInfoLabels.h"
 #include "pvr/PVRManager.h"
+#include "rendering/RenderSystem.h"
+#include "resources/LocalizeStrings.h"
+#include "resources/ResourcesComponent.h"
 #include "storage/MediaManager.h"
 #include "utils/CPUInfo.h"
 #include "utils/StringUtils.h"
 #include "utils/SystemInfo.h"
+#include "windowing/WinSystem.h"
+
+constexpr int CONTROL_TEXT_START = 2;
+constexpr int CONTROL_TEXT_END = 13; // 12 lines
 
 #define CONTROL_TB_POLICY   30
 #define CONTROL_BT_STORAGE  94
@@ -30,8 +36,14 @@
 #define CONTROL_BT_PVR      99
 #define CONTROL_BT_POLICY   100
 
-#define CONTROL_START       CONTROL_BT_STORAGE
-#define CONTROL_END         CONTROL_BT_POLICY
+constexpr int CONTROL_BT_DONATE = 101;
+constexpr int CONTROL_GROUP_DONATE = 102;
+constexpr int CONTROL_MULTI_IMAGE_DONATE = 103;
+
+constexpr int CONTROL_GROUP_SYSTEM_BAR = 104;
+
+constexpr int CONTROL_START = CONTROL_BT_STORAGE;
+constexpr int CONTROL_END = CONTROL_BT_DONATE;
 
 CGUIWindowSystemInfo::CGUIWindowSystemInfo(void) :
     CGUIWindow(WINDOW_SYSTEM_INFORMATION, "SettingsSystemInfo.xml")
@@ -60,6 +72,7 @@ bool CGUIWindowSystemInfo::OnMessage(CGUIMessage& message)
     {
       CGUIWindow::OnMessage(message);
       m_diskUsage.clear();
+      m_privacyPolicyLoaded = false;
       return true;
     }
     break;
@@ -74,11 +87,23 @@ bool CGUIWindowSystemInfo::OnMessage(CGUIMessage& message)
         m_section = focusedControl;
       }
       if (m_section >= CONTROL_BT_STORAGE && m_section <= CONTROL_BT_PVR)
+      {
         SET_CONTROL_HIDDEN(CONTROL_TB_POLICY);
+        SET_CONTROL_HIDDEN(CONTROL_GROUP_DONATE);
+        SET_CONTROL_VISIBLE(CONTROL_GROUP_SYSTEM_BAR);
+      }
       else if (m_section == CONTROL_BT_POLICY)
       {
-        SET_CONTROL_LABEL(CONTROL_TB_POLICY, CServiceBroker::GetGUI()->GetInfoManager().GetLabel(SYSTEM_PRIVACY_POLICY));
+        LoadPrivacyPolicy();
         SET_CONTROL_VISIBLE(CONTROL_TB_POLICY);
+        SET_CONTROL_HIDDEN(CONTROL_GROUP_DONATE);
+        SET_CONTROL_VISIBLE(CONTROL_GROUP_SYSTEM_BAR);
+      }
+      else if (m_section == CONTROL_BT_DONATE)
+      {
+        SET_CONTROL_HIDDEN(CONTROL_TB_POLICY);
+        SET_CONTROL_VISIBLE(CONTROL_GROUP_DONATE);
+        SET_CONTROL_HIDDEN(CONTROL_GROUP_SYSTEM_BAR);
       }
       return true;
     }
@@ -89,10 +114,10 @@ bool CGUIWindowSystemInfo::OnMessage(CGUIMessage& message)
 
 void CGUIWindowSystemInfo::FrameMove()
 {
-  int i = 2;
+  int i = CONTROL_TEXT_START;
   if (m_section == CONTROL_BT_DEFAULT)
   {
-    SET_CONTROL_LABEL(40, g_localizeStrings.Get(20154));
+    SET_CONTROL_LABEL(40, CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(20154));
     SetControlLabel(i++, "{}: {}", 158, SYSTEM_FREE_MEMORY);
     SetControlLabel(i++, "{}: {}", 150, NETWORK_IP_ADDRESS);
     SetControlLabel(i++, "{} {}", 13287, SYSTEM_SCREEN_RESOLUTION);
@@ -104,11 +129,11 @@ void CGUIWindowSystemInfo::FrameMove()
 
   else if (m_section == CONTROL_BT_STORAGE)
   {
-    SET_CONTROL_LABEL(40, g_localizeStrings.Get(20155));
+    SET_CONTROL_LABEL(40, CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(20155));
     if (m_diskUsage.empty())
       m_diskUsage = CServiceBroker::GetMediaManager().GetDiskUsage();
 
-    for (size_t d = 0; d < m_diskUsage.size(); d++)
+    for (size_t d = 0; d < m_diskUsage.size() && d <= CONTROL_TEXT_END - CONTROL_TEXT_START; ++d)
     {
       SET_CONTROL_LABEL(i++, m_diskUsage[d]);
     }
@@ -116,8 +141,9 @@ void CGUIWindowSystemInfo::FrameMove()
 
   else if (m_section == CONTROL_BT_NETWORK)
   {
-    SET_CONTROL_LABEL(40,g_localizeStrings.Get(20158));
-    SET_CONTROL_LABEL(i++, CServiceBroker::GetGUI()->GetInfoManager().GetLabel(NETWORK_LINK_STATE));
+    SET_CONTROL_LABEL(40, CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(20158));
+    SET_CONTROL_LABEL(i++, CServiceBroker::GetGUI()->GetInfoManager().GetLabel(
+                               NETWORK_LINK_STATE, INFO::DEFAULT_CONTEXT));
     SetControlLabel(i++, "{}: {}", 149, NETWORK_MAC_ADDRESS);
     SetControlLabel(i++, "{}: {}", 150, NETWORK_IP_ADDRESS);
     SetControlLabel(i++, "{}: {}", 13159, NETWORK_SUBNET_MASK);
@@ -129,8 +155,9 @@ void CGUIWindowSystemInfo::FrameMove()
 
   else if (m_section == CONTROL_BT_VIDEO)
   {
-    SET_CONTROL_LABEL(40,g_localizeStrings.Get(20159));
-    SET_CONTROL_LABEL(i++,CServiceBroker::GetGUI()->GetInfoManager().GetLabel(SYSTEM_VIDEO_ENCODER_INFO));
+    SET_CONTROL_LABEL(40, CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(20159));
+    SET_CONTROL_LABEL(i++, CServiceBroker::GetGUI()->GetInfoManager().GetLabel(
+                               SYSTEM_VIDEO_ENCODER_INFO, INFO::DEFAULT_CONTEXT));
     SetControlLabel(i++, "{} {}", 13287, SYSTEM_SCREEN_RESOLUTION);
 
     auto renderingSystem = CServiceBroker::GetRenderSystem();
@@ -138,7 +165,11 @@ void CGUIWindowSystemInfo::FrameMove()
     {
       static std::string vendor = renderingSystem->GetRenderVendor();
       if (!vendor.empty())
-        SET_CONTROL_LABEL(i++, StringUtils::Format("{} {}", g_localizeStrings.Get(22007), vendor));
+        SET_CONTROL_LABEL(
+            i++,
+            StringUtils::Format(
+                "{} {}", CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(22007),
+                vendor));
 
 #if defined(HAS_DX)
       int renderVersionLabel = 22024;
@@ -147,31 +178,40 @@ void CGUIWindowSystemInfo::FrameMove()
 #endif
       static std::string version = renderingSystem->GetRenderVersionString();
       if (!version.empty())
-        SET_CONTROL_LABEL(
-            i++, StringUtils::Format("{} {}", g_localizeStrings.Get(renderVersionLabel), version));
+        SET_CONTROL_LABEL(i++, StringUtils::Format(
+                                   "{} {}",
+                                   CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(
+                                       renderVersionLabel),
+                                   version));
     }
 
     auto windowSystem = CServiceBroker::GetWinSystem();
     if (windowSystem)
     {
-      static std::string platform = windowSystem->GetName();
+      const std::string platform = windowSystem->GetName();
       if (platform != "platform default")
-        SET_CONTROL_LABEL(i++,
-                          StringUtils::Format("{} {}", g_localizeStrings.Get(39153), platform));
+        SET_CONTROL_LABEL(
+            i++,
+            StringUtils::Format(
+                "{} {}", CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(39153),
+                platform));
     }
 
     SetControlLabel(i++, "{} {}", 22010, SYSTEM_GPU_TEMPERATURE);
 
-    const std::string hdrTypes =
-        CServiceBroker::GetGUI()->GetInfoManager().GetLabel(SYSTEM_SUPPORTED_HDR_TYPES);
+    const std::string hdrTypes = CServiceBroker::GetGUI()->GetInfoManager().GetLabel(
+        SYSTEM_SUPPORTED_HDR_TYPES, INFO::DEFAULT_CONTEXT);
     SET_CONTROL_LABEL(
-        i++, StringUtils::Format("{}: {}", g_localizeStrings.Get(39174),
-                                 hdrTypes.empty() ? g_localizeStrings.Get(231) : hdrTypes));
+        i++,
+        StringUtils::Format(
+            "{}: {}", CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(39174),
+            hdrTypes.empty() ? CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(231)
+                             : hdrTypes));
   }
 
   else if (m_section == CONTROL_BT_HARDWARE)
   {
-    SET_CONTROL_LABEL(40,g_localizeStrings.Get(20160));
+    SET_CONTROL_LABEL(40, CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(20160));
 
     auto cpuInfo = CServiceBroker::GetCPUInfo();
     if (cpuInfo)
@@ -214,8 +254,8 @@ void CGUIWindowSystemInfo::FrameMove()
 
   else if (m_section == CONTROL_BT_PVR)
   {
-    SET_CONTROL_LABEL(40, g_localizeStrings.Get(19166));
-    int i = 2;
+    SET_CONTROL_LABEL(40, CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(19166));
+    int i = CONTROL_TEXT_START;
 
     SetControlLabel(i++, "{}: {}", 19120, PVR_BACKEND_NUMBER);
     i++;  // empty line
@@ -234,24 +274,41 @@ void CGUIWindowSystemInfo::FrameMove()
 
   else if (m_section == CONTROL_BT_POLICY)
   {
-    SET_CONTROL_LABEL(40, g_localizeStrings.Get(12389));
+    SET_CONTROL_LABEL(40, CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(12389));
+  }
+  else if (m_section == CONTROL_BT_DONATE)
+  {
+    SET_CONTROL_LABEL(40, CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(12396));
   }
   CGUIWindow::FrameMove();
 }
 
 void CGUIWindowSystemInfo::ResetLabels()
 {
-  for (int i = 2; i < 13; i++)
+  for (int i = CONTROL_TEXT_START; i <= CONTROL_TEXT_END; ++i)
   {
     SET_CONTROL_LABEL(i, "");
   }
-  SET_CONTROL_LABEL(CONTROL_TB_POLICY, "");
+
+  // Reset the multiimage to the beginning
+  CGUIMessage msg{GUI_MSG_RESET_MULTI_IMAGE, GetID(), CONTROL_MULTI_IMAGE_DONATE};
+  OnMessage(msg);
 }
 
 void CGUIWindowSystemInfo::SetControlLabel(int id, const char *format, int label, int info)
 {
-  std::string tmpStr =
-      StringUtils::Format(format, g_localizeStrings.Get(label),
-                          CServiceBroker::GetGUI()->GetInfoManager().GetLabel(info));
+  std::string tmpStr = StringUtils::Format(
+      format, CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(label),
+      CServiceBroker::GetGUI()->GetInfoManager().GetLabel(info, INFO::DEFAULT_CONTEXT));
   SET_CONTROL_LABEL(id, tmpStr);
+}
+
+void CGUIWindowSystemInfo::LoadPrivacyPolicy()
+{
+  if (!m_privacyPolicyLoaded)
+  {
+    m_privacyPolicyLoaded = true;
+    SET_CONTROL_LABEL(CONTROL_TB_POLICY, CServiceBroker::GetGUI()->GetInfoManager().GetLabel(
+                                             SYSTEM_PRIVACY_POLICY, INFO::DEFAULT_CONTEXT));
+  }
 }

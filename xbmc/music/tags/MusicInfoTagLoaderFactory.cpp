@@ -9,17 +9,24 @@
 #include "MusicInfoTagLoaderFactory.h"
 
 #include "FileItem.h"
+#ifdef HAS_OPTICAL_DRIVE
 #include "MusicInfoTagLoaderCDDA.h"
+#endif // HAS_OPTICAL_DRIVE
 #include "MusicInfoTagLoaderDatabase.h"
 #include "MusicInfoTagLoaderFFmpeg.h"
+#include "MusicInfoTagLoaderMatroska.h"
 #include "MusicInfoTagLoaderShn.h"
 #include "ServiceBroker.h"
 #include "TagLoaderTagLib.h"
 #include "addons/AudioDecoder.h"
 #include "addons/ExtsMimeSupportList.h"
+#include "addons/addoninfo/AddonType.h"
+#include "music/MusicFileItemClassify.h"
+#include "network/NetworkFileItemClassify.h"
 #include "utils/StringUtils.h"
 #include "utils/URIUtils.h"
 
+using namespace KODI;
 using namespace KODI::ADDONS;
 using namespace MUSIC_INFO;
 
@@ -30,10 +37,10 @@ CMusicInfoTagLoaderFactory::~CMusicInfoTagLoaderFactory() = default;
 IMusicInfoTagLoader* CMusicInfoTagLoaderFactory::CreateLoader(const CFileItem& item)
 {
   // dont try to read the tags for streams & shoutcast
-  if (item.IsInternetStream())
+  if (NETWORK::IsInternetStream(item))
     return NULL;
 
-  if (item.IsMusicDb())
+  if (MUSIC::IsMusicDb(item))
     return new CMusicInfoTagLoaderDatabase();
 
   std::string strExtension = URIUtils::GetExtension(item.GetPath());
@@ -47,7 +54,7 @@ IMusicInfoTagLoader* CMusicInfoTagLoaderFactory::CreateLoader(const CFileItem& i
       "." + strExtension, CExtsMimeSupportList::FilterSelect::hasTags);
   for (const auto& addonInfo : addonInfos)
   {
-    if (addonInfo.first == ADDON::ADDON_AUDIODECODER)
+    if (addonInfo.first == ADDON::AddonType::AUDIODECODER)
     {
       std::unique_ptr<CAudioDecoder> result = std::make_unique<CAudioDecoder>(addonInfo.second);
       if (!result->CreateDecoder() && result->SupportsFile(item.GetPath()))
@@ -58,31 +65,32 @@ IMusicInfoTagLoader* CMusicInfoTagLoaderFactory::CreateLoader(const CFileItem& i
   }
 
   if (strExtension == "aac" || strExtension == "ape" || strExtension == "mac" ||
-      strExtension == "mp3" || strExtension == "wma" || strExtension == "flac" ||
-      strExtension == "m4a" || strExtension == "mp4" || strExtension == "m4b" ||
-      strExtension == "m4v" || strExtension == "mpc" || strExtension == "mpp" ||
-      strExtension == "mp+" || strExtension == "ogg" || strExtension == "oga" ||
-      strExtension == "opus" || strExtension == "aif" || strExtension == "aiff" ||
-      strExtension == "wav" || strExtension == "mod" || strExtension == "s3m" ||
-      strExtension == "it" || strExtension == "xm" || strExtension == "wv")
+      strExtension == "mp2" || strExtension == "mp3" || strExtension == "wma" ||
+      strExtension == "flac" || strExtension == "m4a" || strExtension == "mp4" ||
+      strExtension == "m4b" || strExtension == "m4v" || strExtension == "mpc" ||
+      strExtension == "mpp" || strExtension == "mp+" || strExtension == "ogg" ||
+      strExtension == "oga" || strExtension == "opus" || strExtension == "aif" ||
+      strExtension == "aiff" || strExtension == "wav" || strExtension == "mod" ||
+      strExtension == "s3m" || strExtension == "it" || strExtension == "xm" || strExtension == "wv")
   {
-    CTagLoaderTagLib *pTagLoader = new CTagLoaderTagLib();
+    CTagLoaderTagLib* pTagLoader = new CTagLoaderTagLib();
     return pTagLoader;
   }
-#ifdef HAS_DVD_DRIVE
+#ifdef HAS_OPTICAL_DRIVE
   else if (strExtension == "cdda")
   {
-    CMusicInfoTagLoaderCDDA *pTagLoader = new CMusicInfoTagLoaderCDDA();
+    CMusicInfoTagLoaderCDDA* pTagLoader = new CMusicInfoTagLoaderCDDA();
     return pTagLoader;
   }
 #endif
   else if (strExtension == "shn")
   {
-    CMusicInfoTagLoaderSHN *pTagLoader = new CMusicInfoTagLoaderSHN();
+    CMusicInfoTagLoaderSHN* pTagLoader = new CMusicInfoTagLoaderSHN();
     return pTagLoader;
   }
-  else if (strExtension == "mka" || strExtension == "dsf" ||
-           strExtension == "dff")
+  else if (strExtension == "mka" || strExtension == "mkv")
+    return new CMusicInfoTagLoaderMatroska();
+  else if (strExtension == "dsf" || strExtension == "dff")
     return new CMusicInfoTagLoaderFFmpeg();
 
   return NULL;

@@ -8,17 +8,24 @@
 
 #include "WindowXML.h"
 
+#include "FileItemList.h"
 #include "ServiceBroker.h"
 #include "WindowException.h"
 #include "WindowInterceptor.h"
 #include "addons/Addon.h"
 #include "addons/Skin.h"
-#include "filesystem/File.h"
+#include "addons/addoninfo/AddonInfo.h"
+#include "addons/addoninfo/AddonType.h"
 #include "guilib/GUIComponent.h"
 #include "guilib/GUIWindowManager.h"
 #include "guilib/TextureManager.h"
-#include "utils/StringUtils.h"
+#include "input/actions/Action.h"
+#include "input/actions/ActionIDs.h"
+#include "utils/FileUtils.h"
 #include "utils/URIUtils.h"
+#include "windowing/WinSystem.h"
+
+#include <mutex>
 
 // These #defs are for WindowXML
 #define CONTROL_BTNVIEWASICONS  2
@@ -92,24 +99,29 @@ namespace XBMCAddon
       Window(true)
     {
       XBMC_TRACE;
+      auto skin = CServiceBroker::GetGUI()->GetSkinInfo();
+      if (!skin)
+        return;
+
       RESOLUTION_INFO res;
-      std::string strSkinPath = g_SkinInfo->GetSkinPath(xmlFilename, &res);
+      std::string strSkinPath = skin->GetSkinPath(xmlFilename, &res);
       m_isMedia = isMedia;
 
-      if (!XFILE::CFile::Exists(strSkinPath))
+      if (!CFileUtils::Exists(strSkinPath))
       {
         std::string str("none");
-        ADDON::AddonInfoPtr addonInfo = std::make_shared<ADDON::CAddonInfo>(str, ADDON::ADDON_SKIN);
+        ADDON::AddonInfoPtr addonInfo =
+            std::make_shared<ADDON::CAddonInfo>(str, ADDON::AddonType::SKIN);
         ADDON::CSkinInfo::TranslateResolution(defaultRes, res);
 
         // Check for the matching folder for the skin in the fallback skins folder
         std::string fallbackPath = URIUtils::AddFileToFolder(scriptPath, "resources", "skins");
-        std::string basePath = URIUtils::AddFileToFolder(fallbackPath, g_SkinInfo->ID());
+        std::string basePath = URIUtils::AddFileToFolder(fallbackPath, skin->ID());
 
-        strSkinPath = g_SkinInfo->GetSkinPath(xmlFilename, &res, basePath);
+        strSkinPath = skin->GetSkinPath(xmlFilename, &res, basePath);
 
         // Check for the matching folder for the skin in the fallback skins folder (if it exists)
-        if (XFILE::CFile::Exists(basePath))
+        if (CFileUtils::Exists(basePath))
         {
           addonInfo->SetPath(basePath);
           std::shared_ptr<ADDON::CSkinInfo> skinInfo = std::make_shared<ADDON::CSkinInfo>(addonInfo, res);
@@ -117,7 +129,7 @@ namespace XBMCAddon
           strSkinPath = skinInfo->GetSkinPath(xmlFilename, &res);
         }
 
-        if (!XFILE::CFile::Exists(strSkinPath))
+        if (!CFileUtils::Exists(strSkinPath))
         {
           // Finally fallback to the DefaultSkin as it didn't exist in either the XBMC Skin folder or the fallback skin folder
           addonInfo->SetPath(URIUtils::AddFileToFolder(fallbackPath, defaultSkin));
@@ -125,7 +137,7 @@ namespace XBMCAddon
 
           skinInfo->Start();
           strSkinPath = skinInfo->GetSkinPath(xmlFilename, &res);
-          if (!XFILE::CFile::Exists(strSkinPath))
+          if (!CFileUtils::Exists(strSkinPath))
             throw WindowException("XML File for Window is missing");
         }
       }
@@ -141,7 +153,7 @@ namespace XBMCAddon
     int WindowXML::lockingGetNextAvailableWindowId()
     {
       XBMC_TRACE;
-      CSingleLock lock(CServiceBroker::GetWinSystem()->GetGfxContext());
+      std::unique_lock lock(CServiceBroker::GetWinSystem()->GetGfxContext());
       return getNextAvailableWindowId();
     }
 

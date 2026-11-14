@@ -28,9 +28,20 @@ public:
   CWebServer();
   virtual ~CWebServer() = default;
 
+  /*!
+   \brief Start listening on the given port
+   \param port port to listen on, or 0 to let the operating system assign a free one
+   \return true if at least one daemon is listening
+   */
   bool Start(uint16_t port, const std::string &username, const std::string &password);
   bool Stop();
   bool IsStarted();
+
+  /*!
+   \brief The port being listened on, which is only known after a successful Start()
+   \return the port, or 0 if the server is not running
+   */
+  uint16_t GetPort() const;
   static bool WebServerSupportsSSL();
   void SetCredentials(const std::string &username, const std::string &password);
 
@@ -41,18 +52,12 @@ protected:
   typedef struct ConnectionHandler
   {
     std::string fullUri;
-    bool isNew;
+    bool isNew = true;
     std::shared_ptr<IHTTPRequestHandler> requestHandler;
-    struct MHD_PostProcessor *postprocessor;
-    int errorStatus;
+    struct MHD_PostProcessor* postprocessor = nullptr;
+    int errorStatus = MHD_HTTP_OK;
 
-    explicit ConnectionHandler(const std::string& uri)
-      : fullUri(uri)
-      , isNew(true)
-      , requestHandler(nullptr)
-      , postprocessor(nullptr)
-      , errorStatus(MHD_HTTP_OK)
-    { }
+    explicit ConnectionHandler(const std::string& uri) : fullUri(uri), requestHandler(nullptr) {}
   } ConnectionHandler;
 
   virtual void LogRequest(const char* uri) const;

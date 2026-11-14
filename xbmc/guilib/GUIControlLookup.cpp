@@ -8,6 +8,12 @@
 
 #include "GUIControlLookup.h"
 
+CGUIControlLookup::CGUIControlLookup(const CGUIControlLookup& from) : CGUIControl(from)
+{
+  // Cloned children must not register in the source control's parent.
+  SetParentControl(nullptr);
+}
+
 CGUIControl *CGUIControlLookup::GetControl(int iControl, std::vector<CGUIControl*> *idCollector)
 {
   if (idCollector)

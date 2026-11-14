@@ -9,12 +9,10 @@
 #pragma once
 
 #include "DVDMessageQueue.h"
-#include "FileItem.h"
 #include "IVideoPlayer.h"
 #include "threads/Thread.h"
 #include "utils/Stopwatch.h"
 
-#include <deque>
 #include <memory>
 
 class CDVDStreamInfo;
@@ -33,7 +31,6 @@ class CPVRRadioRDSInfoTag;
                                                    max. 255(MSG)+4(ADD/SQC/MFL)+2(CRC)+2(Start/Stop) of RDS-data */
 #define RT_MEL                        65
 #define MAX_RTPC                      50
-#define MAX_RADIOTEXT_LISTSIZE        6
 
 class CDVDRadioRDSData : public CThread, public IDVDStreamPlayer
 {
@@ -41,7 +38,7 @@ public:
   explicit CDVDRadioRDSData(CProcessInfo &processInfo);
   ~CDVDRadioRDSData() override;
 
-  bool CheckStream(CDVDStreamInfo &hints);
+  bool CheckStream(const CDVDStreamInfo& hints);
   bool OpenStream(CDVDStreamInfo hints) override;
   void CloseStream(bool bWaitForBuffers) override;
   void Flush();
@@ -58,8 +55,6 @@ public:
   bool IsInited() const override { return true; }
   bool IsStalled() const override { return true; }
 
-  std::string GetRadioText(unsigned int line);
-
 protected:
   void OnExit() override;
   void Process() override;
@@ -68,22 +63,22 @@ private:
   void ResetRDSCache();
   void ProcessUECP(const unsigned char *Data, unsigned int Length);
 
-  inline unsigned int DecodePI(uint8_t *msgElement);
+  inline unsigned int DecodePI(const uint8_t* msgElement);
   inline unsigned int DecodePS(uint8_t *msgElement);
-  inline unsigned int DecodeDI(uint8_t *msgElement);
-  inline unsigned int DecodeTA_TP(uint8_t *msgElement);
-  inline unsigned int DecodeMS(uint8_t *msgElement);
-  inline unsigned int DecodePTY(uint8_t *msgElement);
+  inline unsigned int DecodeDI(const uint8_t* msgElement);
+  inline unsigned int DecodeTA_TP(const uint8_t* msgElement);
+  inline unsigned int DecodeMS(const uint8_t* msgElement);
+  inline unsigned int DecodePTY(const uint8_t* msgElement);
   inline unsigned int DecodePTYN(uint8_t *msgElement);
   inline unsigned int DecodeRT(uint8_t *msgElement, unsigned int len);
   inline unsigned int DecodeRTC(uint8_t *msgElement);
   inline unsigned int DecodeODA(uint8_t *msgElement, unsigned int len);
   inline unsigned int DecodeRTPlus(uint8_t *msgElement, unsigned int len);
   inline unsigned int DecodeTMC(uint8_t *msgElement, unsigned int len);
-  inline unsigned int DecodeEPPTransmitterInfo(uint8_t *msgElement);
-  inline unsigned int DecodeSlowLabelingCodes(uint8_t *msgElement);
-  inline unsigned int DecodeDABDynLabelCmd(uint8_t *msgElement, unsigned int len);
-  inline unsigned int DecodeDABDynLabelMsg(uint8_t *msgElement, unsigned int len);
+  inline unsigned int DecodeEPPTransmitterInfo(const uint8_t* msgElement);
+  inline unsigned int DecodeSlowLabelingCodes(const uint8_t* msgElement);
+  inline unsigned int DecodeDABDynLabelCmd(const uint8_t* msgElement, unsigned int len);
+  inline unsigned int DecodeDABDynLabelMsg(const uint8_t* msgElement, unsigned int len);
   inline unsigned int DecodeAF(uint8_t *msgElement, unsigned int len);
   inline unsigned int DecodeEonAF(uint8_t *msgElement, unsigned int len);
   inline unsigned int DecodeTDC(uint8_t *msgElement, unsigned int len);
@@ -114,11 +109,6 @@ private:
 
   unsigned int                m_EPP_TM_INFO_ExtendedCountryCode;
 
-  #define PS_TEXT_ENTRIES     12
-  bool                        m_PS_Present;
-  int                         m_PS_Index;
-  char                        m_PS_Text[PS_TEXT_ENTRIES][9];
-
   bool                        m_DI_IsStereo;
   bool                        m_DI_ArtificialHead;
   bool                        m_DI_Compressed;
@@ -133,14 +123,8 @@ private:
   char                        m_PTYN[9];
   bool                        m_PTYN_Present;
 
-  bool                        m_RT_Present;
-  std::deque<std::string>     m_RT;
-  int                         m_RT_Index;
-  int                         m_RT_MaxSize;
   bool                        m_RT_NewItem;
-  char                        m_RT_Text[6][RT_MEL+1];
 
-  bool                        m_RTPlus_Present;
   uint8_t                     m_RTPlus_WorkText[RT_MEL+1];
   bool                        m_RTPlus_TToggle;
   int                         m_RTPlus_iDiffs;

@@ -8,10 +8,15 @@
 
 #include "GUIImage.h"
 
+#include "FileItem.h"
 #include "GUIMessage.h"
+#include "ImageSettings.h"
+#include "ServiceBroker.h"
 #include "utils/log.h"
+#include "windowing/WinSystem.h"
 
 #include <cassert>
+#include <memory>
 
 using namespace KODI::GUILIB;
 
@@ -23,23 +28,27 @@ CGUIImage::CGUIImage(int parentID,
                      float height,
                      const CTextureInfo& texture)
   : CGUIControl(parentID, controlID, posX, posY, width, height),
-    m_texture(CGUITexture::CreateTexture(posX, posY, width, height, texture))
+    m_textureCurrent(CGUITexture::CreateTexture(posX, posY, width, height, texture)),
+    m_textureNext(CGUITexture::CreateTexture(posX, posY, width, height, texture))
 {
   m_crossFadeTime = 0;
   m_currentFadeTime = 0;
   m_lastRenderTime = 0;
   ControlType = GUICONTROL_IMAGE;
   m_bDynamicResourceAlloc=false;
+  m_textureNext->SetFileName("");
 }
 
 CGUIImage::CGUIImage(const CGUIImage& left)
   : CGUIControl(left),
     m_image(left.m_image),
     m_info(left.m_info),
-    m_texture(left.m_texture->Clone()),
-    m_fadingTextures(),
-    m_currentTexture(),
-    m_currentFallback()
+    m_textureCurrent(left.m_textureCurrent->Clone()),
+    m_textureNext(left.m_textureNext->Clone()),
+    m_imageFilterInfo(left.m_imageFilterInfo),
+    m_imageFilter(left.m_imageFilter),
+    m_diffuseFilterInfo(left.m_diffuseFilterInfo),
+    m_diffuseFilter(left.m_diffuseFilter)
 {
   m_crossFadeTime = left.m_crossFadeTime;
   // defaults
@@ -60,8 +69,36 @@ void CGUIImage::UpdateVisibility(const CGUIListItem *item)
   AllocateOnDemand();
 }
 
+void CGUIImage::UpdateDiffuseColor(const CGUIListItem* item)
+{
+  if (m_textureCurrent->SetDiffuseColor(m_diffuseColor, item))
+    MarkDirtyRegion();
+  m_textureNext->SetDiffuseColor(m_diffuseColor, item);
+}
+
 void CGUIImage::UpdateInfo(const CGUIListItem *item)
 {
+  if (item != nullptr)
+  {
+    std::string imageFilter = m_imageFilterInfo.GetItemLabel(item);
+    if (!imageFilter.empty())
+    {
+      m_imageFilter = ImageSettings::TranslateImageFilter(imageFilter);
+      UpdateImageFilter(m_imageFilter);
+    }
+
+    std::string diffuseFilter = m_diffuseFilterInfo.GetItemLabel(item);
+    if (!diffuseFilter.empty())
+    {
+      m_diffuseFilter = ImageSettings::TranslateImageFilter(diffuseFilter);
+      UpdateDiffuseFilter(m_diffuseFilter);
+    }
+  }
+
+  // The texture may also depend on info conditions. Update the diffuse color in that case.
+  if (m_textureCurrent->GetDiffuseColor().HasInfo())
+    UpdateDiffuseColor(item);
+
   if (m_info.IsConstant())
     return; // nothing to do
 
@@ -78,125 +115,260 @@ void CGUIImage::UpdateInfo(const CGUIListItem *item)
 void CGUIImage::AllocateOnDemand()
 {
   // if we're hidden, we can free our resources and return
-  if (!IsVisible() && m_visible != DELAYED)
+  if (!IsVisible() && m_visible != DELAYED && m_bDynamicResourceAlloc)
   {
-    if (m_bDynamicResourceAlloc && m_texture->IsAllocated())
-      FreeResourcesButNotAnims();
+    // an empty texture here means the request failed; its name marks it as already tried
+    const std::string failedName = m_textureCurrent->GetFileName().empty() ? m_nameCurrent : "";
+    FreeResourcesButNotAnims();
+    m_nameCurrent = failedName;
     return;
   }
 
   // either visible or delayed - we need the resources allocated in either case
-  if (!m_texture->IsAllocated())
+  if (!m_textureCurrent->IsAllocated())
     AllocResources();
 }
 
 void CGUIImage::Process(unsigned int currentTime, CDirtyRegionList &dirtyregions)
 {
-  // check whether our image failed to allocate, and if so drop back to the fallback image
-  if (m_texture->FailedToAlloc() && m_texture->GetFileName() != m_info.GetFallback())
+  ProcessState();
+
+  ProcessAllocation();
+
+  // the clock is never reset, so a fade pending across a processing gap
+  // settles on resume instead of replaying stale content
+  unsigned int frameTime = 0;
+  if (m_lastRenderTime)
+    frameTime = currentTime - m_lastRenderTime;
+  if (!frameTime)
+    frameTime = (unsigned int)(1000 / CServiceBroker::GetWinSystem()->GetGfxContext().GetFPS());
+  m_lastRenderTime = currentTime;
+
+  // swap the new image in once it has something to show (or clears the image)
+  if (m_isTransitioning && (m_textureNext->ReadyToRender() || m_textureNext->GetFileName().empty()))
   {
-    if (!m_currentFallback.empty() && m_texture->GetFileName() != m_currentFallback)
-      m_texture->SetFileName(m_currentFallback);
+    if (m_crossFadeTime)
+      StartFadeTransition();
     else
-      m_texture->SetFileName(m_info.GetFallback());
+      ProcessInstantTransition();
   }
 
   if (m_crossFadeTime)
-  {
-    // make sure our texture has started allocating
-    if (m_texture->AllocResources())
-      MarkDirtyRegion();
+    ProcessFades(currentTime, frameTime);
 
-    // compute the frame time
-    unsigned int frameTime = 0;
-    if (m_lastRenderTime)
-      frameTime = currentTime - m_lastRenderTime;
-    if (!frameTime)
-      frameTime = (unsigned int)(1000 / CServiceBroker::GetWinSystem()->GetGfxContext().GetFPS());
-    m_lastRenderTime = currentTime;
+  if (!m_textureCurrent->GetDiffuseColor().HasInfo())
+    UpdateDiffuseColor(nullptr);
 
-    if (m_fadingTextures.size())  // have some fading images
-    { // anything other than the last old texture needs to be faded out as per usual
-      for (std::vector<CFadingTexture *>::iterator i = m_fadingTextures.begin(); i != m_fadingTextures.end() - 1;)
-      {
-        if (!ProcessFading(*i, frameTime, currentTime))
-          i = m_fadingTextures.erase(i);
-        else
-          ++i;
-      }
-
-      if (m_texture->ReadyToRender() || m_texture->GetFileName().empty())
-      { // fade out the last one as well
-        if (!ProcessFading(m_fadingTextures[m_fadingTextures.size() - 1], frameTime, currentTime))
-          m_fadingTextures.erase(m_fadingTextures.end() - 1);
-      }
-      else
-      { // keep the last one fading in
-        CFadingTexture *texture = m_fadingTextures[m_fadingTextures.size() - 1];
-        texture->m_fadeTime += frameTime;
-        if (texture->m_fadeTime > m_crossFadeTime)
-          texture->m_fadeTime = m_crossFadeTime;
-
-        if (texture->m_texture->SetAlpha(GetFadeLevel(texture->m_fadeTime)))
-          MarkDirtyRegion();
-        if (texture->m_texture->SetDiffuseColor(m_diffuseColor))
-          MarkDirtyRegion();
-        if (texture->m_texture->Process(currentTime))
-          MarkDirtyRegion();
-      }
-    }
-
-    if (m_texture->ReadyToRender() || m_texture->GetFileName().empty())
-    { // fade the new one in
-      m_currentFadeTime += frameTime;
-      if (m_currentFadeTime > m_crossFadeTime || frameTime == 0) // for if we allocate straight away on creation
-        m_currentFadeTime = m_crossFadeTime;
-    }
-    if (m_texture->SetAlpha(GetFadeLevel(m_currentFadeTime)))
-      MarkDirtyRegion();
-  }
-
-  if (m_texture->SetDiffuseColor(m_diffuseColor))
+  if (m_textureCurrent->Process(currentTime))
     MarkDirtyRegion();
 
-  if (m_texture->Process(currentTime))
-    MarkDirtyRegion();
+  // background textures are picked up in Process(), keep the window
+  // processed until they're loaded without redrawing this control
+  if (m_textureCurrent->IsLoading() || m_textureNext->IsLoading())
+    MarkDirtyRegion(DIRTY_STATE_CHILD);
 
   CGUIControl::Process(currentTime, dirtyregions);
 }
 
-void CGUIImage::Render()
+void CGUIImage::ProcessState()
 {
-  if (!IsVisible()) return;
+  if (!m_hasNewStagingTexture)
+    return;
 
-  for (auto& itr : m_fadingTextures)
-    itr->m_texture->Render();
+  std::string fileName = m_nameStaging;
+  if (fileName.empty())
+    fileName = GetFallback(fileName);
 
-  m_texture->Render();
+  if (m_nameCurrent == fileName || m_textureCurrent->GetFileName() == fileName)
+  {
+    // the current texture might be a fallback from a image which failed to
+    // load, and it might be the texture we want.
+    if (m_textureCurrent->GetFileName() == fileName && m_nameCurrent != fileName)
+      m_nameCurrent = fileName;
 
-  CGUIControl::Render();
+    // the current texture is already what we want, so cancel the incoming one
+    if (m_isTransitioning)
+    {
+      m_textureNext->SetFileName("");
+      m_nameNext = "";
+      m_isTransitioning = false;
+    }
+
+    m_hasNewStagingTexture = false;
+    return;
+  }
+
+  // our fading-in texture is already set
+  if (m_nameNext == fileName || m_textureNext->GetFileName() == fileName)
+  {
+    // the next texture might be a fallback from a image which failed to load,
+    // and it might be the texture we want.
+    if (m_textureNext->GetFileName() == fileName && m_nameNext != fileName)
+      m_nameNext = fileName;
+
+    m_textureNext->SetUseCache(m_useCacheStaging);
+    m_isTransitioning = true;
+    m_hasNewStagingTexture = false;
+    return;
+  }
+
+  // replace the in-flight texture, so the latest request always wins
+  m_textureNext->SetUseCache(m_useCacheStaging);
+  m_textureNext->SetFileName(fileName);
+  m_nameNext = fileName;
+  m_isTransitioning = true;
+  m_hasNewStagingTexture = false;
 }
 
-bool CGUIImage::ProcessFading(CGUIImage::CFadingTexture *texture, unsigned int frameTime, unsigned int currentTime)
+void CGUIImage::ProcessAllocation()
 {
-  assert(texture);
-  if (texture->m_fadeTime <= frameTime)
+  if (m_textureCurrent->AllocResources())
+    MarkDirtyRegion();
+  if (m_textureNext->AllocResources())
+    MarkDirtyRegion();
+
+  if (m_isTransitioning && m_textureNext->FailedToAlloc())
+  {
+    if (m_textureNext->GetFileName() != m_info.GetFallback())
+      m_textureNext->SetFileName(GetFallback(m_nameNext));
+    else
+      m_textureNext->SetFileName("");
+
+    m_textureNext->AllocResources();
+  }
+
+  if (m_textureCurrent->FailedToAlloc())
+  {
+    if (m_textureCurrent->GetFileName() != m_info.GetFallback())
+      m_textureCurrent->SetFileName(GetFallback(m_nameCurrent));
+    else
+      m_textureCurrent->SetFileName("");
+
+    m_textureCurrent->AllocResources();
+  }
+}
+
+void CGUIImage::ProcessInstantTransition()
+{
+  std::swap(m_textureCurrent, m_textureNext);
+  std::swap(m_nameCurrent, m_nameNext);
+
+  m_nameNext = "";
+  m_textureNext->SetFileName("");
+
+  m_textureCurrent->SetAlpha(0xff);
+  m_currentFadeTime = 0;
+  m_isTransitioning = false;
+
+  m_fadingTextures.clear();
+
+  MarkDirtyRegion();
+}
+
+void CGUIImage::StartFadeTransition()
+{
+  if (m_textureCurrent->ReadyToRender())
+  { // save the current image, so it can fade out on its own clock
+    // the oldest texture is the most faded out, so kill that one off first
+    if (m_fadingTextures.size() >= MAX_FADING_TEXTURES)
+      m_fadingTextures.erase(m_fadingTextures.begin());
+
+    m_fadingTextures.emplace_back(
+        std::make_unique<CFadingTexture>(m_textureCurrent.get(), m_currentFadeTime));
+  }
+
+  std::swap(m_textureCurrent, m_textureNext);
+  std::swap(m_nameCurrent, m_nameNext);
+
+  m_nameNext = "";
+  m_textureNext->SetFileName("");
+
+  m_currentFadeTime = 0;
+  m_isTransitioning = false;
+
+  MarkDirtyRegion();
+}
+
+void CGUIImage::ProcessFades(unsigned int currentTime, unsigned int frameTime)
+{
+  if (!m_fadingTextures.empty())
+  { // have some fading images
+    // anything other than the last old texture needs to be faded out as per usual
+    for (auto i = m_fadingTextures.begin(); i != m_fadingTextures.end() - 1;)
+    {
+      if (!ProcessFading(**i, frameTime, currentTime))
+        i = m_fadingTextures.erase(i);
+      else
+        ++i;
+    }
+
+    if (m_textureCurrent->ReadyToRender() || m_textureCurrent->GetFileName().empty())
+    { // fade out the last one as well
+      if (!ProcessFading(*m_fadingTextures.back(), frameTime, currentTime))
+        m_fadingTextures.pop_back();
+    }
+    else
+    { // keep the last one fading in
+      CFadingTexture& texture = *m_fadingTextures.back();
+      texture.m_fadeTime += frameTime;
+      if (texture.m_fadeTime > m_crossFadeTime)
+        texture.m_fadeTime = m_crossFadeTime;
+
+      if (texture.m_texture->SetAlpha(GetFadeLevel(texture.m_fadeTime)))
+        MarkDirtyRegion();
+      if (texture.m_texture->SetDiffuseColor(m_diffuseColor))
+        MarkDirtyRegion();
+      if (texture.m_texture->Process(currentTime))
+        MarkDirtyRegion();
+    }
+  }
+
+  if (m_textureCurrent->ReadyToRender() || m_textureCurrent->GetFileName().empty())
+  { // fade the new one in
+    m_currentFadeTime += frameTime;
+    if (m_currentFadeTime > m_crossFadeTime ||
+        frameTime == 0) // for if we allocate straight away on creation
+      m_currentFadeTime = m_crossFadeTime;
+  }
+
+  if (m_textureCurrent->SetAlpha(GetFadeLevel(m_currentFadeTime)))
+    MarkDirtyRegion();
+}
+
+bool CGUIImage::ProcessFading(CFadingTexture& texture,
+                              unsigned int frameTime,
+                              unsigned int currentTime)
+{
+  if (texture.m_fadeTime <= frameTime)
   { // time to kill off the texture
     MarkDirtyRegion();
-    delete texture;
     return false;
   }
   // render this texture
-  texture->m_fadeTime -= frameTime;
+  texture.m_fadeTime -= frameTime;
 
-  if (texture->m_texture->SetAlpha(GetFadeLevel(texture->m_fadeTime)))
+  if (texture.m_texture->SetAlpha(GetFadeLevel(texture.m_fadeTime)))
     MarkDirtyRegion();
-  if (texture->m_texture->SetDiffuseColor(m_diffuseColor))
+  if (texture.m_texture->SetDiffuseColor(m_diffuseColor))
     MarkDirtyRegion();
-  if (texture->m_texture->Process(currentTime))
+  if (texture.m_texture->Process(currentTime))
     MarkDirtyRegion();
 
   return true;
+}
+
+void CGUIImage::Render()
+{
+  if (!IsVisible())
+    return;
+
+  // what is left of the old images hides behind the new one
+  for (const auto& fadingTexture : m_fadingTextures)
+    fadingTexture->m_texture->Render();
+
+  m_textureCurrent->Render();
+
+  CGUIControl::Render();
 }
 
 bool CGUIImage::OnAction(const CAction &action)
@@ -227,22 +399,30 @@ bool CGUIImage::OnMessage(CGUIMessage& message)
 
 void CGUIImage::AllocResources()
 {
-  if (m_texture->GetFileName().empty())
+  if (m_textureCurrent->GetFileName().empty())
     return;
 
   CGUIControl::AllocResources();
-  m_texture->AllocResources();
+  m_textureCurrent->AllocResources();
 }
 
 void CGUIImage::FreeTextures(bool immediately /* = false */)
 {
-  m_texture->FreeResources(immediately);
-  for (unsigned int i = 0; i < m_fadingTextures.size(); i++)
-    delete m_fadingTextures[i];
   m_fadingTextures.clear();
-  m_currentTexture.clear();
+
+  m_textureNext->FreeResources(immediately);
+  m_textureNext->SetFileName("");
+  m_nameNext = "";
+
+  m_textureCurrent->FreeResources(immediately);
   if (!m_info.IsConstant()) // constant textures never change
-    m_texture->SetFileName("");
+  {
+    m_textureCurrent->SetFileName("");
+    m_nameCurrent = "";
+  }
+
+  m_isTransitioning = false;
+  m_currentFadeTime = 0;
 }
 
 void CGUIImage::FreeResources(bool immediately)
@@ -253,7 +433,8 @@ void CGUIImage::FreeResources(bool immediately)
 
 void CGUIImage::SetInvalid()
 {
-  m_texture->SetInvalid();
+  m_textureCurrent->SetInvalid();
+  m_textureNext->SetInvalid();
   CGUIControl::SetInvalid();
 }
 
@@ -269,7 +450,8 @@ void CGUIImage::FreeResourcesButNotAnims()
 void CGUIImage::DynamicResourceAlloc(bool bOnOff)
 {
   m_bDynamicResourceAlloc = bOnOff;
-  m_texture->DynamicResourceAlloc(bOnOff);
+  m_textureCurrent->DynamicResourceAlloc(bOnOff);
+  m_textureNext->DynamicResourceAlloc(bOnOff);
   CGUIControl::DynamicResourceAlloc(bOnOff);
 }
 
@@ -280,99 +462,93 @@ bool CGUIImage::CanFocus() const
 
 float CGUIImage::GetTextureWidth() const
 {
-  return m_texture->GetTextureWidth();
+  return m_textureCurrent->GetTextureWidth();
 }
 
 float CGUIImage::GetTextureHeight() const
 {
-  return m_texture->GetTextureHeight();
+  return m_textureCurrent->GetTextureHeight();
 }
 
 CRect CGUIImage::CalcRenderRegion() const
 {
-  CRect region = m_texture->GetRenderRect();
+  CRect region = m_textureCurrent->GetRenderRect();
 
-  for (const auto& itr : m_fadingTextures)
-    region.Union(itr->m_texture->GetRenderRect());
+  for (const auto& fadingTexture : m_fadingTextures)
+    region.Union(fadingTexture->m_texture->GetRenderRect());
 
   return CGUIControl::CalcRenderRegion().Intersect(region);
 }
 
 const std::string &CGUIImage::GetFileName() const
 {
-  return m_texture->GetFileName();
+  return m_textureCurrent->GetFileName();
 }
 
 void CGUIImage::SetAspectRatio(const CAspectRatio &aspect)
 {
-  m_texture->SetAspectRatio(aspect);
+  m_textureCurrent->SetAspectRatio(aspect);
+  m_textureNext->SetAspectRatio(aspect);
+}
+
+void CGUIImage::SetScalingMethod(TEXTURE_SCALING scalingMethod)
+{
+  m_textureCurrent->SetScalingMethod(scalingMethod);
+  m_textureNext->SetScalingMethod(scalingMethod);
+}
+
+void CGUIImage::SetDiffuseScalingMethod(TEXTURE_SCALING scalingMethod)
+{
+  m_textureCurrent->SetDiffuseScalingMethod(scalingMethod);
+  m_textureNext->SetDiffuseScalingMethod(scalingMethod);
 }
 
 void CGUIImage::SetCrossFade(unsigned int time)
 {
   m_crossFadeTime = time;
-  if (!m_crossFadeTime && m_texture->IsLazyLoaded() && !m_info.GetFallback().empty())
-    m_crossFadeTime = 1;
 }
 
 void CGUIImage::SetFileName(const std::string& strFileName, bool setConstant, const bool useCache)
 {
   if (setConstant)
     m_info.SetLabel(strFileName, "", GetParentID());
-
-  // Set whether or not to use cache
-  m_texture->SetUseCache(useCache);
-
-  if (m_crossFadeTime)
-  {
-    // set filename on the next texture
-    if (m_currentTexture == strFileName)
-      return; // nothing to do - we already have this image
-
-    if (m_texture->ReadyToRender() || m_texture->GetFileName().empty())
-    { // save the current image
-      m_fadingTextures.push_back(new CFadingTexture(m_texture.get(), m_currentFadeTime));
-      MarkDirtyRegion();
-    }
-    m_currentFadeTime = 0;
-  }
-  if (m_currentTexture != strFileName)
-  { // texture is changing - attempt to load it, and save the name in m_currentTexture.
-    // we'll check whether it loaded or not in Render()
-    m_currentTexture = strFileName;
-    if (m_texture->SetFileName(m_currentTexture))
-      MarkDirtyRegion();
-  }
+  m_nameStaging = strFileName;
+  m_useCacheStaging = useCache;
+  m_hasNewStagingTexture = true;
 }
 
 #ifdef _DEBUG
 void CGUIImage::DumpTextureUse()
 {
-  if (m_texture->IsAllocated())
+  if (m_textureCurrent->IsAllocated())
   {
     if (GetID())
-      CLog::Log(LOGDEBUG, "Image control {} using texture {}", GetID(), m_texture->GetFileName());
+      CLog::Log(LOGDEBUG, "Image control {} using texture {}", GetID(),
+                m_textureCurrent->GetFileName());
     else
-      CLog::Log(LOGDEBUG, "Using texture {}", m_texture->GetFileName());
+      CLog::Log(LOGDEBUG, "Using texture {}", m_textureCurrent->GetFileName());
   }
 }
 #endif
 
 void CGUIImage::SetWidth(float width)
 {
-  m_texture->SetWidth(width);
-  CGUIControl::SetWidth(m_texture->GetWidth());
+  m_textureCurrent->SetWidth(width);
+  m_textureNext->SetWidth(width);
+  CGUIControl::SetWidth(m_textureCurrent->GetWidth());
 }
 
 void CGUIImage::SetHeight(float height)
 {
-  m_texture->SetHeight(height);
-  CGUIControl::SetHeight(m_texture->GetHeight());
+  m_textureCurrent->SetHeight(height);
+  m_textureNext->SetHeight(height);
+  CGUIControl::SetHeight(m_textureCurrent->GetHeight());
 }
 
 void CGUIImage::SetPosition(float posX, float posY)
 {
-  m_texture->SetPosition(posX, posY);
+  m_textureCurrent->SetPosition(posX, posY);
+  m_textureNext->SetPosition(posX, posY);
   CGUIControl::SetPosition(posX, posY);
 }
 
@@ -381,7 +557,77 @@ void CGUIImage::SetInfo(const GUIINFO::CGUIInfoLabel &info)
   m_info = info;
   // a constant image never needs updating
   if (m_info.IsConstant())
-    m_texture->SetFileName(m_info.GetLabel(0));
+  {
+    m_textureCurrent->SetFileName(m_info.GetLabel(0));
+    m_nameCurrent = m_info.GetLabel(0);
+    m_nameStaging = m_nameCurrent;
+  }
+}
+
+void CGUIImage::SetImageFilter(const GUIINFO::CGUIInfoLabel& imageFilter)
+{
+  m_imageFilterInfo = imageFilter;
+
+  // Check if an image filter is available without a listitem
+  static const CFileItem empty;
+  const std::string strImageFilter = m_imageFilterInfo.GetItemLabel(&empty);
+  if (!strImageFilter.empty())
+  {
+    m_imageFilter = ImageSettings::TranslateImageFilter(strImageFilter);
+    UpdateImageFilter(m_imageFilter);
+  }
+}
+
+void CGUIImage::SetDiffuseFilter(const GUIINFO::CGUIInfoLabel& diffuseFilter)
+{
+  m_diffuseFilterInfo = diffuseFilter;
+
+  // Check if a diffuse filter is available without a listitem
+  static const CFileItem empty;
+  const std::string strDiffuseFilter = m_diffuseFilterInfo.GetItemLabel(&empty);
+  if (!strDiffuseFilter.empty())
+  {
+    m_diffuseFilter = ImageSettings::TranslateImageFilter(strDiffuseFilter);
+    UpdateDiffuseFilter(m_diffuseFilter);
+  }
+}
+
+void CGUIImage::UpdateImageFilter(IMAGE_FILTER imageFilter)
+{
+  switch (imageFilter)
+  {
+    case IMAGE_FILTER::LINEAR:
+    {
+      SetScalingMethod(TEXTURE_SCALING::LINEAR);
+      break;
+    }
+    case IMAGE_FILTER::NEAREST:
+    {
+      SetScalingMethod(TEXTURE_SCALING::NEAREST);
+      break;
+    }
+    default:
+      break;
+  }
+}
+
+void CGUIImage::UpdateDiffuseFilter(IMAGE_FILTER diffuseFilter)
+{
+  switch (diffuseFilter)
+  {
+    case IMAGE_FILTER::LINEAR:
+    {
+      SetDiffuseScalingMethod(TEXTURE_SCALING::LINEAR);
+      break;
+    }
+    case IMAGE_FILTER::NEAREST:
+    {
+      SetDiffuseScalingMethod(TEXTURE_SCALING::NEAREST);
+      break;
+    }
+    default:
+      break;
+  }
 }
 
 unsigned char CGUIImage::GetFadeLevel(unsigned int time) const
@@ -398,8 +644,33 @@ unsigned char CGUIImage::GetFadeLevel(unsigned int time) const
   return (unsigned char)(255.0f * (1 - pow(1-alpha, amount))/alpha);
 }
 
+std::string CGUIImage::GetFallback(const std::string& currentName) const
+{
+  if (!m_currentFallback.empty() && currentName != m_currentFallback)
+    return m_currentFallback;
+  else
+    return m_info.GetFallback();
+}
+
 std::string CGUIImage::GetDescription(void) const
 {
+  // hidden images skip Process, and an empty one may take its texture from its own label
+  if ((!IsVisible() || !m_textureCurrent->ReadyToRender()) && m_nameStaging != m_nameCurrent)
+    return m_nameStaging;
+
+  // grouplists evaluate visibility before Process stages the request
+  if (m_hasNewStagingTexture)
+  {
+    const std::string fileName = m_nameStaging.empty() ? GetFallback(m_nameStaging) : m_nameStaging;
+    if (m_nameCurrent == fileName || m_textureCurrent->GetFileName() == fileName)
+      return GetFileName();
+    if (!m_isTransitioning || (m_nameNext != fileName && m_textureNext->GetFileName() != fileName))
+      return fileName;
+  }
+
+  // Control.GetLabel follows the request, not the texture still drawn
+  if (m_isTransitioning)
+    return m_textureNext->GetFileName();
   return GetFileName();
 }
 

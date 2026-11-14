@@ -9,11 +9,11 @@
 #include "FavouritesOperations.h"
 
 #include "ServiceBroker.h"
-#include "URL.h"
-#include "Util.h"
 #include "favourites/FavouritesService.h"
+#include "favourites/FavouritesURL.h"
 #include "guilib/WindowIDs.h"
 #include "input/WindowTranslator.h"
+#include "utils/ArtTypes.h"
 #include "utils/StringUtils.h"
 #include "utils/URIUtils.h"
 #include "utils/Variant.h"
@@ -32,7 +32,8 @@ JSONRPC_STATUS CFavouritesOperations::GetFavourites(const std::string &method, I
   std::set<std::string> fields;
   if (parameterObject.isMember("properties") && parameterObject["properties"].isArray())
   {
-    for (CVariant::const_iterator_array field = parameterObject["properties"].begin_array(); field != parameterObject["properties"].end_array(); field++)
+    for (CVariant::const_iterator_array field = parameterObject["properties"].begin_array();
+         field != parameterObject["properties"].end_array(); ++field)
       fields.insert(field->asString());
   }
 
@@ -41,56 +42,45 @@ JSONRPC_STATUS CFavouritesOperations::GetFavourites(const std::string &method, I
     CVariant object;
     CFileItemPtr item = favourites.Get(i);
 
-    std::string function;
-    std::vector<std::string> parameters;
-
-    //FIXME: this path is internal to the favourites system and should not be parsed and exposed
-    CURL url(item->GetPath());
-    std::string internalPath = CURL::Decode(url.GetHostName());
-
-    CUtil::SplitExecFunction(internalPath, function, parameters);
-    if (parameters.empty())
+    const CFavouritesURL url(item->GetPath());
+    if (!url.IsValid())
       continue;
 
-    object["title"] = item->GetLabel();
-    if (fields.find("thumbnail") !=  fields.end())
-      object["thumbnail"] = item->GetArt("thumb");
+    const CFavouritesURL::Action function = url.GetAction();
 
-    if (StringUtils::EqualsNoCase(function, "ActivateWindow"))
+    object["title"] = item->GetLabel();
+    if (fields.contains("thumbnail"))
+      object["thumbnail"] = item->GetArt(KODI::ART::TYPE::THUMB);
+
+    if (function == CFavouritesURL::Action::ACTIVATE_WINDOW)
     {
       object["type"] = "window";
-      if (fields.find("window") != fields.end())
+      if (fields.contains("window"))
       {
-        if (StringUtils::IsNaturalNumber(parameters[0]))
-          object["window"] = CWindowTranslator::TranslateWindow(strtol(parameters[0].c_str(), NULL, 10));
-        else
-          object["window"] = parameters[0];
+        object["window"] = CWindowTranslator::TranslateWindow(url.GetWindowID());
       }
-      if (fields.find("windowparameter") != fields.end())
+      if (fields.contains("windowparameter"))
       {
-        if (parameters.size() > 1)
-          object["windowparameter"] = parameters[1];
-        else
-          object["windowparameter"] = "";
+        object["windowparameter"] = url.GetTarget();
       }
     }
-    else if (StringUtils::EqualsNoCase(function, "PlayMedia"))
+    else if (function == CFavouritesURL::Action::PLAY_MEDIA)
     {
       object["type"] = "media";
-      if (fields.find("path") !=  fields.end())
-        object["path"] = parameters[0];
+      if (fields.contains("path"))
+        object["path"] = url.GetTarget();
     }
-    else if (StringUtils::EqualsNoCase(function, "RunScript"))
+    else if (function == CFavouritesURL::Action::RUN_SCRIPT)
     {
       object["type"] = "script";
-      if (fields.find("path") !=  fields.end())
-        object["path"] = parameters[0];
+      if (fields.contains("path"))
+        object["path"] = url.GetTarget();
     }
-    else if (StringUtils::EqualsNoCase(function, "StartAndroidActivity"))
+    else if (function == CFavouritesURL::Action::START_ANDROID_ACTIVITY)
     {
       object["type"] = "androidapp";
-      if (fields.find("path") !=  fields.end())
-        object["path"] = parameters[0];
+      if (fields.contains("path"))
+        object["path"] = url.GetTarget();
     }
     else
       object["type"] = "unknown";
@@ -163,7 +153,7 @@ JSONRPC_STATUS CFavouritesOperations::AddFavourite(const std::string &method, IT
 
   item.SetLabel(title);
   if (ParameterNotNull(parameterObject,"thumbnail"))
-    item.SetArt("thumb", parameterObject["thumbnail"].asString());
+    item.SetArt(KODI::ART::TYPE::THUMB, parameterObject["thumbnail"].asString());
 
   if (CServiceBroker::GetFavouritesService().AddOrRemove(item, contextWindow))
     return ACK;

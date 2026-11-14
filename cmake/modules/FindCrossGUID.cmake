@@ -1,79 +1,106 @@
-if(ENABLE_INTERNAL_CROSSGUID)
-  include(ExternalProject)
-  file(STRINGS ${CMAKE_SOURCE_DIR}/tools/depends/target/crossguid/Makefile VER)
-  string(REGEX MATCH "VERSION=[^ ]*" CGUID_VER "${VER}")
-  list(GET CGUID_VER 0 CGUID_VER)
-  string(SUBSTRING "${CGUID_VER}" 8 -1 CGUID_VER)
+# FindCrossGUID
+# -------
+# Finds the CrossGUID library
+#
+# This will define the following target:
+#
+#   ${APP_NAME_LC}::CrossGUID   - The CrossGUID library
 
-  # allow user to override the download URL with a local tarball
-  # needed for offline build envs
-  if(CROSSGUID_URL)
-    get_filename_component(CROSSGUID_URL "${CROSSGUID_URL}" ABSOLUTE)
-  else()
-    set(CROSSGUID_URL http://mirrors.kodi.tv/build-deps/sources/crossguid-${CGUID_VER}.tar.gz)
-  endif()
-  if(VERBOSE)
-    message(STATUS "CROSSGUID_URL: ${CROSSGUID_URL}")
-  endif()
+if(NOT TARGET ${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME})
+  include(cmake/scripts/common/ModuleHelpers.cmake)
 
-  if(APPLE)
-    set(EXTRA_ARGS "-DCMAKE_OSX_ARCHITECTURES=${CMAKE_OSX_ARCHITECTURES}")
-  endif()
+  macro(buildmacroCrossGUID)
 
-  set(CROSSGUID_LIBRARY ${CMAKE_BINARY_DIR}/${CORE_BUILD_DIR}/lib/libcrossguid.a)
-  set(CROSSGUID_INCLUDE_DIR ${CMAKE_BINARY_DIR}/${CORE_BUILD_DIR}/include)
-  externalproject_add(crossguid
-                      URL ${CROSSGUID_URL}
-                      DOWNLOAD_DIR ${CMAKE_BINARY_DIR}/${CORE_BUILD_DIR}/download
-                      PREFIX ${CORE_BUILD_DIR}/crossguid
-                      CMAKE_ARGS -DCMAKE_INSTALL_PREFIX=${CMAKE_BINARY_DIR}/${CORE_BUILD_DIR}
-                                 -DCMAKE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE}
-                                 "${EXTRA_ARGS}"
-                      PATCH_COMMAND ${CMAKE_COMMAND} -E copy
-                                    ${CMAKE_SOURCE_DIR}/tools/depends/target/crossguid/CMakeLists.txt
-                                    <SOURCE_DIR> &&
-                                    ${CMAKE_COMMAND} -E copy
-                                    ${CMAKE_SOURCE_DIR}/tools/depends/target/crossguid/FindUUID.cmake
-                                    <SOURCE_DIR>
-                      BUILD_BYPRODUCTS ${CROSSGUID_LIBRARY})
-  set_target_properties(crossguid PROPERTIES FOLDER "External Projects")
+    set(CROSSGUID_VERSION ${${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_VER})
+    set(${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_DEBUG_POSTFIX "-dgb")
 
-  include(FindPackageHandleStandardArgs)
-  find_package_handle_standard_args(CrossGUID
-                                    REQUIRED_VARS CROSSGUID_LIBRARY CROSSGUID_INCLUDE_DIR
-                                    VERSION_VAR CGUID_VER)
+    set(${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_COMPILE_DEFINITIONS HAVE_NEW_CROSSGUID)
 
-  set(CROSSGUID_LIBRARIES ${CROSSGUID_LIBRARY})
-  set(CROSSGUID_INCLUDE_DIRS ${CROSSGUID_INCLUDE_DIR})
-else()
-  find_path(CROSSGUID_INCLUDE_DIR NAMES guid.hpp guid.h)
-
-  find_library(CROSSGUID_LIBRARY_RELEASE NAMES crossguid)
-  find_library(CROSSGUID_LIBRARY_DEBUG NAMES crossguidd)
-
-  include(SelectLibraryConfigurations)
-  select_library_configurations(CROSSGUID)
-
-  include(FindPackageHandleStandardArgs)
-  find_package_handle_standard_args(CrossGUID
-                                    REQUIRED_VARS CROSSGUID_LIBRARY CROSSGUID_INCLUDE_DIR)
-
-  if(CROSSGUID_FOUND)
-    set(CROSSGUID_LIBRARIES ${CROSSGUID_LIBRARY})
-    set(CROSSGUID_INCLUDE_DIRS ${CROSSGUID_INCLUDE_DIR})
-
-    if(EXISTS "${CROSSGUID_INCLUDE_DIR}/guid.hpp")
-      set(CROSSGUID_DEFINITIONS -DHAVE_NEW_CROSSGUID)
+    if(ANDROID)
+      list(APPEND ${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_COMPILE_DEFINITIONS GUID_ANDROID)
     endif()
 
-    add_custom_target(crossguid)
-    set_target_properties(crossguid PROPERTIES FOLDER "External Projects")
-  endif()
-  mark_as_advanced(CROSSGUID_INCLUDE_DIR CROSSGUID_LIBRARY)
-endif()
+    set(patches "${CMAKE_SOURCE_DIR}/tools/depends/target/crossguid/001-fix-unused-function.patch"
+                "${CMAKE_SOURCE_DIR}/tools/depends/target/crossguid/002-disable-Wall-error.patch"
+                "${CMAKE_SOURCE_DIR}/tools/depends/target/crossguid/003-add-cstdint-include.patch"
+                "${CMAKE_SOURCE_DIR}/tools/depends/target/crossguid/004-cmake-install.patch")
 
-if(NOT WIN32 AND NOT APPLE)
-  find_package(UUID REQUIRED)
-  list(APPEND CROSSGUID_INCLUDE_DIRS ${UUID_INCLUDE_DIRS})
-  list(APPEND CROSSGUID_LIBRARIES ${UUID_LIBRARIES})
+    generate_patchcommand("${patches}")
+    unset(patches)
+
+    set(CMAKE_ARGS -DCROSSGUID_TESTS=OFF
+                   -DDISABLE_WALL=ON)
+
+    BUILD_DEP_TARGET()
+  endmacro()
+
+  set(${CMAKE_FIND_PACKAGE_NAME}_MODULE_LC crossguid)
+
+  SETUP_BUILD_VARS()
+
+  SETUP_FIND_SPECS()
+
+  # Additional pkg-config search name
+  list(APPEND ${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME_PC crossguid2)
+
+  SEARCH_EXISTING_PACKAGES()
+
+  if(${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME}_VERSION VERSION_LESS ${${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_VER} AND ENABLE_INTERNAL_CROSSGUID)
+    message(STATUS "Building ${${CMAKE_FIND_PACKAGE_NAME}_MODULE_LC}: \(version \"${${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_VER}\"\)")
+    cmake_language(EVAL CODE "
+      buildmacro${CMAKE_FIND_PACKAGE_NAME}()
+    ")
+  endif()
+
+  if(${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME}_FOUND)
+    if(TARGET PkgConfig::${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME} AND NOT TARGET ${${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_BUILD_NAME})
+      add_library(${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME} ALIAS PkgConfig::${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME})
+
+      get_target_property(_crossguid_include_dir PkgConfig::${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME} INTERFACE_INCLUDE_DIRECTORIES)
+
+      # NEW_CROSSGUID >= 0.2.0 release
+      if(EXISTS "${_crossguid_include_dir}/crossguid/guid.hpp")
+        list(APPEND ${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_COMPILE_DEFINITIONS HAVE_NEW_CROSSGUID)
+      endif()
+    elseif(TARGET crossguid AND NOT TARGET ${${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_BUILD_NAME})
+      add_library(${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME} ALIAS crossguid)
+
+      get_target_property(_crossguid_include_dir crossguid INTERFACE_INCLUDE_DIRECTORIES)
+
+      # NEW_CROSSGUID >= 0.2.0 release
+      if(EXISTS "${_crossguid_include_dir}/crossguid/guid.hpp")
+        list(APPEND ${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_COMPILE_DEFINITIONS HAVE_NEW_CROSSGUID)
+      endif()
+    else()
+      SETUP_BUILD_TARGET()
+
+      add_dependencies(${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME} ${${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_BUILD_NAME})
+    endif()
+
+    if(UNIX AND NOT (APPLE OR ANDROID))
+      # Suppress mismatch warning, see https://cmake.org/cmake/help/latest/module/FindPackageHandleStandardArgs.html
+      set(FPHSA_NAME_MISMATCHED 1)
+      find_package(UUID REQUIRED ${SEARCH_QUIET})
+      unset(FPHSA_NAME_MISMATCHED)
+
+      get_target_property(_ALIASTARGET ${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME} ALIASED_TARGET)
+      if(_ALIASTARGET)
+        set(LIB_TARGET ${_ALIASTARGET})
+      else()
+        set(LIB_TARGET ${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME})
+      endif()
+
+      if(TARGET UUID::UUID)
+        target_link_libraries(${LIB_TARGET} INTERFACE UUID::UUID)
+      endif()
+    endif()
+
+    ADD_TARGET_COMPILE_DEFINITION()
+
+    ADD_MULTICONFIG_BUILDMACRO()
+  else()
+    if(CrossGUID_FIND_REQUIRED)
+      message(FATAL_ERROR "CrossGUID libraries were not found. You may want to use -DENABLE_INTERNAL_CROSSGUID=ON")
+    endif()
+  endif()
 endif()

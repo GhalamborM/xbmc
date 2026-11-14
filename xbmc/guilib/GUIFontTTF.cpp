@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2005-2018 Team Kodi
+ *  Copyright (C) 2005-2026 Team Kodi
  *  This file is part of Kodi - https://kodi.tv
  *
  *  SPDX-License-Identifier: GPL-2.0-or-later
@@ -8,7 +8,6 @@
 
 #include "GUIFontTTF.h"
 
-#include "GUIFont.h"
 #include "GUIFontManager.h"
 #include "ServiceBroker.h"
 #include "Texture.h"
@@ -17,11 +16,14 @@
 #include "filesystem/SpecialProtocol.h"
 #include "rendering/RenderSystem.h"
 #include "threads/SystemClock.h"
+#include "utils/EmojiUtils.h"
 #include "utils/MathUtils.h"
 #include "utils/log.h"
 #include "windowing/GraphicContext.h"
 #include "windowing/WinSystem.h"
 
+#include <algorithm>
+#include <array>
 #include <math.h>
 #include <memory>
 #include <queue>
@@ -51,16 +53,157 @@
 
 namespace
 {
+constexpr int VERTEX_PER_GLYPH = 4; // number of vertex for each glyph
 constexpr int CHARS_PER_TEXTURE_LINE = 20; // number characters to cache per texture line
+constexpr int MAX_TRANSLATED_VERTEX = 32; // max number of structs CTranslatedVertices expect to use
+constexpr int MAX_GLYPHS_PER_TEXT_LINE = 1024; // max number of glyphs per text line expect to use
 constexpr unsigned int SPACING_BETWEEN_CHARACTERS_IN_TEXTURE = 1;
-constexpr int CHAR_CHUNK = 64; // 64 chars allocated at a time (1024 bytes)
+constexpr int CHAR_CHUNK = 64; // 64 chars allocated at a time (2048 bytes)
 constexpr int GLYPH_STRENGTH_BOLD = 24;
 constexpr int GLYPH_STRENGTH_LIGHT = -48;
 constexpr int TAB_SPACE_LENGTH = 4;
+constexpr const char* EMOJI_FONT = "special://xbmc/media/Fonts/TwemojiMozilla.ttf";
+constexpr const char* SYMBOLS_FONT = "special://xbmc/media/Fonts/UnicodeSymbols.ttf";
+// face identity in Character::m_glyphAndStyle
+constexpr character_t FONT_FACE_MASK = 3 << 24;
+// set in Character::m_glyphAndStyle for glyphs cached in their own colors
+constexpr character_t COLOR_GLYPH = 1 << 26;
+
+// Code points displayed as emoji by default (Emoji_Presentation in Unicode 18.0 emoji-data.txt)
+// clang-format off
+constexpr std::array<std::pair<char32_t, char32_t>, 80> EMOJI_PRESENTATION = {{
+    {0x231A, 0x231B}, {0x23E9, 0x23EC}, {0x23F0, 0x23F0}, {0x23F3, 0x23F3}, {0x25FD, 0x25FE},
+    {0x2614, 0x2615}, {0x2648, 0x2653}, {0x267F, 0x267F}, {0x2693, 0x2693}, {0x26A1, 0x26A1},
+    {0x26AA, 0x26AB}, {0x26BD, 0x26BE}, {0x26C4, 0x26C5}, {0x26CE, 0x26CE}, {0x26D4, 0x26D4},
+    {0x26EA, 0x26EA}, {0x26F2, 0x26F3}, {0x26F5, 0x26F5}, {0x26FA, 0x26FA}, {0x26FD, 0x26FD},
+    {0x2705, 0x2705}, {0x270A, 0x270B}, {0x2728, 0x2728}, {0x274C, 0x274C}, {0x274E, 0x274E},
+    {0x2753, 0x2755}, {0x2757, 0x2757}, {0x2795, 0x2797}, {0x27B0, 0x27B0}, {0x27BF, 0x27BF},
+    {0x2B1B, 0x2B1C}, {0x2B50, 0x2B50}, {0x2B55, 0x2B55}, {0x1F004, 0x1F004}, {0x1F0CF, 0x1F0CF},
+    {0x1F18E, 0x1F18E}, {0x1F191, 0x1F19A}, {0x1F1E6, 0x1F1FF}, {0x1F201, 0x1F201},
+    {0x1F21A, 0x1F21A}, {0x1F22F, 0x1F22F}, {0x1F232, 0x1F236}, {0x1F238, 0x1F23A},
+    {0x1F250, 0x1F251}, {0x1F300, 0x1F320}, {0x1F32D, 0x1F335}, {0x1F337, 0x1F37C},
+    {0x1F37E, 0x1F393}, {0x1F3A0, 0x1F3CA}, {0x1F3CF, 0x1F3D3}, {0x1F3E0, 0x1F3F0},
+    {0x1F3F4, 0x1F3F4}, {0x1F3F8, 0x1F43E}, {0x1F440, 0x1F440}, {0x1F442, 0x1F4FC},
+    {0x1F4FF, 0x1F53D}, {0x1F54B, 0x1F54E}, {0x1F550, 0x1F567}, {0x1F57A, 0x1F57A},
+    {0x1F595, 0x1F596}, {0x1F5A4, 0x1F5A4}, {0x1F5FB, 0x1F64F}, {0x1F680, 0x1F6C5},
+    {0x1F6CC, 0x1F6CC}, {0x1F6D0, 0x1F6D2}, {0x1F6D5, 0x1F6D9}, {0x1F6DC, 0x1F6DF},
+    {0x1F6EB, 0x1F6EC}, {0x1F6F4, 0x1F6FC}, {0x1F7E0, 0x1F7EB}, {0x1F7F0, 0x1F7F0},
+    {0x1F90C, 0x1F93A}, {0x1F93C, 0x1F945}, {0x1F947, 0x1F9FF}, {0x1FA70, 0x1FA7C},
+    {0x1FA80, 0x1FAC6}, {0x1FAC8, 0x1FAC8}, {0x1FACC, 0x1FADD}, {0x1FADF, 0x1FAEB},
+    {0x1FAEF, 0x1FAFA},
+}};
+// clang-format on
+
+bool HasEmojiPresentation(char32_t codepoint)
+{
+  const auto it = std::ranges::upper_bound(EMOJI_PRESENTATION, codepoint, {},
+                                           &std::pair<char32_t, char32_t>::first);
+  return it != EMOJI_PRESENTATION.begin() && codepoint <= std::prev(it)->second;
+}
+
+// Converts a gray or premultiplied BGRA glyph bitmap to straight RGBA. Without color, pixels are
+// white with the coverage as alpha, so that the vertex color determines the color.
+std::vector<uint8_t> ToRGBA(const FT_Bitmap& bitmap, bool color)
+{
+  std::vector<uint8_t> rgba(static_cast<size_t>(bitmap.width) * bitmap.rows * 4, 255);
+  uint8_t* target = rgba.data();
+  for (unsigned int y = 0; y < bitmap.rows; ++y)
+  {
+    const uint8_t* source = bitmap.buffer + y * bitmap.pitch;
+    for (unsigned int x = 0; x < bitmap.width; ++x, target += 4)
+    {
+      if (bitmap.pixel_mode != FT_PIXEL_MODE_BGRA)
+      {
+        target[3] = source[x];
+        continue;
+      }
+
+      const uint8_t* pixel = source + 4 * x;
+      const uint8_t alpha = pixel[3];
+      if (color && alpha)
+      {
+        target[0] = static_cast<uint8_t>(pixel[2] * 255 / alpha);
+        target[1] = static_cast<uint8_t>(pixel[1] * 255 / alpha);
+        target[2] = static_cast<uint8_t>(pixel[0] * 255 / alpha);
+      }
+      target[3] = alpha;
+    }
+  }
+  return rgba;
+}
+
+// Grows white RGBA coverage by radius pixels on every side, to border glyphs without outlines
+std::vector<uint8_t> GrowSilhouette(const std::vector<uint8_t>& rgba,
+                                    int width,
+                                    int height,
+                                    int radius)
+{
+  const int grownWidth = width + 2 * radius;
+  const int grownHeight = height + 2 * radius;
+  std::vector<uint8_t> grown(static_cast<size_t>(grownWidth) * grownHeight * 4, 255);
+  for (int y = 0; y < grownHeight; ++y)
+  {
+    for (int x = 0; x < grownWidth; ++x)
+    {
+      uint8_t alpha = 0;
+      for (int dy = -radius; dy <= radius; ++dy)
+      {
+        for (int dx = -radius; dx <= radius; ++dx)
+        {
+          const int sourceX = x - radius + dx;
+          const int sourceY = y - radius + dy;
+          if (dx * dx + dy * dy > radius * radius || sourceX < 0 || sourceY < 0 ||
+              sourceX >= width || sourceY >= height)
+            continue;
+          alpha = std::max(alpha, rgba[(static_cast<size_t>(sourceY) * width + sourceX) * 4 + 3]);
+        }
+      }
+      grown[(static_cast<size_t>(y) * grownWidth + x) * 4 + 3] = alpha;
+    }
+  }
+  return grown;
+}
+
+// \brief Check for conflicting alignments
+void ValidateAlignments(uint32_t& aligns)
+{
+  // Validate the horizontal alignment (XBFONT_LEFT is implicit unless otherwise specified)
+  {
+    const uint32_t hAligns = XBFONT_RIGHT | XBFONT_CENTER_X | XBFONT_JUSTIFIED;
+    const uint32_t commonFlags = hAligns & aligns;
+    // Check if at least 2 bits are set, it means multiple aligns
+    if ((commonFlags & (commonFlags - 1)) != 0)
+    {
+      CLog::LogF(LOGERROR, "Text with invalid multiple horizontal alignments");
+      aligns &= ~commonFlags;
+    }
+  }
+
+  // Validate truncate alignment
+  {
+    const uint32_t truncateAligns = XBFONT_TRUNCATED | XBFONT_TRUNCATED_LEFT;
+    const uint32_t commonFlags = truncateAligns & aligns;
+    // Check if at least 2 bits are set, it means multiple aligns
+    if ((commonFlags & (commonFlags - 1)) != 0)
+    {
+      CLog::LogF(LOGERROR, "Text with invalid multiple truncate alignments");
+      aligns &= ~commonFlags;
+      aligns |= XBFONT_TRUNCATED;
+    }
+  }
+}
+
 } /* namespace */
 
 class CFreeTypeLibrary
 {
+  struct FallbackFont
+  {
+    const char* filename;
+    std::vector<uint8_t> data{};
+    bool missing{false};
+  };
+
 public:
   CFreeTypeLibrary() = default;
   virtual ~CFreeTypeLibrary()
@@ -74,14 +217,8 @@ public:
                   float aspect,
                   std::vector<uint8_t>& memoryBuf)
   {
-    // don't have it yet - create it
-    if (!m_library)
-      FT_Init_FreeType(&m_library);
-    if (!m_library)
-    {
-      CLog::Log(LOGERROR, "CFreeTypeLibrary::{}: Unable to initialize freetype library", __func__);
+    if (!Init())
       return nullptr;
-    }
 
     FT_Face face;
 
@@ -111,22 +248,18 @@ public:
       return nullptr;
 #endif // ! TARGET_WINDOWS
 
-    unsigned int ydpi = 72; // 72 points to the inch is the freetype default
-    unsigned int xdpi =
-        static_cast<unsigned int>(MathUtils::round_int(static_cast<double>(ydpi * aspect)));
-
-    // we set our screen res currently to 96dpi in both directions (windows default)
-    // we cache our characters (for rendering speed) so it's probably
-    // not a good idea to allow free scaling of fonts - rather, just
-    // scaling to pixel ratio on screen perhaps?
-    if (FT_Set_Char_Size(face, 0, static_cast<int>(size * 64 + 0.5f), xdpi, ydpi))
-    {
-      FT_Done_Face(face);
-      return nullptr;
-    }
-
-    return face;
+    return SetFontSize(face, size, aspect);
   };
+
+  FT_Face GetEmojiFont(float size, float aspect)
+  {
+    return GetFallbackFont(m_emojiFontFile, size, aspect);
+  }
+
+  FT_Face GetSymbolsFont(float size, float aspect)
+  {
+    return GetFallbackFont(m_symbolsFontFile, size, aspect);
+  }
 
   FT_Stroker GetStroker()
   {
@@ -153,7 +286,69 @@ public:
   }
 
 private:
+  FT_Face GetFallbackFont(FallbackFont& font, float size, float aspect)
+  {
+    if (!Init())
+      return nullptr;
+
+    // loaded once, shared by the fallback faces of all fonts
+    if (font.data.empty())
+    {
+      if (font.missing)
+        return nullptr;
+
+      XFILE::CFile file;
+      if (file.LoadFile(font.filename, font.data) <= 0)
+      {
+        CLog::LogF(LOGERROR, "Unable to load fallback font {}", font.filename);
+        font.missing = true;
+        return nullptr;
+      }
+    }
+
+    FT_Face face;
+    if (FT_New_Memory_Face(m_library, reinterpret_cast<const FT_Byte*>(font.data.data()),
+                           font.data.size(), 0, &face) != 0)
+      return nullptr;
+
+    return SetFontSize(face, size, aspect);
+  }
+
+  bool Init()
+  {
+    // don't have it yet - create it
+    if (!m_library)
+      FT_Init_FreeType(&m_library);
+    if (!m_library)
+    {
+      CLog::LogF(LOGERROR, "Unable to initialize freetype library");
+      return false;
+    }
+    return true;
+  }
+
+  static FT_Face SetFontSize(FT_Face face, float size, float aspect)
+  {
+    unsigned int ydpi = 72; // 72 points to the inch is the freetype default
+    unsigned int xdpi =
+        static_cast<unsigned int>(MathUtils::round_int(static_cast<double>(ydpi * aspect)));
+
+    // we set our screen res currently to 96dpi in both directions (windows default)
+    // we cache our characters (for rendering speed) so it's probably
+    // not a good idea to allow free scaling of fonts - rather, just
+    // scaling to pixel ratio on screen perhaps?
+    if (FT_Set_Char_Size(face, 0, static_cast<int>(size * 64 + 0.5f), xdpi, ydpi))
+    {
+      FT_Done_Face(face);
+      return nullptr;
+    }
+
+    return face;
+  }
+
   FT_Library m_library{nullptr};
+  FallbackFont m_emojiFontFile{EMOJI_FONT};
+  FallbackFont m_symbolsFontFile{SYMBOLS_FONT};
 };
 
 XBMC_GLOBAL_REF(CFreeTypeLibrary, g_freeTypeLibrary); // our freetype library
@@ -165,7 +360,6 @@ CGUIFontTTF::CGUIFontTTF(const std::string& fontIdent)
     m_dynamicCache(*this),
     m_renderSystem(CServiceBroker::GetRenderSystem())
 {
-  m_vertex.reserve(4 * 1024);
 }
 
 CGUIFontTTF::~CGUIFontTTF(void)
@@ -194,11 +388,11 @@ void CGUIFontTTF::ClearCharacterCache()
   DeleteHardwareTexture();
 
   m_texture = nullptr;
-  delete[] m_char;
-  m_char = new Character[CHAR_CHUNK];
-  memset(m_charquick, 0, sizeof(m_charquick));
-  m_numChars = 0;
-  m_maxChars = CHAR_CHUNK;
+  m_char.clear();
+  m_char.reserve(CHAR_CHUNK);
+  for (auto& table : m_charquick)
+    table.reset();
+  m_colorTexture = false;
   // set the posX and posY so that our texture will be created on first character write.
   m_posX = m_textureWidth;
   m_posY = -static_cast<int>(GetTextureLineHeight());
@@ -209,11 +403,9 @@ void CGUIFontTTF::Clear()
 {
   m_texture.reset();
   m_texture = nullptr;
-  delete[] m_char;
-  memset(m_charquick, 0, sizeof(m_charquick));
-  m_char = nullptr;
-  m_maxChars = 0;
-  m_numChars = 0;
+  for (auto& table : m_charquick)
+    table.reset();
+  m_colorTexture = false;
   m_posX = 0;
   m_posY = 0;
   m_nestedBeginCount = 0;
@@ -224,6 +416,18 @@ void CGUIFontTTF::Clear()
   if (m_face)
     g_freeTypeLibrary.ReleaseFont(m_face);
   m_face = nullptr;
+  if (m_hbEmojiFont)
+    hb_font_destroy(m_hbEmojiFont);
+  m_hbEmojiFont = nullptr;
+  if (m_emojiFace)
+    g_freeTypeLibrary.ReleaseFont(m_emojiFace);
+  m_emojiFace = nullptr;
+  if (m_hbSymbolsFont)
+    hb_font_destroy(m_hbSymbolsFont);
+  m_hbSymbolsFont = nullptr;
+  if (m_symbolsFace)
+    g_freeTypeLibrary.ReleaseFont(m_symbolsFace);
+  m_symbolsFace = nullptr;
   if (m_stroker)
     g_freeTypeLibrary.ReleaseStroker(m_stroker);
   m_stroker = nullptr;
@@ -246,6 +450,13 @@ bool CGUIFontTTF::Load(
   m_hbFont = hb_ft_font_create(m_face, 0);
   if (!m_hbFont)
     return false;
+
+  m_emojiFace = g_freeTypeLibrary.GetEmojiFont(height, aspect);
+  if (m_emojiFace)
+    m_hbEmojiFont = hb_ft_font_create(m_emojiFace, 0);
+  m_symbolsFace = g_freeTypeLibrary.GetSymbolsFont(height, aspect);
+  if (m_symbolsFace)
+    m_hbSymbolsFont = hb_ft_font_create(m_symbolsFace, 0);
   /*
    the values used are described below
 
@@ -283,6 +494,7 @@ bool CGUIFontTTF::Load(
     m_stroker = g_freeTypeLibrary.GetStroker();
     if (m_stroker)
       FT_Stroker_Set(m_stroker, strength, FT_STROKER_LINECAP_ROUND, FT_STROKER_LINEJOIN_ROUND, 0);
+    m_borderRadius = static_cast<int>((strength + 32) / 64);
   }
 
   // scale to pixel sizing, rounding so that maximal extent is obtained
@@ -298,11 +510,6 @@ bool CGUIFontTTF::Load(
 
   m_texture.reset();
   m_texture = nullptr;
-  delete[] m_char;
-  m_char = nullptr;
-
-  m_maxChars = 0;
-  m_numChars = 0;
 
   m_textureHeight = 0;
   m_textureWidth = ((m_cellHeight * CHARS_PER_TEXTURE_LINE) & ~63) + 64;
@@ -316,11 +523,6 @@ bool CGUIFontTTF::Load(
   // set the posX and posY so that our texture will be created on first character write.
   m_posX = m_textureWidth;
   m_posY = -static_cast<int>(GetTextureLineHeight());
-
-  // cache the ellipses width
-  Character* ellipse = GetCharacter(L'.', 0);
-  if (ellipse)
-    m_ellipsesWidth = ellipse->m_advance;
 
   return true;
 }
@@ -350,53 +552,104 @@ void CGUIFontTTF::End()
 void CGUIFontTTF::DrawTextInternal(CGraphicContext& context,
                                    float x,
                                    float y,
-                                   const std::vector<UTILS::COLOR::Color>& colors,
-                                   const vecText& text,
+                                   std::span<const KODI::UTILS::COLOR::Color> colors,
+                                   std::span<const character_t> text,
                                    uint32_t alignment,
                                    float maxPixelWidth,
-                                   bool scrolling)
+                                   bool hScrolling,
+                                   bool vScrolling,
+                                   float dx,
+                                   float dy,
+                                   bool shadow)
 {
   if (text.empty())
   {
     return;
   }
 
+  // shadows and borders are drawn in a single color
+  const bool silhouette = shadow || m_stroker;
+
   Begin();
-  std::vector<Glyph> glyphs = GetHarfBuzzShapedGlyphs(text);
   uint32_t rawAlignment = alignment;
   bool dirtyCache(false);
-  bool hardwareClipping = m_renderSystem->ScissorsCanEffectClipping();
+
+  // round coordinates to the pixel grid. otherwise, we might sample at the wrong positions.
+  if (!hScrolling)
+    x = std::round(x);
+  if (!vScrolling)
+    y = std::round(y);
+
+  // GL, GLES and DX can scissor and shader clip
+  const bool hardwareClipping = true;
+
+  // FIXME: remove positional stuff once GLES/DX are brought up to date
   CGUIFontCacheStaticPosition staticPos(x, y);
   CGUIFontCacheDynamicPosition dynamicPos;
-  if (hardwareClipping)
-  {
-    dynamicPos =
-        CGUIFontCacheDynamicPosition(context.ScaleFinalXCoord(x, y), context.ScaleFinalYCoord(x, y),
-                                     context.ScaleFinalZCoord(x, y));
-  }
+
+  // dummy positions for the time being
+  dynamicPos = CGUIFontCacheDynamicPosition(0.0f, 0.0f, 0.0f);
+
   CVertexBuffer unusedVertexBuffer;
   CVertexBuffer& vertexBuffer =
       hardwareClipping
           ? m_dynamicCache.Lookup(context, dynamicPos, colors, text, alignment, maxPixelWidth,
-                                  scrolling, XbmcThreads::SystemClockMillis(), dirtyCache)
+                                  hScrolling, shadow, std::chrono::steady_clock::now(), dirtyCache)
           : unusedVertexBuffer;
   std::shared_ptr<std::vector<SVertex>> tempVertices = std::make_shared<std::vector<SVertex>>();
   std::shared_ptr<std::vector<SVertex>>& vertices =
       hardwareClipping ? tempVertices
                        : static_cast<std::shared_ptr<std::vector<SVertex>>&>(m_staticCache.Lookup(
-                             context, staticPos, colors, text, alignment, maxPixelWidth, scrolling,
-                             XbmcThreads::SystemClockMillis(), dirtyCache));
+                             context, staticPos, colors, text, alignment, maxPixelWidth, hScrolling,
+                             shadow, std::chrono::steady_clock::now(), dirtyCache));
+
+  // reserves vertex vector capacity, only the ones that are going to be used
+  if (hardwareClipping)
+  {
+    if (m_vertexTrans.capacity() == 0)
+      m_vertexTrans.reserve(MAX_TRANSLATED_VERTEX);
+  }
+  else
+  {
+    if (m_vertex.capacity() == 0)
+      m_vertex.reserve(VERTEX_PER_GLYPH * MAX_GLYPHS_PER_TEXT_LINE);
+  }
+
   if (dirtyCache)
   {
-    // save the origin, which is scaled separately
-    m_originX = x;
-    m_originY = y;
+    // Try to validate any conflicting alignments
+    //! @todo: This validate is the last resort and can result in a bad rendered text
+    //! because the alignment it is used also by caller components for other operations
+    //! this inform the problem on the log, potentially can be improved
+    //! by add validating alignments from each parent caller component
+    ValidateAlignments(alignment);
+
+    const std::vector<Glyph> glyphs = GetHarfBuzzShapedGlyphs(text);
+    m_originX = 0;
+    m_originY = 0;
+
+    // cache the ellipses width
+    if (!m_ellipseCached)
+    {
+      m_ellipseCached = true;
+      Character* ellipse = GetCharacter(L'.', 0);
+      if (ellipse)
+        m_ellipsesWidth = ellipse->m_advance;
+    }
+
+    // Define the width of ellipses of three chars "..."
+    const float ellipsesWidth = 3 * m_ellipsesWidth;
 
     // Check if we will really need to truncate or justify the text
     if (alignment & XBFONT_TRUNCATED)
     {
       if (maxPixelWidth <= 0.0f || GetTextWidthInternal(text, glyphs) <= maxPixelWidth)
         alignment &= ~XBFONT_TRUNCATED;
+    }
+    else if (alignment & XBFONT_TRUNCATED_LEFT)
+    {
+      if (maxPixelWidth <= 0.0f || GetTextWidthInternal(text, glyphs) <= maxPixelWidth)
+        alignment &= ~XBFONT_TRUNCATED_LEFT;
     }
     else if (alignment & XBFONT_JUSTIFIED)
     {
@@ -408,18 +661,75 @@ void CGUIFontTTF::DrawTextInternal(CGraphicContext& context,
     float startX = 0;
     float startY = (alignment & XBFONT_CENTER_Y) ? -0.5f * m_cellHeight : 0; // vertical centering
 
-    if (alignment & (XBFONT_RIGHT | XBFONT_CENTER_X))
+    size_t startPosGlyph{0}; // Defines the index position where start rendering glyphs
+    float textWidth{0}; // The text width, by taking in account truncate (and ellipses)
+
+    if (alignment & XBFONT_TRUNCATED_LEFT)
     {
-      // Get the extent of this line
-      float w = GetTextWidthInternal(text, glyphs);
+      // To truncate to the left, we skip all characters that exceed the maximum width,
+      // so the rendering starts from the first character that falls within the maximum width,
+      // taking into account also the ellipses
+      textWidth = ellipsesWidth;
 
-      if (alignment & XBFONT_TRUNCATED && w > maxPixelWidth + 0.5f) // + 0.5f due to rounding issues
-        w = maxPixelWidth;
+      // We need to iterate from the end to the beginning
+      for (auto itRGlyph = glyphs.crbegin(); itRGlyph != glyphs.crend(); ++itRGlyph)
+      {
+        const character_t ch = text[itRGlyph->m_glyphInfo.cluster];
+        Character* c =
+            GetCharacter(ch, itRGlyph->m_glyphInfo.codepoint, itRGlyph->m_fontFace, silhouette);
+        if (!c)
+          continue;
 
-      if (alignment & XBFONT_CENTER_X)
-        w *= 0.5f;
-      // Offset this line's starting position
-      startX -= w;
+        float nextWidth = textWidth;
+        if ((ch & 0xffffffff) == static_cast<character_t>('\t'))
+          nextWidth += GetTabSpaceLength();
+        else
+          nextWidth += c->m_advance;
+
+        if (maxPixelWidth > 0 && nextWidth > maxPixelWidth)
+        {
+          // Start rendering from the glyph that does not exceed the maximum width
+          startPosGlyph = std::distance(itRGlyph, glyphs.crend());
+          break;
+        }
+        textWidth = nextWidth;
+      }
+    }
+    else
+    {
+      // Calculates the text width based on the characters that can be contained within the maximum width
+      if (alignment & XBFONT_TRUNCATED)
+        textWidth = ellipsesWidth;
+
+      for (const Glyph& glyph : glyphs)
+      {
+        const character_t ch = text[glyph.m_glyphInfo.cluster];
+        Character* c = GetCharacter(ch, glyph.m_glyphInfo.codepoint, glyph.m_fontFace, silhouette);
+        if (!c)
+          continue;
+
+        float nextWidth = textWidth;
+        if ((ch & 0xffffffff) == static_cast<character_t>('\t'))
+          nextWidth += GetTabSpaceLength();
+        else
+          nextWidth += c->m_advance;
+
+        if (maxPixelWidth > 0 && nextWidth > maxPixelWidth)
+          break;
+
+        textWidth = nextWidth;
+      }
+    }
+
+    if (alignment & XBFONT_RIGHT)
+    {
+      // Moves the x pos with the purpose of having the text effect aligned to the right
+      startX += maxPixelWidth - textWidth;
+    }
+    else if (alignment & XBFONT_CENTER_X)
+    {
+      textWidth *= 0.5f;
+      startX -= textWidth;
     }
 
     float spacePerSpaceCharacter = 0; // for justification effects
@@ -430,10 +740,11 @@ void CGUIFontTTF::DrawTextInternal(CGraphicContext& context,
       float linePixels = 0;
       for (const auto& glyph : glyphs)
       {
-        Character* ch = GetCharacter(text[glyph.m_glyphInfo.cluster], glyph.m_glyphInfo.codepoint);
+        Character* ch = GetCharacter(text[glyph.m_glyphInfo.cluster], glyph.m_glyphInfo.codepoint,
+                                     glyph.m_fontFace, silhouette);
         if (ch)
         {
-          if ((text[glyph.m_glyphInfo.cluster] & 0xffff) == L' ')
+          if ((text[glyph.m_glyphInfo.cluster] & 0xffffffff) == L' ')
             numSpaces += 1;
           linePixels += ch->m_advance;
         }
@@ -450,11 +761,16 @@ void CGUIFontTTF::DrawTextInternal(CGraphicContext& context,
     // are not currently cached and cause the texture to be enlarged, which
     // would invalidate the texture coordinates.
     std::queue<Character> characters;
-    if (alignment & XBFONT_TRUNCATED)
-      GetCharacter(L'.', 0);
-    for (const auto& glyph : glyphs)
+
+    if (alignment & XBFONT_TRUNCATED_LEFT)
+      cursorX += ellipsesWidth;
+
+    auto glyphBegin = glyphs.cbegin() + startPosGlyph;
+
+    for (auto itGlyph = glyphBegin; itGlyph != glyphs.cend(); ++itGlyph)
     {
-      Character* ch = GetCharacter(text[glyph.m_glyphInfo.cluster], glyph.m_glyphInfo.codepoint);
+      Character* ch = GetCharacter(text[itGlyph->m_glyphInfo.cluster],
+                                   itGlyph->m_glyphInfo.codepoint, itGlyph->m_fontFace, silhouette);
       if (!ch)
       {
         Character null = {};
@@ -463,31 +779,41 @@ void CGUIFontTTF::DrawTextInternal(CGraphicContext& context,
       }
       characters.push(*ch);
 
-      if (maxPixelWidth > 0 &&
-          cursorX + ((alignment & XBFONT_TRUNCATED) ? ch->m_advance + 3 * m_ellipsesWidth : 0) >
-              maxPixelWidth)
-        break;
+      if (maxPixelWidth > 0)
+      {
+        float nextCursorX = cursorX;
+
+        if (alignment & XBFONT_TRUNCATED)
+          nextCursorX += ch->m_advance + ellipsesWidth;
+
+        if (nextCursorX > maxPixelWidth)
+          break;
+      }
+
       cursorX += ch->m_advance;
+
+      if ((alignment & XBFONT_JUSTIFIED) &&
+          (text[itGlyph->m_glyphInfo.cluster] & 0xffffffff) == L' ')
+        cursorX += spacePerSpaceCharacter;
     }
+
+    // Reserve vector space: 4 vertex for each glyph
+    tempVertices->reserve(VERTEX_PER_GLYPH * glyphs.size());
     cursorX = 0;
-    for (const auto& glyph : glyphs)
+
+    for (auto itGlyph = glyphBegin; itGlyph != glyphs.cend(); ++itGlyph)
     {
       // If starting text on a new line, determine justification effects
       // Get the current letter in the CStdString
-      UTILS::COLOR::Color color = (text[glyph.m_glyphInfo.cluster] & 0xff0000) >> 16;
+      KODI::UTILS::COLOR::Color color = (text[itGlyph->m_glyphInfo.cluster] >> 32) & 0xff;
       if (color >= colors.size())
         color = 0;
       color = colors[color];
 
       // grab the next character
       Character* ch = &characters.front();
-      if (ch->m_letter == 0)
-      {
-        characters.pop();
-        continue;
-      }
 
-      if ((text[glyph.m_glyphInfo.cluster] & 0xffff) == static_cast<character_t>('\t'))
+      if ((text[itGlyph->m_glyphInfo.cluster] & 0xffffffff) == static_cast<character_t>('\t'))
       {
         const float tabwidth = GetTabSpaceLength();
         const float a = cursorX / tabwidth;
@@ -499,7 +825,7 @@ void CGUIFontTTF::DrawTextInternal(CGraphicContext& context,
       if (alignment & XBFONT_TRUNCATED)
       {
         // Check if we will be exceeded the max allowed width
-        if (cursorX + ch->m_advance + 3 * m_ellipsesWidth > maxPixelWidth)
+        if (cursorX + ch->m_advance + ellipsesWidth > maxPixelWidth)
         {
           // Yup. Let's draw the ellipses, then bail
           // Perhaps we should really bail to the next line in this case??
@@ -509,25 +835,39 @@ void CGUIFontTTF::DrawTextInternal(CGraphicContext& context,
 
           for (int i = 0; i < 3; i++)
           {
-            RenderCharacter(context, startX + cursorX, startY, period, color, !scrolling,
+            RenderCharacter(context, startX + cursorX, startY, period, color, !hScrolling,
                             *tempVertices);
             cursorX += period->m_advance;
           }
           break;
         }
       }
+      else if (alignment & XBFONT_TRUNCATED_LEFT && itGlyph == glyphBegin)
+      {
+        // Add ellipsis only at the beginning of the text
+        Character* period = GetCharacter(L'.', 0);
+        if (!period)
+          break;
+
+        for (int i = 0; i < 3; i++)
+        {
+          RenderCharacter(context, startX + cursorX, startY, period, color, !hScrolling,
+                          *tempVertices);
+          cursorX += period->m_advance;
+        }
+      }
       else if (maxPixelWidth > 0 && cursorX > maxPixelWidth)
         break; // exceeded max allowed width - stop rendering
 
       offsetX = static_cast<float>(
-          MathUtils::round_int(static_cast<double>(glyph.m_glyphPosition.x_offset) / 64));
+          MathUtils::round_int(static_cast<double>(itGlyph->m_glyphPosition.x_offset) / 64));
       offsetY = static_cast<float>(
-          MathUtils::round_int(static_cast<double>(glyph.m_glyphPosition.y_offset) / 64));
-      RenderCharacter(context, startX + cursorX + offsetX, startY - offsetY, ch, color, !scrolling,
+          MathUtils::round_int(static_cast<double>(itGlyph->m_glyphPosition.y_offset) / 64));
+      RenderCharacter(context, startX + cursorX + offsetX, startY - offsetY, ch, color, !hScrolling,
                       *tempVertices);
       if (alignment & XBFONT_JUSTIFIED)
       {
-        if ((text[glyph.m_glyphInfo.cluster] & 0xffff) == L' ')
+        if ((text[itGlyph->m_glyphInfo.cluster] & 0xffffffff) == L' ')
           cursorX += ch->m_advance + spacePerSpaceCharacter;
         else
           cursorX += ch->m_advance;
@@ -540,15 +880,15 @@ void CGUIFontTTF::DrawTextInternal(CGraphicContext& context,
     {
       CVertexBuffer& vertexBuffer =
           m_dynamicCache.Lookup(context, dynamicPos, colors, text, rawAlignment, maxPixelWidth,
-                                scrolling, XbmcThreads::SystemClockMillis(), dirtyCache);
+                                hScrolling, shadow, std::chrono::steady_clock::now(), dirtyCache);
       CVertexBuffer newVertexBuffer = CreateVertexBuffer(*tempVertices);
       vertexBuffer = newVertexBuffer;
-      m_vertexTrans.emplace_back(0, 0, 0, &vertexBuffer, context.GetClipRegion());
+      m_vertexTrans.emplace_back(x, y, 0.0f, &vertexBuffer, context.GetClipRegion(), dx, dy);
     }
     else
     {
-      m_staticCache.Lookup(context, staticPos, colors, text, rawAlignment, maxPixelWidth, scrolling,
-                           XbmcThreads::SystemClockMillis(), dirtyCache) =
+      m_staticCache.Lookup(context, staticPos, colors, text, rawAlignment, maxPixelWidth,
+                           hScrolling, shadow, std::chrono::steady_clock::now(), dirtyCache) =
           *static_cast<CGUIFontCacheStaticValue*>(&tempVertices);
       /* Append the new vertices to the set collected since the first Begin() call */
       m_vertex.insert(m_vertex.end(), tempVertices->begin(), tempVertices->end());
@@ -557,8 +897,7 @@ void CGUIFontTTF::DrawTextInternal(CGraphicContext& context,
   else
   {
     if (hardwareClipping)
-      m_vertexTrans.emplace_back(dynamicPos.m_x, dynamicPos.m_y, dynamicPos.m_z, &vertexBuffer,
-                                 context.GetClipRegion());
+      m_vertexTrans.emplace_back(x, y, 0.0f, &vertexBuffer, context.GetClipRegion(), dx, dy);
     else
       /* Append the vertices from the cache to the set collected since the first Begin() call */
       m_vertex.insert(m_vertex.end(), vertices->begin(), vertices->end());
@@ -567,20 +906,21 @@ void CGUIFontTTF::DrawTextInternal(CGraphicContext& context,
   End();
 }
 
-
-float CGUIFontTTF::GetTextWidthInternal(const vecText& text)
+float CGUIFontTTF::GetTextWidthInternal(std::span<const character_t> text)
 {
-  std::vector<Glyph> glyphs = GetHarfBuzzShapedGlyphs(text);
+  const std::vector<Glyph> glyphs = GetHarfBuzzShapedGlyphs(text);
   return GetTextWidthInternal(text, glyphs);
 }
 
 // this routine assumes a single line (i.e. it was called from GUITextLayout)
-float CGUIFontTTF::GetTextWidthInternal(const vecText& text, std::vector<Glyph>& glyphs)
+float CGUIFontTTF::GetTextWidthInternal(std::span<const character_t> text,
+                                        const std::vector<Glyph>& glyphs)
 {
   float width = 0;
   for (auto it = glyphs.begin(); it != glyphs.end(); it++)
   {
-    Character* c = GetCharacter(text[(*it).m_glyphInfo.cluster], (*it).m_glyphInfo.codepoint);
+    const character_t ch = text[(*it).m_glyphInfo.cluster];
+    Character* c = GetCharacter(ch, (*it).m_glyphInfo.codepoint, (*it).m_fontFace);
     if (c)
     {
       // If last character in line, we want to add render width
@@ -588,7 +928,7 @@ float CGUIFontTTF::GetTextWidthInternal(const vecText& text, std::vector<Glyph>&
       // choped on the end (as render width is larger than advance then).
       if (std::next(it) == glyphs.end())
         width += std::max(c->m_right - c->m_left + c->m_offsetX, c->m_advance);
-      else if ((c->m_letter & 0xffff) == static_cast<character_t>('\t'))
+      else if ((ch & 0xffffffff) == static_cast<character_t>('\t'))
         width += GetTabSpaceLength();
       else
         width += c->m_advance;
@@ -598,12 +938,45 @@ float CGUIFontTTF::GetTextWidthInternal(const vecText& text, std::vector<Glyph>&
   return width;
 }
 
+size_t CGUIFontTTF::GetFittingLengthInternal(std::span<const character_t> text, float maxPixelWidth)
+{
+  const std::vector<Glyph> glyphs = GetHarfBuzzShapedGlyphs(text);
+  size_t length = 0;
+  float width = 0;
+  for (auto it = glyphs.begin(); it != glyphs.end(); ++it)
+  {
+    const character_t ch = text[it->m_glyphInfo.cluster];
+    const Character* c = GetCharacter(ch, it->m_glyphInfo.codepoint, it->m_fontFace);
+    float advance = 0;
+    float renderWidth = 0;
+    if (c)
+    {
+      advance =
+          (ch & 0xffffffff) == static_cast<character_t>('\t') ? GetTabSpaceLength() : c->m_advance;
+      renderWidth = std::max(c->m_right - c->m_left + c->m_offsetX, c->m_advance);
+    }
+
+    // Like GetTextWidthInternal(), the last glyph of the prefix counts with its render width
+    const auto next = std::next(it);
+    const size_t clusterEnd = next == glyphs.end() ? text.size() : next->m_glyphInfo.cluster;
+    if (clusterEnd != it->m_glyphInfo.cluster)
+    {
+      if (width + renderWidth > maxPixelWidth)
+        break;
+      length = clusterEnd;
+    }
+    width += advance;
+  }
+
+  return length;
+}
+
 float CGUIFontTTF::GetCharWidthInternal(character_t ch)
 {
   Character* c = GetCharacter(ch, 0);
   if (c)
   {
-    if ((c->m_letter & 0xffff) == static_cast<character_t>('\t'))
+    if ((ch & 0xffffffff) == static_cast<character_t>('\t'))
       return GetTabSpaceLength();
     else
       return c->m_advance;
@@ -630,7 +1003,13 @@ unsigned int CGUIFontTTF::GetTextureLineHeight() const
   return m_cellHeight + SPACING_BETWEEN_CHARACTERS_IN_TEXTURE;
 }
 
-std::vector<CGUIFontTTF::Glyph> CGUIFontTTF::GetHarfBuzzShapedGlyphs(const vecText& text)
+unsigned int CGUIFontTTF::GetMaxFontHeight() const
+{
+  return m_maxFontHeight + SPACING_BETWEEN_CHARACTERS_IN_TEXTURE;
+}
+
+std::vector<CGUIFontTTF::Glyph> CGUIFontTTF::GetHarfBuzzShapedGlyphs(
+    std::span<const character_t> text)
 {
   std::vector<Glyph> glyphs;
   if (text.empty())
@@ -641,13 +1020,15 @@ std::vector<CGUIFontTTF::Glyph> CGUIFontTTF::GetHarfBuzzShapedGlyphs(const vecTe
   std::vector<hb_script_t> scripts;
   std::vector<RunInfo> runs;
   hb_unicode_funcs_t* ufuncs = hb_unicode_funcs_get_default();
-  hb_script_t lastScript;
+  hb_script_t lastScript{HB_SCRIPT_INVALID};
   int lastScriptIndex = -1;
   int lastSetIndex = -1;
 
+  scripts.reserve(text.size());
   for (const auto& character : text)
   {
-    scripts.emplace_back(hb_unicode_script(ufuncs, static_cast<wchar_t>(0xffff & character)));
+    scripts.emplace_back(
+        hb_unicode_script(ufuncs, static_cast<hb_codepoint_t>(0xffffffff & character)));
   }
 
   // HB_SCRIPT_COMMON or HB_SCRIPT_INHERITED should be replaced with previous script
@@ -671,22 +1052,49 @@ std::vector<CGUIFontTTF::Glyph> CGUIFontTTF::GetHarfBuzzShapedGlyphs(const vecTe
     }
   }
 
+  // Characters the font has no glyph for, or that are presented as emoji, are taken from the emoji
+  // font. Sequences like flags or ZWJ sequences must stay in one run to be shaped together.
+  std::vector<FontFace> fontFaces(text.size(), FontFace::Primary);
+  for (size_t i = 0; i < text.size(); ++i)
+  {
+    const char32_t codepoint = static_cast<char32_t>(text[i] & 0xffffffff);
+    if (i > 0 && (KODI::UTILS::ContinuesEmoji(codepoint) ||
+                  (fontFaces[i - 1] == FontFace::Emoji && (text[i - 1] & 0xffffffff) == 0x200D)))
+    {
+      fontFaces[i] = fontFaces[i - 1];
+      continue;
+    }
+    const char32_t next = i + 1 < text.size() ? static_cast<char32_t>(text[i + 1] & 0xffffffff) : 0;
+    const bool emojiPresentation = next == 0xFE0F || next == 0x20E3 ||
+                                   KODI::UTILS::IsEmojiModifier(next) ||
+                                   (next != 0xFE0E && HasEmojiPresentation(codepoint));
+    if (m_hbEmojiFont && (emojiPresentation || !FT_Get_Char_Index(m_face, codepoint)) &&
+        FT_Get_Char_Index(m_emojiFace, codepoint))
+      fontFaces[i] = FontFace::Emoji;
+    else if (m_hbSymbolsFont && !FT_Get_Char_Index(m_face, codepoint) &&
+             FT_Get_Char_Index(m_symbolsFace, codepoint))
+      fontFaces[i] = FontFace::Symbols;
+  }
+
   lastScript = scripts[0];
+  FontFace lastFontFace = fontFaces[0];
   int lastRunStart = 0;
 
   for (unsigned int i = 0; i <= static_cast<unsigned int>(scripts.size()); ++i)
   {
-    if (i == scripts.size() || scripts[i] != lastScript)
+    if (i == scripts.size() || scripts[i] != lastScript || fontFaces[i] != lastFontFace)
     {
       RunInfo run{};
       run.m_startOffset = lastRunStart;
       run.m_endOffset = i;
       run.m_script = lastScript;
+      run.m_fontFace = lastFontFace;
       runs.emplace_back(run);
 
       if (i < scripts.size())
       {
         lastScript = scripts[i];
+        lastFontFace = fontFaces[i];
         lastRunStart = i;
       }
       else
@@ -704,18 +1112,23 @@ std::vector<CGUIFontTTF::Glyph> CGUIFontTTF::GetHarfBuzzShapedGlyphs(const vecTe
 
     for (unsigned int j = run.m_startOffset; j < run.m_endOffset; j++)
     {
-      hb_buffer_add(run.m_buffer, static_cast<wchar_t>(0xffff & text[j]), j);
+      hb_buffer_add(run.m_buffer, static_cast<hb_codepoint_t>(0xffffffff & text[j]), j);
     }
 
     hb_buffer_set_content_type(run.m_buffer, HB_BUFFER_CONTENT_TYPE_UNICODE);
-    hb_shape(m_hbFont, run.m_buffer, nullptr, 0);
+    hb_font_t* font = m_hbFont;
+    if (run.m_fontFace == FontFace::Emoji)
+      font = m_hbEmojiFont;
+    else if (run.m_fontFace == FontFace::Symbols)
+      font = m_hbSymbolsFont;
+    hb_shape(font, run.m_buffer, nullptr, 0);
     unsigned int glyphCount;
     run.m_glyphInfos = hb_buffer_get_glyph_infos(run.m_buffer, &glyphCount);
     run.m_glyphPositions = hb_buffer_get_glyph_positions(run.m_buffer, &glyphCount);
 
     for (size_t k = 0; k < glyphCount; k++)
     {
-      glyphs.emplace_back(run.m_glyphInfos[k], run.m_glyphPositions[k]);
+      glyphs.emplace_back(run.m_glyphInfos[k], run.m_glyphPositions[k], run.m_fontFace);
     }
 
     hb_buffer_destroy(run.m_buffer);
@@ -724,29 +1137,58 @@ std::vector<CGUIFontTTF::Glyph> CGUIFontTTF::GetHarfBuzzShapedGlyphs(const vecTe
   return glyphs;
 }
 
-CGUIFontTTF::Character* CGUIFontTTF::GetCharacter(character_t chr, FT_UInt glyphIndex)
+FT_Face CGUIFontTTF::GetFace(FontFace fontFace) const
 {
-  wchar_t letter = (wchar_t)(chr & 0xffff);
-  character_t style = (chr & 0x7000000) >> 24;
+  if (fontFace == FontFace::Emoji)
+    return m_emojiFace;
+  if (fontFace == FontFace::Symbols)
+    return m_symbolsFace;
+  return m_face;
+}
+
+character_t CGUIFontTTF::GlyphAndStyle(FT_UInt glyphIndex,
+                                       uint32_t style,
+                                       FontFace fontFace,
+                                       bool silhouette)
+{
+  return (static_cast<character_t>(fontFace) << 24) |
+         (fontFace == FontFace::Emoji && !silhouette ? COLOR_GLYPH : 0) | (style << 16) |
+         glyphIndex;
+}
+
+CGUIFontTTF::Character* CGUIFontTTF::GetCharacter(character_t chr,
+                                                  FT_UInt glyphIndex,
+                                                  FontFace fontFace /* = FontFace::Primary */,
+                                                  bool silhouette /* = false */)
+{
+  const char32_t letter = static_cast<char32_t>(chr & 0xffffffff);
 
   // ignore linebreaks
-  if (letter == L'\r')
+  if (letter == U'\r')
     return nullptr;
 
-  // quick access to ascii chars
-  if (letter < 255 && glyphIndex < 255)
-  {
-    character_t ch = (style << 8) | glyphIndex;
+  // emoji are not styled
+  const uint32_t style =
+      fontFace == FontFace::Emoji ? 0 : static_cast<uint32_t>((chr >> 40) & 0x7); // style = 0 - 6
 
-    if (ch < LOOKUPTABLE_SIZE && m_charquick[ch])
-      return m_charquick[ch];
+  if (!glyphIndex)
+    glyphIndex = FT_Get_Char_Index(GetFace(fontFace), letter);
+
+  // quick access to the most frequently used glyphs
+  if (fontFace == FontFace::Primary && glyphIndex < MAX_GLYPH_IDX && style < m_charquick.size())
+  {
+    const auto& table = m_charquick[style];
+    if (table && table[glyphIndex])
+      return table[glyphIndex];
   }
 
   // letters are stored based on style and glyph
-  character_t ch = (style << 16) | glyphIndex;
+  character_t ch = GlyphAndStyle(glyphIndex, style, fontFace, silhouette);
 
+  // perform binary search on sorted array by m_glyphAndStyle and
+  // if not found obtains position to insert the new m_char to keep sorted
   int low = 0;
-  int high = m_numChars - 1;
+  int high = m_char.size() - 1;
   while (low <= high)
   {
     int mid = (low + high) >> 1;
@@ -759,40 +1201,34 @@ CGUIFontTTF::Character* CGUIFontTTF::GetCharacter(character_t chr, FT_UInt glyph
   }
   // if we get to here, then low is where we should insert the new character
 
+  int startIndex = low;
+
   // increase the size of the buffer if we need it
-  if (m_numChars >= m_maxChars)
-  { // need to increase the size of the buffer
-    Character* newTable = new Character[m_maxChars + CHAR_CHUNK];
-    if (m_char)
-    {
-      memcpy(newTable, m_char, low * sizeof(Character));
-      memcpy(newTable + low + 1, m_char + low, (m_numChars - low) * sizeof(Character));
-      delete[] m_char;
-    }
-    m_char = newTable;
-    m_maxChars += CHAR_CHUNK;
+  if (m_char.size() == m_char.capacity())
+  {
+    m_char.reserve(m_char.capacity() + CHAR_CHUNK);
+    startIndex = 0;
   }
-  else
-  { // just move the data along as necessary
-    memmove(m_char + low + 1, m_char + low, (m_numChars - low) * sizeof(Character));
-  }
+
   // render the character to our texture
   // must End() as we can't render text to our texture during a Begin(), End() block
   unsigned int nestedBeginCount = m_nestedBeginCount;
   m_nestedBeginCount = 1;
   if (nestedBeginCount)
     End();
-  if (!CacheCharacter(letter, style, m_char + low, glyphIndex))
+
+  m_char.emplace(m_char.begin() + low);
+  if (!CacheCharacter(glyphIndex, style, fontFace, silhouette, m_char.data() + low))
   { // unable to cache character - try clearing them all out and starting over
-    CLog::Log(
-        LOGDEBUG,
-        "CGUIFontTTF::{}: Unable to cache character.  Clearing character cache of {} characters",
-        __func__, m_numChars);
+    CLog::LogF(LOGDEBUG, "Unable to cache character. Clearing character cache of {} characters",
+               m_char.size());
     ClearCharacterCache();
     low = 0;
-    if (!CacheCharacter(letter, style, m_char + low, glyphIndex))
+    startIndex = 0;
+    m_char.emplace(m_char.begin());
+    if (!CacheCharacter(glyphIndex, style, fontFace, silhouette, m_char.data()))
     {
-      CLog::Log(LOGERROR, "CGUIFontTTF::{}: Unable to cache character (out of memory?)", __func__);
+      CLog::LogF(LOGERROR, "Unable to cache character (out of memory?)");
       if (nestedBeginCount)
         Begin();
       m_nestedBeginCount = nestedBeginCount;
@@ -804,64 +1240,105 @@ CGUIFontTTF::Character* CGUIFontTTF::GetCharacter(character_t chr, FT_UInt glyph
     Begin();
   m_nestedBeginCount = nestedBeginCount;
 
-  // fixup quick access
-  memset(m_charquick, 0, sizeof(m_charquick));
-  for (int i = 0; i < m_numChars; i++)
+  // update the lookup table with only the m_char addresses that have changed
+  for (size_t i = startIndex; i < m_char.size(); ++i)
   {
-    if (m_char[i].m_letter < 255 && m_char[i].m_glyphIndex < 255)
+    if (!(m_char[i].m_glyphAndStyle & FONT_FACE_MASK) && m_char[i].m_glyphIndex < MAX_GLYPH_IDX)
     {
-      character_t ch = ((m_char[i].m_glyphAndStyle & 0xffff0000) >> 8) | m_char[i].m_glyphIndex;
-
-      if (ch < LOOKUPTABLE_SIZE)
-        m_charquick[ch] = m_char + i;
+      const size_t charStyle = (m_char[i].m_glyphAndStyle & 0xffff0000) >> 16;
+      if (charStyle < m_charquick.size())
+      {
+        auto& table = m_charquick[charStyle];
+        if (!table)
+          table = std::make_unique<Character*[]>(MAX_GLYPH_IDX);
+        table[m_char[i].m_glyphIndex] = m_char.data() + i;
+      }
     }
   }
 
-  return m_char + low;
+  return m_char.data() + low;
 }
 
-bool CGUIFontTTF::CacheCharacter(wchar_t letter, uint32_t style, Character* ch, FT_UInt glyphIndex)
+bool CGUIFontTTF::CacheCharacter(
+    FT_UInt glyphIndex, uint32_t style, FontFace fontFace, bool silhouette, Character* ch)
 {
-  if (!glyphIndex)
-    glyphIndex = FT_Get_Char_Index(m_face, letter);
-
+  FT_Face face = GetFace(fontFace);
+  const bool emoji = fontFace == FontFace::Emoji;
   FT_Glyph glyph = nullptr;
-  if (FT_Load_Glyph(m_face, glyphIndex, FT_LOAD_TARGET_LIGHT))
+  if (FT_Load_Glyph(face, glyphIndex, emoji ? FT_LOAD_COLOR : FT_LOAD_TARGET_LIGHT))
   {
-    CLog::Log(LOGDEBUG, "CGUIFontTTF::{}: Failed to load glyph {:x}", __func__,
-              static_cast<uint32_t>(letter));
+    CLog::LogF(LOGDEBUG, "Failed to load glyph {:x}", glyphIndex);
     return false;
   }
 
-  // make bold if applicable
-  if (style & FONT_STYLE_BOLD)
-    SetGlyphStrength(m_face->glyph, GLYPH_STRENGTH_BOLD);
-  // and italics if applicable
-  if (style & FONT_STYLE_ITALICS)
-    ObliqueGlyph(m_face->glyph);
-  // and light if applicable
-  if (style & FONT_STYLE_LIGHT)
-    SetGlyphStrength(m_face->glyph, GLYPH_STRENGTH_LIGHT);
-  // grab the glyph
-  if (FT_Get_Glyph(m_face->glyph, &glyph))
+  if (emoji)
   {
-    CLog::Log(LOGDEBUG, "CGUIFontTTF::{}: Failed to get glyph {:x}", __func__,
-              static_cast<uint32_t>(letter));
+    // the layers of color glyphs are only composed when rendering the glyph slot
+    if (FT_Render_Glyph(face->glyph, FT_RENDER_MODE_NORMAL))
+    {
+      CLog::LogF(LOGDEBUG, "Failed to render emoji glyph {:x}", glyphIndex);
+      return false;
+    }
+  }
+  else
+  {
+    // make bold if applicable
+    if (style & FONT_STYLE_BOLD)
+      SetGlyphStrength(face->glyph, GLYPH_STRENGTH_BOLD);
+    // and italics if applicable
+    if (style & FONT_STYLE_ITALICS)
+      ObliqueGlyph(face->glyph);
+    // and light if applicable
+    if (style & FONT_STYLE_LIGHT)
+      SetGlyphStrength(face->glyph, GLYPH_STRENGTH_LIGHT);
+  }
+  // grab the glyph
+  if (FT_Get_Glyph(face->glyph, &glyph))
+  {
+    CLog::LogF(LOGDEBUG, "Failed to get glyph {:x}", glyphIndex);
     return false;
   }
-  if (m_stroker)
+  if (m_stroker && !emoji)
     FT_Glyph_StrokeBorder(&glyph, m_stroker, 0, 1);
   // render the glyph
   if (FT_Glyph_To_Bitmap(&glyph, FT_RENDER_MODE_NORMAL, nullptr, 1))
   {
-    CLog::Log(LOGDEBUG, "CGUIFontTTF::{}: Failed to render glyph {:x} to a bitmap", __func__,
-              static_cast<uint32_t>(letter));
+    CLog::LogF(LOGDEBUG, "Failed to render glyph {:x} to a bitmap", glyphIndex);
     return false;
   }
 
   FT_BitmapGlyph bitGlyph = (FT_BitmapGlyph)glyph;
   FT_Bitmap bitmap = bitGlyph->bitmap;
   bool isEmptyGlyph = (bitmap.width == 0 || bitmap.rows == 0);
+
+  std::vector<uint8_t> pixels = ToRGBA(bitmap, emoji && !silhouette);
+  if (emoji && m_stroker && !isEmptyGlyph)
+  {
+    pixels = GrowSilhouette(pixels, static_cast<int>(bitmap.width), static_cast<int>(bitmap.rows),
+                            m_borderRadius);
+    bitmap.width += 2 * m_borderRadius;
+    bitmap.rows += 2 * m_borderRadius;
+    bitGlyph->left -= m_borderRadius;
+    bitGlyph->top += m_borderRadius;
+  }
+
+  if (emoji && !silhouette && !isEmptyGlyph && !m_colorTexture)
+  {
+    m_colorTexture = true;
+    if (m_texture)
+    {
+      unsigned int height = m_textureHeight;
+      std::unique_ptr<CTexture> newTexture = ReallocTexture(height);
+      if (!newTexture)
+      {
+        m_colorTexture = false;
+        FT_Done_Glyph(glyph);
+        CLog::LogF(LOGDEBUG, "Failed to allocate a color texture of height {}", height);
+        return false;
+      }
+      m_texture = std::move(newTexture);
+    }
+  }
 
   if (!isEmptyGlyph)
   {
@@ -870,9 +1347,10 @@ bool CGUIFontTTF::CacheCharacter(wchar_t letter, uint32_t style, Character* ch, 
 
     // check we have enough room for the character.
     // cast-fest is here to avoid warnings due to freeetype version differences (signedness of width).
-    if (static_cast<int>(m_posX + bitGlyph->left + bitmap.width) > static_cast<int>(m_textureWidth))
+    if (static_cast<int>(m_posX + bitGlyph->left + bitmap.width +
+                         SPACING_BETWEEN_CHARACTERS_IN_TEXTURE) > static_cast<int>(m_textureWidth))
     { // no space - gotta drop to the next line (which means creating a new texture and copying it across)
-      m_posX = 0;
+      m_posX = 1;
       m_posY += GetTextureLineHeight();
       if (bitGlyph->left < 0)
         m_posX += -bitGlyph->left;
@@ -884,9 +1362,8 @@ bool CGUIFontTTF::CacheCharacter(wchar_t letter, uint32_t style, Character* ch, 
         // check for max height
         if (newHeight > m_renderSystem->GetMaxTextureSize())
         {
-          CLog::Log(LOGDEBUG,
-                    "CGUIFontTTF::{}: New cache texture is too large ({} > {} pixels long)",
-                    __func__, newHeight, m_renderSystem->GetMaxTextureSize());
+          CLog::LogF(LOGDEBUG, "New cache texture is too large ({} > {} pixels long)", newHeight,
+                     m_renderSystem->GetMaxTextureSize());
           FT_Done_Glyph(glyph);
           return false;
         }
@@ -895,50 +1372,48 @@ bool CGUIFontTTF::CacheCharacter(wchar_t letter, uint32_t style, Character* ch, 
         if (!newTexture)
         {
           FT_Done_Glyph(glyph);
-          CLog::Log(LOGDEBUG, "CGUIFontTTF::{}: Failed to allocate new texture of height {}",
-                    __func__, newHeight);
+          CLog::LogF(LOGDEBUG, "Failed to allocate new texture of height {}", newHeight);
           return false;
         }
         m_texture = std::move(newTexture);
       }
+      m_posY = GetMaxFontHeight();
     }
 
     if (!m_texture)
     {
       FT_Done_Glyph(glyph);
-      CLog::Log(LOGDEBUG, "CGUIFontTTF::{}: no texture to cache character to", __func__);
+      CLog::LogF(LOGDEBUG, "no texture to cache character to");
       return false;
     }
   }
 
   // set the character in our table
-  ch->m_glyphAndStyle = (style << 16) | glyphIndex;
+  ch->m_glyphAndStyle = GlyphAndStyle(glyphIndex, style, fontFace, silhouette);
   ch->m_glyphIndex = glyphIndex;
-  ch->m_letter = letter;
   ch->m_offsetX = static_cast<short>(bitGlyph->left);
   ch->m_offsetY = static_cast<short>(m_cellBaseLine - bitGlyph->top);
-  ch->m_left = isEmptyGlyph ? 0.0f : (static_cast<float>(m_posX) + ch->m_offsetX);
-  ch->m_top = isEmptyGlyph ? 0.0f : (static_cast<float>(m_posY) + ch->m_offsetY);
+  ch->m_left = isEmptyGlyph ? 0.0f : (static_cast<float>(m_posX));
+  ch->m_top = isEmptyGlyph ? 0.0f : (static_cast<float>(m_posY));
   ch->m_right = ch->m_left + bitmap.width;
   ch->m_bottom = ch->m_top + bitmap.rows;
   ch->m_advance =
-      static_cast<float>(MathUtils::round_int(static_cast<double>(m_face->glyph->advance.x) / 64));
+      static_cast<float>(MathUtils::round_int(static_cast<double>(face->glyph->advance.x) / 64));
 
   // we need only render if we actually have some pixels
   if (!isEmptyGlyph)
   {
     // ensure our rect will stay inside the texture (it *should* but we need to be certain)
-    unsigned int x1 = std::max(m_posX + ch->m_offsetX, 0);
-    unsigned int y1 = std::max(m_posY + ch->m_offsetY, 0);
+    unsigned int x1 = std::max(m_posX, 0);
+    unsigned int y1 = std::max(m_posY, 0);
     unsigned int x2 = std::min(x1 + bitmap.width, m_textureWidth);
     unsigned int y2 = std::min(y1 + bitmap.rows, m_textureHeight);
-    CopyCharToTexture(bitGlyph, x1, y1, x2, y2);
+    m_maxFontHeight = std::max(m_maxFontHeight, y2);
+    CopyCharToTexture(pixels.data(), bitmap.width * 4, x1, y1, x2, y2);
 
     m_posX += SPACING_BETWEEN_CHARACTERS_IN_TEXTURE +
-              static_cast<unsigned short>(
-                  std::max(ch->m_right - ch->m_left + ch->m_offsetX, ch->m_advance));
+              static_cast<unsigned short>(ch->m_right - ch->m_left);
   }
-  m_numChars++;
 
   // free the glyph
   FT_Done_Glyph(glyph);
@@ -946,11 +1421,72 @@ bool CGUIFontTTF::CacheCharacter(wchar_t letter, uint32_t style, Character* ch, 
   return true;
 }
 
+void CGUIFontTTF::ClearTexturePixels(uint8_t* pixels, size_t size)
+{
+  for (size_t i = 0; i + 3 < size; i += 4)
+  {
+    pixels[i] = pixels[i + 1] = pixels[i + 2] = 255;
+    pixels[i + 3] = 0;
+  }
+}
+
+void CGUIFontTTF::FillNewTexture(CTexture& newTexture) const
+{
+  if (m_colorTexture)
+    ClearTexturePixels(newTexture.GetPixels(), newTexture.GetRows() * newTexture.GetPitch());
+  else
+    memset(newTexture.GetPixels(), 0, newTexture.GetRows() * newTexture.GetPitch());
+
+  if (!m_texture)
+    return;
+
+  const bool expand = m_colorTexture && m_texture->GetPitch() < m_texture->GetWidth() * 4;
+  const unsigned int width = std::min(m_texture->GetWidth(), newTexture.GetWidth());
+  const unsigned int rows = std::min(m_texture->GetRows(), newTexture.GetRows());
+  for (unsigned int y = 0; y < rows; y++)
+  {
+    const uint8_t* src = m_texture->GetPixels() + y * m_texture->GetPitch();
+    uint8_t* dst = newTexture.GetPixels() + y * newTexture.GetPitch();
+    if (!expand)
+    {
+      memcpy(dst, src, std::min(m_texture->GetPitch(), newTexture.GetPitch()));
+      continue;
+    }
+    for (unsigned int x = 0; x < width; x++)
+      dst[4 * x + 3] = src[x];
+  }
+}
+
+void CGUIFontTTF::WriteCharPixels(const uint8_t* pixels,
+                                  unsigned int pitch,
+                                  unsigned int x1,
+                                  unsigned int y1,
+                                  unsigned int x2,
+                                  unsigned int y2)
+{
+  const unsigned int bpp = m_colorTexture ? 4 : 1;
+  uint8_t* target = m_texture->GetPixels() + y1 * m_texture->GetPitch() + x1 * bpp;
+  for (unsigned int y = y1; y < y2; y++)
+  {
+    if (m_colorTexture)
+    {
+      memcpy(target, pixels, (x2 - x1) * 4);
+    }
+    else
+    {
+      for (unsigned int x = 0; x < x2 - x1; x++)
+        target[x] = pixels[4 * x + 3];
+    }
+    pixels += pitch;
+    target += m_texture->GetPitch();
+  }
+}
+
 void CGUIFontTTF::RenderCharacter(CGraphicContext& context,
                                   float posX,
                                   float posY,
                                   const Character* ch,
-                                  UTILS::COLOR::Color color,
+                                  KODI::UTILS::COLOR::Color color,
                                   bool roundX,
                                   std::vector<SVertex>& vertices)
 {
@@ -965,74 +1501,30 @@ void CGUIFontTTF::RenderCharacter(CGraphicContext& context,
 
   // posX and posY are relative to our origin, and the textcell is offset
   // from our (posX, posY).  Plus, these are unscaled quantities compared to the underlying GUI resolution
-  CRect vertex((posX + ch->m_offsetX) * context.GetGUIScaleX(),
-               (posY + ch->m_offsetY) * context.GetGUIScaleY(),
-               (posX + ch->m_offsetX + width) * context.GetGUIScaleX(),
-               (posY + ch->m_offsetY + height) * context.GetGUIScaleY());
-  vertex += CPoint(m_originX, m_originY);
+  CRect vertex((posX + ch->m_offsetX), (posY + ch->m_offsetY), (posX + ch->m_offsetX + width),
+               (posY + ch->m_offsetY + height));
+
   CRect texture(ch->m_left, ch->m_top, ch->m_right, ch->m_bottom);
-  if (!m_renderSystem->ScissorsCanEffectClipping())
-    context.ClipRect(vertex, texture);
 
-  // transform our positions - note, no scaling due to GUI calibration/resolution occurs
-  float x[4], y[4], z[4];
+  // when scaling by shader, we have to grow the vertex and texture coords
+  // by .5 or we would omit pixels when animating.
+#if defined(HAS_GLES)
+  const auto tl = static_cast<uint16_t>(texture.x1);
+  const auto tr = static_cast<uint16_t>(texture.x2 + 1);
+  const auto tt = static_cast<uint16_t>(texture.y1);
+  const auto tb = static_cast<uint16_t>(texture.y2 + 1);
+#else
+  const float tl = (texture.x1 - .5f) * m_textureScaleX;
+  const float tr = (texture.x2 + .5f) * m_textureScaleX;
+  const float tt = (texture.y1 - .5f) * m_textureScaleY;
+  const float tb = (texture.y2 + .5f) * m_textureScaleY;
+#endif
 
-  x[0] = context.ScaleFinalXCoord(vertex.x1, vertex.y1);
-  x[1] = context.ScaleFinalXCoord(vertex.x2, vertex.y1);
-  x[2] = context.ScaleFinalXCoord(vertex.x2, vertex.y2);
-  x[3] = context.ScaleFinalXCoord(vertex.x1, vertex.y2);
-
-  if (roundX)
-  {
-    // We only round the "left" side of the character, and then use the direction of rounding to
-    // move the "right" side of the character.  This ensures that a constant width is kept when rendering
-    // the same letter at the same size at different places of the screen, avoiding the problem
-    // of the "left" side rounding one way while the "right" side rounds the other way, thus getting
-    // altering the width of thin characters substantially.  This only really works for positive
-    // coordinates (due to the direction of truncation for negatives) but this is the only case that
-    // really interests us anyway.
-    float rx0 = static_cast<float>(MathUtils::round_int(static_cast<double>(x[0])));
-    float rx3 = static_cast<float>(MathUtils::round_int(static_cast<double>(x[3])));
-    x[1] = static_cast<float>(MathUtils::truncate_int(static_cast<double>(x[1])));
-    x[2] = static_cast<float>(MathUtils::truncate_int(static_cast<double>(x[2])));
-    if (x[0] > 0.0f && rx0 > x[0])
-      x[1] += 1;
-    else if (x[0] < 0.0f && rx0 < x[0])
-      x[1] -= 1;
-    if (x[3] > 0.0f && rx3 > x[3])
-      x[2] += 1;
-    else if (x[3] < 0.0f && rx3 < x[3])
-      x[2] -= 1;
-    x[0] = rx0;
-    x[3] = rx3;
-  }
-
-  y[0] = static_cast<float>(
-      MathUtils::round_int(static_cast<double>(context.ScaleFinalYCoord(vertex.x1, vertex.y1))));
-  y[1] = static_cast<float>(
-      MathUtils::round_int(static_cast<double>(context.ScaleFinalYCoord(vertex.x2, vertex.y1))));
-  y[2] = static_cast<float>(
-      MathUtils::round_int(static_cast<double>(context.ScaleFinalYCoord(vertex.x2, vertex.y2))));
-  y[3] = static_cast<float>(
-      MathUtils::round_int(static_cast<double>(context.ScaleFinalYCoord(vertex.x1, vertex.y2))));
-
-  z[0] = static_cast<float>(
-      MathUtils::round_int(static_cast<double>(context.ScaleFinalZCoord(vertex.x1, vertex.y1))));
-  z[1] = static_cast<float>(
-      MathUtils::round_int(static_cast<double>(context.ScaleFinalZCoord(vertex.x2, vertex.y1))));
-  z[2] = static_cast<float>(
-      MathUtils::round_int(static_cast<double>(context.ScaleFinalZCoord(vertex.x2, vertex.y2))));
-  z[3] = static_cast<float>(
-      MathUtils::round_int(static_cast<double>(context.ScaleFinalZCoord(vertex.x1, vertex.y2))));
-
-  // tex coords converted to 0..1 range
-  float tl = texture.x1 * m_textureScaleX;
-  float tr = texture.x2 * m_textureScaleX;
-  float tt = texture.y1 * m_textureScaleY;
-  float tb = texture.y2 * m_textureScaleY;
-
-  vertices.resize(vertices.size() + 4);
-  SVertex* v = &vertices[vertices.size() - 4];
+  vertices.resize(vertices.size() + VERTEX_PER_GLYPH);
+  SVertex* v = &vertices[vertices.size() - VERTEX_PER_GLYPH];
+  // keep the own colors of color glyphs, only apply the alpha
+  if (ch->m_glyphAndStyle & COLOR_GLYPH)
+    color |= 0x00ffffff;
   m_color = color;
 
 #if !defined(HAS_DX)
@@ -1042,7 +1534,7 @@ void CGUIFontTTF::RenderCharacter(CGraphicContext& context,
   uint8_t a = KODI::UTILS::GL::GetChannelFromARGB(KODI::UTILS::GL::ColorChannel::A, color);
 #endif
 
-  for (int i = 0; i < 4; i++)
+  for (int i = 0; i < VERTEX_PER_GLYPH; i++)
   {
 #ifdef HAS_DX
     CD3DHelper::XMStoreColor(&v[i].col, color);
@@ -1054,50 +1546,62 @@ void CGUIFontTTF::RenderCharacter(CGraphicContext& context,
 #endif
   }
 
+  // nudge position to align with raster grid. messes up kerning, but also avoids
+  // linear filtering (when not scaled/rotated).
+  float xOffset = 0.0f;
+  if (roundX)
+    xOffset = (vertex.x1 - std::floor(vertex.x1));
+  float yOffset = (vertex.y1 - std::floor(vertex.y1));
+
 #if defined(HAS_DX)
-  for (int i = 0; i < 4; i++)
-  {
-    v[i].x = x[i];
-    v[i].y = y[i];
-    v[i].z = z[i];
-  }
+  // D3D: triangle lists
 
   v[0].u = tl;
   v[0].v = tt;
+  v[0].x = vertex.x1 - xOffset - 0.5f;
+  v[0].y = vertex.y1 - yOffset - 0.5f;
+  v[0].z = 0;
 
   v[1].u = tr;
   v[1].v = tt;
+  v[1].x = vertex.x2 - xOffset + 0.5f;
+  v[1].y = vertex.y1 - yOffset - 0.5f;
+  v[1].z = 0;
 
   v[2].u = tr;
   v[2].v = tb;
+  v[2].x = vertex.x2 - xOffset + 0.5f;
+  v[2].y = vertex.y2 - yOffset + 0.5f;
+  v[2].z = 0;
 
   v[3].u = tl;
   v[3].v = tb;
+  v[3].x = vertex.x1 - xOffset - 0.5f;
+  v[3].y = vertex.y2 - yOffset + 0.5f;
+  v[3].z = 0;
 #else
   // GL / GLES uses triangle strips, not quads, so have to rearrange the vertex order
+  // GL uses vertex shaders to manipulate text rotation/translation/scaling/clipping.
+
   v[0].u = tl;
   v[0].v = tt;
-  v[0].x = x[0];
-  v[0].y = y[0];
-  v[0].z = z[0];
+  v[0].x = vertex.x1 - xOffset - 0.5f;
+  v[0].y = vertex.y1 - yOffset - 0.5f;
 
   v[1].u = tl;
   v[1].v = tb;
-  v[1].x = x[3];
-  v[1].y = y[3];
-  v[1].z = z[3];
+  v[1].x = vertex.x1 - xOffset - 0.5f;
+  v[1].y = vertex.y2 - yOffset + 0.5f;
 
   v[2].u = tr;
   v[2].v = tt;
-  v[2].x = x[1];
-  v[2].y = y[1];
-  v[2].z = z[1];
+  v[2].x = vertex.x2 - xOffset + 0.5f;
+  v[2].y = vertex.y1 - yOffset - 0.5f;
 
   v[3].u = tr;
   v[3].v = tb;
-  v[3].x = x[2];
-  v[3].y = y[2];
-  v[3].z = z[2];
+  v[3].x = vertex.x2 - xOffset + 0.5f;
+  v[3].y = vertex.y2 - yOffset + 0.5f;
 #endif
 }
 

@@ -9,7 +9,8 @@
 #pragma once
 
 #include "FileItem.h"
-#include "filesystem/File.h"
+#include "FileItemList.h"
+#include "filesystem/IFileTypes.h"
 #include "utils/ProgressJob.h"
 
 #include <string>
@@ -39,12 +40,13 @@ public:
   // implementations of CJob
   bool DoWork() override;
   const char* GetType() const override { return m_displayProgress ? "filemanager" : ""; }
-  bool operator==(const CJob *job) const override;
+  bool Equals(const CJob* job) const override;
 
-  void SetFileOperation(FileAction action, CFileItemList &items, const std::string &strDestFile);
+  void SetFileOperation(FileAction action,
+                        const CFileItemList& items,
+                        const std::string& strDestFile);
 
   const std::string &GetAverageSpeed() const { return m_avgSpeed; }
-  const std::string &GetCurrentOperation() const { return m_currentOperation; }
   const std::string &GetCurrentFile() const { return m_currentFile; }
   const CFileItemList &GetItems() const { return m_items; }
   FileAction GetAction() const { return m_action; }
@@ -69,7 +71,11 @@ private:
   friend class CFileOperation;
 
   typedef std::vector<CFileOperation> FileOperationList;
-  bool DoProcess(FileAction action, CFileItemList & items, const std::string& strDestFile, FileOperationList &fileOperations, double &totalTime);
+  bool DoProcess(FileAction action,
+                 const CFileItemList& items,
+                 const std::string& strDestFile,
+                 FileOperationList& fileOperations,
+                 double& totalTime);
   bool DoProcessFolder(FileAction action, const std::string& strPath, const std::string& strDestFile, FileOperationList &fileOperations, double &totalTime);
   bool DoProcessFile(FileAction action, const std::string& strFileA, const std::string& strFileB, FileOperationList &fileOperations, double &totalTime);
 
@@ -78,7 +84,7 @@ private:
   FileAction m_action = ActionCopy;
   CFileItemList m_items;
   std::string m_strDestFile;
-  std::string m_avgSpeed, m_currentOperation, m_currentFile;
+  std::string m_avgSpeed, m_currentFile;
   bool m_displayProgress = false;
   int m_heading = 0;
   int m_line = 0;

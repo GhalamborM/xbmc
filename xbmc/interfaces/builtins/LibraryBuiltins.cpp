@@ -8,28 +8,49 @@
 
 #include "LibraryBuiltins.h"
 
-#include "Application.h"
 #include "GUIUserMessages.h"
 #include "MediaSource.h"
 #include "ServiceBroker.h"
+#include "addons/Scraper.h"
 #include "dialogs/GUIDialogFileBrowser.h"
 #include "dialogs/GUIDialogYesNo.h"
 #include "guilib/GUIComponent.h"
 #include "guilib/GUIWindowManager.h"
-#include "guilib/LocalizeStrings.h"
 #include "messaging/helpers/DialogHelper.h"
+#include "messaging/helpers/DialogOKHelper.h"
+#include "music/MusicDbPaths.h"
+#include "music/MusicDbUrl.h"
 #include "music/MusicLibraryQueue.h"
 #include "music/infoscanner/MusicInfoScanner.h"
+#include "resources/LocalizeStrings.h"
+#include "resources/ResourcesComponent.h"
 #include "settings/LibExportSettings.h"
 #include "settings/Settings.h"
 #include "settings/SettingsComponent.h"
 #include "storage/MediaManager.h"
+#include "utils/ContentNames.h"
 #include "utils/StringUtils.h"
 #include "utils/log.h"
 #include "video/VideoDatabase.h"
 #include "video/VideoLibraryQueue.h"
 
 using namespace KODI::MESSAGING;
+
+namespace CONTENT = KODI::MEDIA::CONTENT;
+
+namespace
+{
+//! The library content a clean is limited to, in the database's spelling; empty for any.
+std::string ContentToClean(const std::vector<std::string>& params)
+{
+  if (params.empty())
+    return {};
+  for (const char* content : {CONTENT::MOVIES, CONTENT::TVSHOWS, CONTENT::MUSICVIDEOS})
+    if (StringUtils::EqualsNoCase(params[0], content))
+      return content;
+  return {};
+}
+} // unnamed namespace
 
 /*! \brief Clean a library.
  *  \param params The parameters.
@@ -40,45 +61,33 @@ static int CleanLibrary(const std::vector<std::string>& params)
   bool userInitiated = true;
   if (params.size() > 1)
     userInitiated = StringUtils::EqualsNoCase(params[1], "true");
-  if (!params.size() || StringUtils::EqualsNoCase(params[0], "video")
-                     || StringUtils::EqualsNoCase(params[0], "movies")
-                     || StringUtils::EqualsNoCase(params[0], "tvshows")
-                     || StringUtils::EqualsNoCase(params[0], "musicvideos"))
+  if (params.empty() || StringUtils::EqualsNoCase(params[0], "video") ||
+      !ContentToClean(params).empty())
   {
     if (!CVideoLibraryQueue::GetInstance().IsScanningLibrary())
     {
-      if (!(userInitiated && CVideoLibraryQueue::GetInstance().IsRunning()))
+      if (userInitiated && CVideoLibraryQueue::GetInstance().IsRunning())
+        HELPERS::ShowOKDialogText(CVariant{700}, CVariant{703});
+      else
       {
-        const std::string content = (params.empty() || params[0] == "video") ? "" : params[0];
+        const std::string content = ContentToClean(params);
         const std::string directory = params.size() > 2 ? params[2] : "";
 
         std::set<int> paths;
         if (!content.empty() || !directory.empty())
         {
           CVideoDatabase db;
-          std::set<std::string> contentPaths;
           if (db.Open())
-          {
-            if (!directory.empty())
-              contentPaths.insert(directory);
-            else
-              db.GetPaths(contentPaths);
-            for (const std::string& path : contentPaths)
-            {
-              if (db.GetContentForPath(path) == content)
-              {
-                paths.insert(db.GetPathId(path));
-                std::vector<std::pair<int, std::string>> sub;
-                if (db.GetSubPaths(path, sub))
-                {
-                  for (const auto& it : sub)
-                    paths.insert(it.first);
-                }
-              }
-            }
-          }
+            db.GetPathsForCleaning(directory, content, paths);
           if (paths.empty())
+          {
+            CLog::Log(LOGWARNING,
+                      "CleanLibrary: nothing to clean - '{}' does not resolve to any library path "
+                      "with content '{}'",
+                      directory.empty() ? "<library>" : directory,
+                      content.empty() ? "<any>" : content);
             return 0;
+          }
         }
 
         if (userInitiated)
@@ -120,7 +129,7 @@ static int ExportLibrary(const std::vector<std::string>& params)
   if (StringUtils::EqualsNoCase(params[0], "music"))
     iHeading = 20196;
   std::string path;
-  VECSOURCES shares;
+  std::vector<CMediaSource> shares;
   CServiceBroker::GetMediaManager().GetLocalDrives(shares);
   CServiceBroker::GetMediaManager().GetNetworkLocations(shares);
   CServiceBroker::GetMediaManager().GetRemovableDrives(shares);
@@ -135,8 +144,8 @@ static int ExportLibrary(const std::vector<std::string>& params)
   else
   {
     HELPERS::DialogResponse result = HELPERS::ShowYesNoDialogText(CVariant{iHeading}, CVariant{20426}, CVariant{20428}, CVariant{20429});
-    cancelled = result == HELPERS::DialogResponse::CANCELLED;
-    singleFile = result != HELPERS::DialogResponse::YES;
+    cancelled = result == HELPERS::DialogResponse::CHOICE_CANCELLED;
+    singleFile = result != HELPERS::DialogResponse::CHOICE_YES;
   }
 
   if (cancelled)
@@ -149,8 +158,8 @@ static int ExportLibrary(const std::vector<std::string>& params)
     else
     {
       HELPERS::DialogResponse result = HELPERS::ShowYesNoDialogText(CVariant{iHeading}, CVariant{20430});
-      cancelled = result == HELPERS::DialogResponse::CANCELLED;
-      thumbs = result == HELPERS::DialogResponse::YES;
+      cancelled = result == HELPERS::DialogResponse::CHOICE_CANCELLED;
+      thumbs = result == HELPERS::DialogResponse::CHOICE_YES;
     }
   }
 
@@ -164,7 +173,7 @@ static int ExportLibrary(const std::vector<std::string>& params)
     if (movieSetsInfoPath.empty())
     {
       auto result = HELPERS::ShowYesNoDialogText(CVariant{iHeading}, CVariant{36301});
-      cancelled = result != HELPERS::DialogResponse::YES;
+      cancelled = result != HELPERS::DialogResponse::CHOICE_YES;
     }
   }
 
@@ -178,8 +187,8 @@ static int ExportLibrary(const std::vector<std::string>& params)
     else
     {
       HELPERS::DialogResponse result = HELPERS::ShowYesNoDialogText(CVariant{iHeading}, CVariant{20436});
-      cancelled = result == HELPERS::DialogResponse::CANCELLED;
-      actorThumbs = result == HELPERS::DialogResponse::YES;
+      cancelled = result == HELPERS::DialogResponse::CHOICE_CANCELLED;
+      actorThumbs = result == HELPERS::DialogResponse::CHOICE_YES;
     }
   }
 
@@ -193,8 +202,8 @@ static int ExportLibrary(const std::vector<std::string>& params)
     else
     {
       HELPERS::DialogResponse result = HELPERS::ShowYesNoDialogText(CVariant{iHeading}, CVariant{20431});
-      cancelled = result == HELPERS::DialogResponse::CANCELLED;
-      overwrite = result == HELPERS::DialogResponse::YES;
+      cancelled = result == HELPERS::DialogResponse::CHOICE_CANCELLED;
+      overwrite = result == HELPERS::DialogResponse::CHOICE_YES;
     }
   }
 
@@ -204,8 +213,9 @@ static int ExportLibrary(const std::vector<std::string>& params)
   if (params.size() > 2)
     path=params[2];
   if (!singleFile || !path.empty() ||
-      CGUIDialogFileBrowser::ShowAndGetDirectory(shares, g_localizeStrings.Get(661),
-                                                 path, true))
+      CGUIDialogFileBrowser::ShowAndGetDirectory(
+          shares, CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(661), path,
+          true))
   {
     if (StringUtils::EqualsNoCase(params[0], "video"))
     {
@@ -218,11 +228,11 @@ static int ExportLibrary(const std::vector<std::string>& params)
     {
       CLibExportSettings settings;
       // ELIBEXPORT_SINGLEFILE, ELIBEXPORT_ALBUMS + ELIBEXPORT_ALBUMARTISTS by default
-      settings.m_strPath = path;
+      settings.SetPath(path);
       if (!singleFile)
         settings.SetExportType(ELIBEXPORT_TOLIBRARYFOLDER);
-      settings.m_artwork = thumbs;
-      settings.m_overwrite = overwrite;
+      settings.SetArtwork(thumbs);
+      settings.SetOverwrite(overwrite);
       // Export music library (not showing progress dialog)
       CMusicLibraryQueue::GetInstance().ExportLibrary(settings, false);
     }
@@ -251,27 +261,27 @@ static int ExportLibrary2(const std::vector<std::string>& params)
   CLibExportSettings settings;
   if (params.size() < 3)
     return -1;
-  settings.m_strPath = params[2];
+  settings.SetPath(params[2]);
   settings.SetExportType(ELIBEXPORT_SINGLEFILE);
   if (StringUtils::EqualsNoCase(params[1], "separate"))
     settings.SetExportType(ELIBEXPORT_SEPARATEFILES);
   else if (StringUtils::EqualsNoCase(params[1], "library"))
   {
     settings.SetExportType(ELIBEXPORT_TOLIBRARYFOLDER);
-    settings.m_strPath.clear();
+    settings.SetPath("");
   }
   settings.ClearItems();
 
   for (unsigned int i = 2; i < params.size(); i++)
   {
     if (StringUtils::EqualsNoCase(params[i], "artwork"))
-      settings.m_artwork = true;
+      settings.SetArtwork(true);
     else if (StringUtils::EqualsNoCase(params[i], "overwrite"))
-      settings.m_overwrite = true;
+      settings.SetOverwrite(true);
     else if (StringUtils::EqualsNoCase(params[i], "unscraped"))
-      settings.m_unscraped = true;
+      settings.SetUnscraped(true);
     else if (StringUtils::EqualsNoCase(params[i], "skipnfo"))
-      settings.m_skipnfo = true;
+      settings.SetSkipNfo(true);
     else if (StringUtils::EqualsNoCase(params[i], "albums"))
       settings.AddItem(ELIBEXPORT_ALBUMS);
     else if (StringUtils::EqualsNoCase(params[i], "albumartists"))
@@ -292,8 +302,9 @@ static int ExportLibrary2(const std::vector<std::string>& params)
   {
     CVideoDatabase videodatabase;
     videodatabase.Open();
-    videodatabase.ExportToXML(settings.m_strPath, settings.IsSingleFile(),
-      settings.m_artwork, settings.IsItemExported(ELIBEXPORT_ACTORTHUMBS), settings.m_overwrite);
+    videodatabase.ExportToXML(settings.GetPath(), settings.IsSingleFile(), settings.IsArtwork(),
+                              settings.IsItemExported(ELIBEXPORT_ACTORTHUMBS),
+                              settings.IsOverwrite());
     videodatabase.Close();
   }
   return 0;
@@ -339,6 +350,50 @@ static int SearchVideoLibrary(const std::vector<std::string>& params)
   CGUIMessage msg(GUI_MSG_SEARCH, 0, 0, 0);
   CServiceBroker::GetGUI()->GetWindowManager().SendMessage(msg, WINDOW_VIDEO_NAV);
 
+  return 0;
+}
+
+/*! \brief Rescrapes additional information for a given artist
+ *  \params params The parameters.
+ *  \details params[0] = "artist id"
+ */
+static int RefreshArtist(const std::vector<std::string>& params)
+{
+  // Checking if the artist id is passed
+  if (params.empty())
+    return -1;
+
+  // Set the artist id on the musicdb url
+  CMusicDbUrl musicUrl;
+  if (!musicUrl.FromString(KODI::MUSIC::DB_PATH::ARTISTS))
+    return -1;
+  musicUrl.AddOption("artistid", params.front());
+
+  // Start rescraping additional information for the given artist
+  CMusicLibraryQueue::GetInstance().StartScan(ADDON::ContentType::ARTISTS, musicUrl.ToString(),
+                                              true);
+  return 0;
+}
+
+/*! \brief Rescrapes additional information for a given album
+ *  \params params The parameters.
+ *  \details params[0] = "album id"
+ */
+static int RefreshAlbum(const std::vector<std::string>& params)
+{
+  // Checking if the album id is passed
+  if (params.empty())
+    return -1;
+
+  // Set the album id on the musicdb url
+  CMusicDbUrl musicUrl;
+  if (!musicUrl.FromString(KODI::MUSIC::DB_PATH::ALBUMS))
+    return -1;
+  musicUrl.AddOption("albumid", params.front());
+
+  // Start rescraping additional information for the given album
+  CMusicLibraryQueue::GetInstance().StartScan(ADDON::ContentType::ALBUMS, musicUrl.ToString(),
+                                              true);
   return 0;
 }
 
@@ -399,16 +454,31 @@ static int SearchVideoLibrary(const std::vector<std::string>& params)
 ///     ,
 ///     Brings up a search dialog which will search the library
 ///   }
+///   \table_row2_l{
+///     <b>`musiclibrary.refreshartist([artistId\])`</b>
+///     ,
+///     Rescrapes additional information for a given artist
+///     @param[in] artistId             Artist Id.
+///   }
+///   \table_row2_l{
+///     <b>`musiclibrary.refreshalbum([albumId\])`</b>
+///     ,
+///     Rescrapes additional information for a given album
+///     @param[in] albumId             Album Id.
+///   }
 ///  \table_end
 ///
 
 CBuiltins::CommandMap CLibraryBuiltins::GetOperations() const
 {
-  return {
-          {"cleanlibrary",        {"Clean the video/music library", 1, CleanLibrary}},
-          {"exportlibrary",       {"Export the video/music library", 1, ExportLibrary}},
-          {"exportlibrary2",      {"Export the video/music library", 1, ExportLibrary2}},
-          {"updatelibrary",       {"Update the selected library (music or video)", 1, UpdateLibrary}},
-          {"videolibrary.search", {"Brings up a search dialog which will search the library", 0, SearchVideoLibrary}}
-         };
+  return {{"cleanlibrary", {"Clean the video/music library", 1, CleanLibrary}},
+          {"exportlibrary", {"Export the video/music library", 1, ExportLibrary}},
+          {"exportlibrary2", {"Export the video/music library", 1, ExportLibrary2}},
+          {"updatelibrary", {"Update the selected library (music or video)", 1, UpdateLibrary}},
+          {"videolibrary.search",
+           {"Brings up a search dialog which will search the library", 0, SearchVideoLibrary}},
+          {"musiclibrary.refreshartist",
+           {"Rescrapes additional information for a given artist", 1, RefreshArtist}},
+          {"musiclibrary.refreshalbum",
+           {"Rescrapes additional information for a given album", 1, RefreshAlbum}}};
 }

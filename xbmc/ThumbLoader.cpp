@@ -9,21 +9,19 @@
 #include "ThumbLoader.h"
 
 #include "FileItem.h"
+#include "ServiceBroker.h"
 #include "TextureCache.h"
-#include "filesystem/File.h"
+#include "utils/ArtTypes.h"
+#include "utils/ArtUtils.h"
+#include "utils/FileUtils.h"
 
-using namespace XFILE;
+using namespace KODI;
 
-CThumbLoader::CThumbLoader() :
-  CBackgroundInfoLoader()
+CThumbLoader::CThumbLoader() : m_textureDatabase(std::make_unique<CTextureDatabase>())
 {
-  m_textureDatabase = new CTextureDatabase();
 }
 
-CThumbLoader::~CThumbLoader()
-{
-  delete m_textureDatabase;
-}
+CThumbLoader::~CThumbLoader() = default;
 
 void CThumbLoader::OnLoaderStart()
 {
@@ -51,6 +49,15 @@ void CThumbLoader::SetCachedImage(const CFileItem &item, const std::string &type
   if (!item.GetPath().empty() && m_textureDatabase->Open())
   {
     m_textureDatabase->SetTextureForPath(item.GetPath(), type, image);
+    m_textureDatabase->Close();
+  }
+}
+
+void CThumbLoader::ClearCachedImagePath(const CFileItem& item, const std::string& type)
+{
+  if (!item.GetPath().empty() && m_textureDatabase->Open())
+  {
+    m_textureDatabase->ClearTextureForPath(item.GetPath(), type);
     m_textureDatabase->Close();
   }
 }
@@ -83,23 +90,23 @@ bool CProgramThumbLoader::LoadItemLookup(CFileItem *pItem)
 bool CProgramThumbLoader::FillThumb(CFileItem &item)
 {
   // no need to do anything if we already have a thumb set
-  std::string thumb = item.GetArt("thumb");
+  std::string thumb = item.GetArt(ART::TYPE::THUMB);
 
   if (thumb.empty())
   { // see whether we have a cached image for this item
-    thumb = GetCachedImage(item, "thumb");
+    thumb = GetCachedImage(item, ART::TYPE::THUMB);
     if (thumb.empty())
     {
       thumb = GetLocalThumb(item);
       if (!thumb.empty())
-        SetCachedImage(item, "thumb", thumb);
+        SetCachedImage(item, ART::TYPE::THUMB, thumb);
     }
   }
 
   if (!thumb.empty())
   {
-    CTextureCache::GetInstance().BackgroundCacheImage(thumb);
-    item.SetArt("thumb", thumb);
+    CServiceBroker::GetTextureCache()->BackgroundCacheImage(thumb);
+    item.SetArt(ART::TYPE::THUMB, thumb);
   }
   return true;
 }
@@ -110,16 +117,16 @@ std::string CProgramThumbLoader::GetLocalThumb(const CFileItem &item)
     return "";
 
   // look for the thumb
-  if (item.m_bIsFolder)
+  if (item.IsFolder())
   {
-    std::string folderThumb = item.GetFolderThumb();
-    if (CFile::Exists(folderThumb))
+    const std::string folderThumb = ART::GetFolderThumb(item);
+    if (CFileUtils::Exists(folderThumb))
       return folderThumb;
   }
   else
   {
-    std::string fileThumb(item.GetTBNFile());
-    if (CFile::Exists(fileThumb))
+    std::string fileThumb(ART::GetTBNFile(item));
+    if (CFileUtils::Exists(fileThumb))
       return fileThumb;
   }
   return "";

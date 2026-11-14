@@ -34,7 +34,7 @@ public:
   void Quit();
   bool HasStructureChanged();
   void PendingResize(int width, int height);
-  void SetXRRFailSafeTimer(int millis);
+  void SetXRRFailSafeTimer(std::chrono::milliseconds duration);
 
 protected:
   XBMCKey LookupXbmcKeySym(KeySym keysym);
@@ -50,7 +50,7 @@ protected:
   int m_keymodState;
   bool m_structureChanged;
   int m_RREventBase;
-  XbmcThreads::EndTime m_xrrFailSafeTimer;
+  XbmcThreads::EndTime<> m_xrrFailSafeTimer;
   bool m_xrrEventPending;
   CWinSystemX11& m_winSystem;
 };

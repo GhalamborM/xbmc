@@ -12,17 +12,16 @@
 #include "GUIUserMessages.h"
 #include "ServiceBroker.h"
 #include "Util.h"
-#include "addons/AddonManager.h"
 #include "dialogs/GUIDialogKaiToast.h"
+#include "favourites/FavouritesService.h"
 #include "guilib/GUIComponent.h"
 #include "guilib/GUIWindowManager.h"
-#include "guilib/LocalizeStrings.h"
 #include "messaging/ApplicationMessenger.h"
 #include "profiles/ProfileManager.h"
+#include "resources/LocalizeStrings.h"
+#include "resources/ResourcesComponent.h"
 #include "settings/SettingsComponent.h"
 #include "utils/StringUtils.h"
-
-using namespace KODI::MESSAGING;
 
 /*! \brief Load a profile.
  *  \param params The parameters.
@@ -36,11 +35,11 @@ static int LoadProfile(const std::vector<std::string>& params)
   int index = profileManager->GetProfileIndex(params[0]);
   bool prompt = (params.size() == 2 && StringUtils::EqualsNoCase(params[1], "prompt"));
   bool bCanceled;
-  if (index >= 0
-      && (profileManager->GetMasterProfile().getLockMode() == LOCK_MODE_EVERYONE
-        || g_passwordManager.IsProfileLockUnlocked(index,bCanceled,prompt)))
+  if (index > INVALID_PROFILE_ID &&
+      (profileManager->GetMasterProfile().getLockMode() == LockMode::EVERYONE ||
+       g_passwordManager.IsProfileLockUnlocked(index, bCanceled, prompt)))
   {
-    CApplicationMessenger::GetInstance().PostMsg(TMSG_LOADPROFILE, index);
+    CServiceBroker::GetAppMessenger()->PostMsg(TMSG_LOADPROFILE, index);
   }
 
   return 0;
@@ -66,13 +65,27 @@ static int MasterMode(const std::vector<std::string>& params)
   {
     g_passwordManager.bMasterUser = false;
     g_passwordManager.LockSources(true);
-    CGUIDialogKaiToast::QueueNotification(CGUIDialogKaiToast::Warning, g_localizeStrings.Get(20052),g_localizeStrings.Get(20053));
+
+    // master mode turned OFF => refresh favourites due to possible visibility changes
+    CServiceBroker::GetFavouritesService().RefreshFavourites();
+
+    CGUIDialogKaiToast::QueueNotification(
+        CGUIDialogKaiToast::Warning,
+        CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(20052),
+        CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(20053));
   }
-  else if (g_passwordManager.IsMasterLockUnlocked(true))
+  else if (g_passwordManager.IsMasterLockUnlocked(true)) // prompt user for code
   {
     g_passwordManager.LockSources(false);
     g_passwordManager.bMasterUser = true;
-    CGUIDialogKaiToast::QueueNotification(CGUIDialogKaiToast::Warning, g_localizeStrings.Get(20052),g_localizeStrings.Get(20054));
+
+    // master mode turned ON => refresh favourites due to possible visibility changes
+    CServiceBroker::GetFavouritesService().RefreshFavourites();
+
+    CGUIDialogKaiToast::QueueNotification(
+        CGUIDialogKaiToast::Warning,
+        CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(20052),
+        CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(20054));
   }
 
   CUtil::DeleteVideoDatabaseDirectoryCache();

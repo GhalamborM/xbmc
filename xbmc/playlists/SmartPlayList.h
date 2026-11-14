@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2005-2018 Team Kodi
+ *  Copyright (C) 2005-2026 Team Kodi
  *  This file is part of Kodi - https://kodi.tv
  *
  *  SPDX-License-Identifier: GPL-2.0-or-later
@@ -12,13 +12,19 @@
 #include "utils/SortUtils.h"
 #include "utils/XBMCTinyXML.h"
 
-#include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
 
+class CGUIDialogSmartPlaylistEditor;
+class CGUIDialogMediaFilter;
 class CURL;
 class CVariant;
+enum class WatchedMode;
+
+namespace KODI::PLAYLIST
+{
 
 class CSmartPlaylistRule : public CDatabaseQueryRule
 {
@@ -40,12 +46,13 @@ public:
   static std::vector<Field> GetFields(const std::string &type);
   static std::vector<SortBy> GetOrders(const std::string &type);
   static std::vector<Field> GetGroups(const std::string &type);
-  FIELD_TYPE GetFieldType(int field) const override;
+  CDatabaseQueryRule::FieldType GetFieldType(int field) const override;
   static bool IsFieldBrowseable(int field);
 
   static bool Validate(const std::string &input, void *data);
   static bool ValidateRating(const std::string &input, void *data);
   static bool ValidateMyRating(const std::string &input, void *data);
+  static bool ValidateDate(const std::string& input, void* data);
 
 protected:
   std::string GetField(int field, const std::string& type) const override;
@@ -60,13 +67,17 @@ protected:
                                 const std::string &param,
                                 const CDatabase &db,
                                 const std::string &type) const override;
-  SEARCH_OPERATOR GetOperator(const std::string &type) const override;
+  SearchOperator GetOperator(const std::string& type) const override;
   std::string GetBooleanQuery(const std::string &negate,
                               const std::string &strType) const override;
 
 private:
   std::string GetVideoResolutionQuery(const std::string &parameter) const;
-  static std::string FormatLinkQuery(const char *field, const char *table, const MediaType& mediaType, const std::string& mediaField, const std::string& parameter);
+  static std::string FormatLinkQuery(const char* field,
+                                     const char* table,
+                                     KODI::MEDIA::TYPE mediaType,
+                                     const std::string& mediaField,
+                                     const std::string& parameter);
   std::string FormatYearQuery(const std::string& field,
                               const std::string& param,
                               const std::string& parameter) const;
@@ -78,13 +89,11 @@ public:
   CSmartPlaylistRuleCombination() = default;
   ~CSmartPlaylistRuleCombination() override = default;
 
-  std::string GetWhereClause(const CDatabase &db,
+  std::string GetWhereClause(const CDatabase& db,
                              const std::string& strType,
-                             std::set<std::string> &referencedPlaylists) const;
+                             std::set<std::string, std::less<>>& referencedPlaylists) const;
   void GetVirtualFolders(const std::string& strType,
-                         std::vector<std::string> &virtualFolders) const;
-
-  void AddRule(const CSmartPlaylistRule &rule);
+                         std::vector<std::string>& virtualFolders) const;
 };
 
 class CSmartPlaylist : public IDatabaseQueryRuleFactory
@@ -114,8 +123,16 @@ public:
   bool IsVideoType() const;
   bool IsMusicType() const;
 
-  void SetMatchAllRules(bool matchAll) { m_ruleCombination.SetType(matchAll ? CSmartPlaylistRuleCombination::CombinationAnd : CSmartPlaylistRuleCombination::CombinationOr); }
-  bool GetMatchAllRules() const { return m_ruleCombination.GetType() == CSmartPlaylistRuleCombination::CombinationAnd; }
+  void SetMatchAllRules(bool matchAll)
+  {
+    m_ruleCombination.SetType(matchAll ? CDatabaseQueryRuleCombination::Type::COMBINATION_AND
+                                       : CDatabaseQueryRuleCombination::Type::COMBINATION_OR);
+  }
+
+  bool GetMatchAllRules() const
+  {
+    return m_ruleCombination.GetType() == CDatabaseQueryRuleCombination::Type::COMBINATION_AND;
+  }
 
   void SetLimit(unsigned int limit) { m_limit = limit; }
   unsigned int GetLimit() const { return m_limit; }
@@ -124,9 +141,9 @@ public:
   SortBy GetOrder() const { return m_orderField; }
   void SetOrderAscending(bool orderAscending)
   {
-    m_orderDirection = orderAscending ? SortOrderAscending : SortOrderDescending;
+    m_orderDirection = orderAscending ? SortOrder::ASCENDING : SortOrder::DESCENDING;
   }
-  bool GetOrderAscending() const { return m_orderDirection != SortOrderDescending; }
+  bool GetOrderAscending() const { return m_orderDirection != SortOrder::DESCENDING; }
   SortOrder GetOrderDirection() const { return m_orderDirection; }
   void SetOrderAttributes(SortAttribute attributes) { m_orderAttributes = attributes; }
   SortAttribute GetOrderAttributes() const { return m_orderAttributes; }
@@ -136,6 +153,9 @@ public:
   void SetGroupMixed(bool mixed) { m_groupMixed = mixed; }
   bool IsGroupMixed() const { return m_groupMixed; }
 
+  std::optional<WatchedMode> GetWatchedMode() const { return m_watchedMode; }
+  void SetWatchedMode(std::optional<WatchedMode> mode) { m_watchedMode = mode; }
+
   /*! \brief get the where clause for a playlist
    We handle playlists inside playlists separately in order to ensure we don't introduce infinite loops
    by playlist A including playlist B which also (perhaps via other playlists) then includes playlistA.
@@ -144,7 +164,8 @@ public:
    \param referencedPlaylists a set of playlists to know when we reach a cycle
    \param needWhere whether we need to prepend the where clause with "WHERE "
    */
-  std::string GetWhereClause(const CDatabase &db, std::set<std::string> &referencedPlaylists) const;
+  std::string GetWhereClause(const CDatabase& db,
+                             std::set<std::string, std::less<>>& referencedPlaylists) const;
   void GetVirtualFolders(std::vector<std::string> &virtualFolders) const;
 
   std::string GetSaveLocation() const;
@@ -160,9 +181,10 @@ public:
   // rule creation
   CDatabaseQueryRule *CreateRule() const override;
   CDatabaseQueryRuleCombination *CreateCombination() const override;
+
 private:
-  friend class CGUIDialogSmartPlaylistEditor;
-  friend class CGUIDialogMediaFilter;
+  friend class ::CGUIDialogSmartPlaylistEditor;
+  friend class ::CGUIDialogMediaFilter;
 
   const TiXmlNode* readName(const TiXmlNode *root);
   const TiXmlNode* readNameFromPath(const CURL &url);
@@ -180,7 +202,9 @@ private:
   SortAttribute m_orderAttributes;
   std::string m_group;
   bool m_groupMixed;
+  std::optional<WatchedMode> m_watchedMode;
 
   CXBMCTinyXML m_xmlDoc;
 };
 
+} // namespace KODI::PLAYLIST

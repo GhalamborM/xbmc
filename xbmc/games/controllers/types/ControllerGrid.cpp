@@ -48,17 +48,14 @@ unsigned int CControllerGrid::AddPorts(const PortVec& ports, ControllerGrid& gri
 {
   unsigned int height = 0;
 
-  auto itKeyboard = std::find_if(ports.begin(), ports.end(), [](const CPortNode& port) {
-    return port.GetPortType() == PORT_TYPE::KEYBOARD;
-  });
+  auto itKeyboard = std::ranges::find_if(ports, [](const CPortNode& port)
+                                         { return port.GetPortType() == PORT_TYPE::KEYBOARD; });
 
-  auto itMouse = std::find_if(ports.begin(), ports.end(), [](const CPortNode& port) {
-    return port.GetPortType() == PORT_TYPE::MOUSE;
-  });
+  auto itMouse = std::ranges::find_if(ports, [](const CPortNode& port)
+                                      { return port.GetPortType() == PORT_TYPE::MOUSE; });
 
-  auto itController = std::find_if(ports.begin(), ports.end(), [](const CPortNode& port) {
-    return port.GetPortType() == PORT_TYPE::CONTROLLER;
-  });
+  auto itController = std::ranges::find_if(ports, [](const CPortNode& port)
+                                           { return port.GetPortType() == PORT_TYPE::CONTROLLER; });
 
   // Keyboard and mouse are not allowed to have ports because they might
   // overlap with controllers
@@ -147,7 +144,7 @@ unsigned int CControllerGrid::AddController(const CPortNode& port,
   vertex.bConnected = port.IsConnected();
   vertex.portType = port.GetPortType();
   vertex.controller = activeController.GetController();
-  vertex.address = activeController.GetAddress();
+  vertex.address = activeController.GetControllerAddress();
   for (const CControllerNode& node : port.GetCompatibleControllers())
     vertex.compatible.emplace_back(node.GetController());
   column.emplace_back(std::move(vertex));

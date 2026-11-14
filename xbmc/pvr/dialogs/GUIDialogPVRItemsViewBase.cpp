@@ -10,23 +10,28 @@
 
 #include "ContextMenuManager.h"
 #include "FileItem.h"
+#include "FileItemList.h"
 #include "ServiceBroker.h"
 #include "dialogs/GUIDialogContextMenu.h"
 #include "input/actions/Action.h"
 #include "input/actions/ActionIDs.h"
 #include "pvr/PVRManager.h"
-#include "pvr/guilib/PVRGUIActions.h"
+#include "pvr/guilib/PVRGUIActionsEPG.h"
 #include "view/ViewState.h"
 
 #include <utility>
 
-#define CONTROL_LIST 11
+namespace
+{
+constexpr unsigned int CONTROL_LIST = 11;
+
+} // unnamed namespace
 
 using namespace PVR;
 
 CGUIDialogPVRItemsViewBase::CGUIDialogPVRItemsViewBase(int id, const std::string& xmlFile)
-: CGUIDialog(id, xmlFile),
-  m_vecItems(new CFileItemList)
+  : CGUIDialog(id, xmlFile),
+    m_vecItems(std::make_unique<CFileItemList>())
 {
 }
 
@@ -42,11 +47,6 @@ void CGUIDialogPVRItemsViewBase::OnWindowUnload()
 {
   CGUIDialog::OnWindowUnload();
   m_viewControl.Reset();
-}
-
-void CGUIDialogPVRItemsViewBase::OnInitWindow()
-{
-  CGUIDialog::OnInitWindow();
 }
 
 void CGUIDialogPVRItemsViewBase::OnDeinitWindow(int nextWindowID)
@@ -86,7 +86,7 @@ CGUIControl* CGUIDialogPVRItemsViewBase::GetFirstFocusableControl(int id)
   return CGUIDialog::GetFirstFocusableControl(id);
 }
 
-void CGUIDialogPVRItemsViewBase::ShowInfo(int itemIdx)
+void CGUIDialogPVRItemsViewBase::ShowInfo(int itemIdx) const
 {
   if (itemIdx < 0 || itemIdx >= m_vecItems->Size())
     return;
@@ -95,12 +95,13 @@ void CGUIDialogPVRItemsViewBase::ShowInfo(int itemIdx)
   if (!item)
     return;
 
-  CServiceBroker::GetPVRManager().GUIActions()->ShowEPGInfo(item);
+  CServiceBroker::GetPVRManager().Get<PVR::GUI::EPG>().ShowEPGInfo(*item);
 }
 
 bool CGUIDialogPVRItemsViewBase::ContextMenu(int itemIdx)
 {
-  auto InRange = [](size_t i, std::pair<size_t, size_t> range){ return i >= range.first && i < range.second; };
+  auto InRange = [](size_t i, std::pair<size_t, size_t> range)
+  { return i >= range.first && i < range.second; };
 
   if (itemIdx < 0 || itemIdx >= m_vecItems->Size())
     return false;
@@ -112,13 +113,15 @@ bool CGUIDialogPVRItemsViewBase::ContextMenu(int itemIdx)
   CContextButtons buttons;
 
   // Add the global menu
-  const ContextMenuView globalMenu = CServiceBroker::GetContextMenuManager().GetItems(*item, CContextMenuManager::MAIN);
+  const ContextMenuView globalMenu =
+      CServiceBroker::GetContextMenuManager().GetItems(*item, CContextMenuManager::MAIN);
   auto globalMenuRange = std::make_pair(buttons.size(), buttons.size() + globalMenu.size());
   for (const auto& menu : globalMenu)
     buttons.emplace_back(~buttons.size(), menu->GetLabel(*item));
 
   // Add addon menus
-  const ContextMenuView addonMenu = CServiceBroker::GetContextMenuManager().GetAddonItems(*item, CContextMenuManager::MAIN);
+  const ContextMenuView addonMenu =
+      CServiceBroker::GetContextMenuManager().GetAddonItems(*item, CContextMenuManager::MAIN);
   auto addonMenuRange = std::make_pair(buttons.size(), buttons.size() + addonMenu.size());
   for (const auto& menu : addonMenu)
     buttons.emplace_back(~buttons.size(), menu->GetLabel(*item));

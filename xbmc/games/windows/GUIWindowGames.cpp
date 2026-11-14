@@ -8,10 +8,9 @@
 
 #include "GUIWindowGames.h"
 
-#include "Application.h"
 #include "FileItem.h"
+#include "FileItemList.h"
 #include "GUIPassword.h"
-#include "PlayListPlayer.h"
 #include "ServiceBroker.h"
 #include "URL.h"
 #include "Util.h"
@@ -19,11 +18,20 @@
 #include "dialogs/GUIDialogContextMenu.h"
 #include "dialogs/GUIDialogMediaSource.h"
 #include "dialogs/GUIDialogProgress.h"
-#include "games/addons/GameClient.h"
+#include "filesystem/FileDirectoryFactory.h"
+#include "games/GameServices.h"
+#include "games/GameSettings.h"
+#include "games/GameUtils.h"
+#include "games/library/GameNameParser.h"
+#include "games/tags/GameInfoTag.h"
 #include "guilib/GUIComponent.h"
 #include "guilib/GUIWindowManager.h"
 #include "guilib/WindowIDs.h"
+#include "input/actions/ActionIDs.h"
 #include "media/MediaLockState.h"
+#include "messaging/ApplicationMessenger.h"
+#include "playlists/PlayListFileItemClassify.h"
+#include "playlists/PlayListTypes.h"
 #include "settings/MediaSourceSettings.h"
 #include "settings/Settings.h"
 #include "settings/SettingsComponent.h"
@@ -34,10 +42,33 @@
 
 using namespace KODI;
 using namespace GAME;
+using KODI::MEDIA::MediaSection;
 
 #define CONTROL_BTNVIEWASICONS 2
 #define CONTROL_BTNSORTBY 3
 #define CONTROL_BTNSORTASC 4
+
+namespace
+{
+// "Legend of Zelda, The - A Link to the Past (USA, Europe).sfc" is "The Legend of
+// Zelda - A Link to the Past", released in the USA and Europe
+void SetInfoFromFileName(CGameInfoTag& tag, const std::string& path)
+{
+  const ParsedGameName name = CGameNameParser::ParsePath(path);
+  if (name.displayTitle.empty())
+    return;
+
+  tag.SetTitle(name.displayTitle);
+  if (name.year > 0)
+    tag.SetYear(static_cast<unsigned int>(name.year));
+  tag.SetPublisher(name.publisher);
+
+  std::vector<std::string> regions;
+  for (const GameRegion& region : name.regions)
+    regions.emplace_back(CGameNameParser::RegionName(region));
+  tag.SetRegion(StringUtils::Join(regions, ", "));
+}
+} // namespace
 
 CGUIWindowGames::CGUIWindowGames() : CGUIMediaWindow(WINDOW_GAMES, "MyGames.xml")
 {
@@ -49,13 +80,13 @@ bool CGUIWindowGames::OnMessage(CGUIMessage& message)
   {
     case GUI_MSG_WINDOW_INIT:
     {
-      m_rootDir.AllowNonLocalSources(true); //! @todo
+      m_rootDir.AllowNonLocalSources(true);
 
       // Is this the first time the window is opened?
       if (m_vecItems->GetPath() == "?" && message.GetStringParam().empty())
-        message.SetStringParam(CMediaSourceSettings::GetInstance().GetDefaultSource("games"));
+        message.SetStringParam(
+            CMediaSourceSettings::GetInstance().GetDefaultSource(MediaSection::GAMES));
 
-      //! @todo
       m_dlgProgress = CServiceBroker::GetGUI()->GetWindowManager().GetWindow<CGUIDialogProgress>(
           WINDOW_DIALOG_PROGRESS);
 
@@ -99,8 +130,11 @@ bool CGUIWindowGames::OnClickMsg(int controlId, int actionId)
     }
     case ACTION_PLAYER_PLAY:
     {
-      if (OnClick(iItem))
+      if (CanPlay(*pItem))
+      {
+        PlayGame(*pItem);
         return true;
+      }
       break;
     }
     case ACTION_SHOW_INFO:
@@ -141,24 +175,7 @@ bool CGUIWindowGames::OnClick(int iItem, const std::string& player /* = "" */)
   CFileItemPtr item = m_vecItems->Get(iItem);
   if (item)
   {
-    // Compensate for DIR_FLAG_NO_FILE_DIRS flag
-    if (URIUtils::IsArchive(item->GetPath()))
-    {
-      bool bIsGame = false;
-
-      // If zip file contains no games, assume it is a game
-      CFileItemList items;
-      if (m_rootDir.GetDirectory(CURL(item->GetPath()), items))
-      {
-        if (items.Size() == 0)
-          bIsGame = true;
-      }
-
-      if (!bIsGame)
-        item->m_bIsFolder = true;
-    }
-
-    if (!item->m_bIsFolder)
+    if (!item->IsFolder())
     {
       PlayGame(*item);
       return true;
@@ -177,13 +194,20 @@ void CGUIWindowGames::GetContextButtons(int itemNumber, CContextButtons& buttons
     if (m_vecItems->IsVirtualDirectoryRoot() || m_vecItems->IsSourcesPath())
     {
       // Context buttons for a sources path, like "Add Source", "Remove Source", etc.
-      CGUIDialogContextMenu::GetContextButtons("games", item, buttons);
+      CGUIDialogContextMenu::GetContextButtons(MediaSection::GAMES, item, buttons);
     }
     else
     {
-      if (item->IsGame())
+      if (CanPlay(*item))
       {
         buttons.Add(CONTEXT_BUTTON_PLAY_ITEM, 208); // Play
+      }
+
+      // Offered on folders as well as games: setting one on a folder is the
+      // point, and a game only overrides the folder it sits in
+      if (item->IsFolder() || CanPlay(*item))
+      {
+        buttons.Add(CONTEXT_BUTTON_SET_DEFAULT_EMULATOR, 35510); // "Default emulator"
       }
 
       if (CServiceBroker::GetSettingsComponent()->GetSettings()->GetBool(
@@ -206,7 +230,7 @@ bool CGUIWindowGames::OnContextButton(int itemNumber, CONTEXT_BUTTON button)
   {
     if (m_vecItems->IsVirtualDirectoryRoot() || m_vecItems->IsSourcesPath())
     {
-      if (CGUIDialogContextMenu::OnContextButton("games", item, button))
+      if (CGUIDialogContextMenu::OnContextButton(MediaSection::GAMES, item, button))
       {
         Update(m_vecItems->GetPath());
         return true;
@@ -216,6 +240,9 @@ bool CGUIWindowGames::OnContextButton(int itemNumber, CONTEXT_BUTTON button)
     {
       case CONTEXT_BUTTON_PLAY_ITEM:
         PlayGame(*item);
+        return true;
+      case CONTEXT_BUTTON_SET_DEFAULT_EMULATOR:
+        CGameUtils::ChooseAndSetDefaultGameClient(*item);
         return true;
       case CONTEXT_BUTTON_INFO:
         CGUIDialogAddonInfo::ShowForItem(item);
@@ -235,7 +262,7 @@ bool CGUIWindowGames::OnContextButton(int itemNumber, CONTEXT_BUTTON button)
 
 bool CGUIWindowGames::OnAddMediaSource()
 {
-  return CGUIDialogMediaSource::ShowAndAddMediaSource("games");
+  return CGUIDialogMediaSource::ShowAndAddMediaSource(MediaSection::GAMES);
 }
 
 bool CGUIWindowGames::GetDirectory(const std::string& strDirectory, CFileItemList& items)
@@ -243,12 +270,62 @@ bool CGUIWindowGames::GetDirectory(const std::string& strDirectory, CFileItemLis
   if (!CGUIMediaWindow::GetDirectory(strDirectory, items))
     return false;
 
+  // Now we must account for file folders not handled by DIR_FLAG_NO_FILE_DIRS
+  for (int i = 0; i < items.Size(); ++i)
+  {
+    CFileItemPtr item = items[i];
+    if (item->IsFolder() || !item->IsFileFolder(FileFolderType::ALWAYS))
+      continue;
+
+    const std::string originalPath = item->GetPath();
+
+    // This will turn the item into a file folder as a side effect
+    std::unique_ptr<XFILE::IFileDirectory> pDirectory{
+        XFILE::CFileDirectoryFactory::Create(CURL{originalPath}, item.get())};
+    if (pDirectory)
+    {
+      // Check for empty file folders
+      CFileItemList fileFolderItems;
+      if (!pDirectory->GetDirectory(item->GetURL(), fileFolderItems) || fileFolderItems.IsEmpty())
+      {
+        items.Remove(i);
+        --i;
+        continue;
+      }
+
+      // Check if file folder contains games or subfolders
+      if (std::ranges::any_of(fileFolderItems,
+                              [](const CFileItemPtr& fileFolderItem) {
+                                return fileFolderItem->IsFolder() ||
+                                       CGameUtils::HasGameExtension(fileFolderItem->GetPath());
+                              }))
+      {
+        continue;
+      }
+
+      // If the file folder contains no games, turn it back into a regular file
+      item->SetFolder(false);
+      item->SetPath(originalPath);
+    }
+    else
+    {
+      // File folder contains a single file and was collapsed down. Remove it
+      // if not a game.
+      if (!CGameUtils::HasGameExtension(item->GetPath()))
+      {
+        items.Remove(i);
+        --i;
+      }
+    }
+  }
+
   // Set label
   std::string label;
   if (items.GetLabel().empty())
   {
     std::string source;
-    if (m_rootDir.IsSource(items.GetPath(), CMediaSourceSettings::GetInstance().GetSources("games"),
+    if (m_rootDir.IsSource(items.GetPath(),
+                           &CMediaSourceSettings::GetInstance().GetSources(MediaSection::GAMES),
                            &source))
       label = std::move(source);
   }
@@ -270,11 +347,24 @@ bool CGUIWindowGames::GetDirectory(const std::string& strDirectory, CFileItemLis
   if (!content.empty())
     items.SetContent(content);
 
-  // Ensure a game info tag is created so that files are recognized as games
+  // Plugins and add-ons give their own titles
+  const bool namedByFile = !items.IsPlugin() && !items.IsAddonsPath();
+  const bool replaceLabels =
+      namedByFile && CServiceBroker::GetGameServices().GameSettings().ReplaceLabels();
+
   for (const CFileItemPtr& item : items)
   {
-    if (!item->m_bIsFolder)
-      item->GetGameInfoTag();
+    if (item->IsFolder())
+      continue;
+
+    // Ensure a game info tag is created so that files are recognized as games
+    CGameInfoTag& tag = *item->GetGameInfoTag();
+    if (namedByFile && tag.GetTitle().empty())
+    {
+      SetInfoFromFileName(tag, item->GetPath());
+      if (replaceLabels && !tag.GetTitle().empty())
+        item->SetLabel(tag.GetTitle());
+    }
   }
 
   return true;
@@ -290,16 +380,16 @@ std::string CGUIWindowGames::GetStartFolder(const std::string& dir)
   }
 
   SetupShares();
-  VECSOURCES shares;
+  std::vector<CMediaSource> shares;
   m_rootDir.GetSources(shares);
   bool bIsSourceName = false;
   int iIndex = CUtil::GetMatchingSource(dir, shares, bIsSourceName);
   if (iIndex >= 0)
   {
-    if (iIndex < static_cast<int>(shares.size()) && shares[iIndex].m_iHasLock == LOCK_STATE_LOCKED)
+    if (iIndex < static_cast<int>(shares.size()) && shares[iIndex].GetLockInfo().IsLocked())
     {
       CFileItem item(shares[iIndex]);
-      if (!g_passwordManager.IsItemUnlocked(&item, "games"))
+      if (!g_passwordManager.IsItemUnlocked(&item, MediaSection::GAMES))
         return "";
     }
     if (bIsSourceName)
@@ -321,20 +411,42 @@ void CGUIWindowGames::OnItemInfo(int itemNumber)
       CGUIDialogAddonInfo::ShowForItem(item);
   }
 
-  //! @todo
-  /*
-  CGUIDialogGameInfo* gameInfo =
-  CServiceBroker::GetGUI()->GetWindowManager().GetWindow<CGUIDialogGameInfo>(WINDOW_DIALOG_PICTURE_INFO);
-  if (gameInfo)
-  {
-    gameInfo->SetGame(item);
-    gameInfo->Open();
-  }
-  */
 }
 
 bool CGUIWindowGames::PlayGame(const CFileItem& item)
 {
   CFileItem itemCopy(item);
-  return g_application.PlayMedia(itemCopy, "", PLAYLIST_NONE);
+
+  // Dereference file folders. The check here assumes all "is folder" items
+  // passed CanPlay(), e.g. are definitely file folders.
+  if (itemCopy.IsFolder())
+  {
+    itemCopy.SetFolder(false);
+    itemCopy.SetPath(itemCopy.GetURL().GetHostName());
+    itemCopy.GetGameInfoTag();
+  }
+
+  PLAYLIST::Id playlistId = PLAYLIST::Id::TYPE_NONE;
+  if (PLAYLIST::IsPlayList(item))
+    playlistId = PLAYLIST::Id::TYPE_GAME;
+
+  CServiceBroker::GetAppMessenger()->PostMsg(
+      TMSG_APPLICATION_PLAY_MEDIA, static_cast<int>(playlistId), -1, new CFileItem(itemCopy), "");
+  return true;
+}
+
+bool CGUIWindowGames::CanPlay(const CFileItem& item) const
+{
+  if (item.IsGame())
+    return true;
+
+  if (item.IsFolder())
+  {
+    // Check for file folders
+    CURL url{item.GetPath()};
+    if (url.GetFileName().empty() && URIUtils::IsZIP(url.GetHostName()))
+      return true;
+  }
+
+  return false;
 }

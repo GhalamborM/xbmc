@@ -26,7 +26,7 @@ class CGUIControlGroup : public CGUIControlLookup
 public:
   CGUIControlGroup();
   CGUIControlGroup(int parentID, int controlID, float posX, float posY, float width, float height);
-  CGUIControlGroup(const CGUIControlGroup &from);
+  explicit CGUIControlGroup(const CGUIControlGroup& from);
   ~CGUIControlGroup(void) override;
   CGUIControlGroup* Clone() const override { return new CGUIControlGroup(*this); }
 
@@ -41,8 +41,9 @@ public:
   void FreeResources(bool immediately = false) override;
   void DynamicResourceAlloc(bool bOnOff) override;
   bool CanFocus() const override;
+  void AssignDepth() override;
 
-  EVENT_RESULT SendMouseEvent(const CPoint &point, const CMouseEvent &event) override;
+  EVENT_RESULT SendMouseEvent(const CPoint& point, const KODI::MOUSE::CMouseEvent& event) override;
   void UnfocusFromPoint(const CPoint &point) override;
 
   void SetInitialVisibility() override;
@@ -61,6 +62,7 @@ public:
   bool InsertControl(CGUIControl *control, const CGUIControl *insertPoint);
   virtual bool RemoveControl(const CGUIControl *control);
   virtual void ClearAll();
+  const std::vector<CGUIControl*>& GetChildren() const { return m_children; }
   void SetDefaultControl(int id, bool always)
   {
     m_defaultControl = id;

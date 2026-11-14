@@ -8,148 +8,236 @@
 
 #pragma once
 
+#include "utils/URI.h"
 #include "utils/UrlOptions.h"
 
 #include <stdlib.h>
 #include <string>
+#include <string_view>
 
 #ifdef TARGET_WINDOWS
 #undef SetPort // WIN32INCLUDES this is defined as SetPortA in WinSpool.h which is being included _somewhere_
 #endif
 
-class CURL
+class CURL final
 {
 public:
-  explicit CURL(const std::string& strURL)
-  {
-    Parse(strURL);
-  }
-
   CURL() = default;
-  virtual ~CURL(void);
+  CURL(const CURL&) = default;
+  CURL& operator=(const CURL&) = default;
+  /*! \brief Transfer all URI/compatibility state, leaving the source Reset(). */
+  CURL(CURL&& other);
+  CURL& operator=(CURL&& other);
+  explicit CURL(std::string strURL);
 
+  bool operator==(const CURL& url) const { return url.Get() == Get(); }
   // explicit equals operator for std::string comparison
-  bool operator==(const std::string &url) const { return Get() == url; }
+  friend bool operator==(const CURL& url, const std::string_view str) { return url.Get() == str; }
 
   void Reset();
-  void Parse(const std::string& strURL);
-  void SetFileName(const std::string& strFileName);
-  void SetHostName(const std::string& strHostName)
+  /*! \brief Interpret Kodi mixed native-path/URI input without a strict validity gate.
+   * \note Recognized drive prefixes and unknown authority-free schemes remain native;
+   *       use ParseURI for explicit URI intent. Legacy adapters retain
+   *       their normalization; new URI forms preserve spelling, including malformed bodies.
+   */
+  void Parse(std::string strURL);
+
+  /*! \brief Parse an explicit URI, including one-letter schemes.
+   * \return Generic syntax validity; malformed URIs remain lossless.
+   *         Input without a scheme resets the object and returns false.
+   */
+  bool ParseURI(std::string uri);
+
+  /*! \brief Store an explicitly native filename without URI detection or normalization.
+   * \note Clears all URI state; ?, #, +, % and colons remain filename bytes.
+   */
+  void ParseNativePath(std::string path);
+
+  /*! \brief Whether serialization preserves the source URI bytes, even if malformed. */
+  bool IsLosslessURI() const { return m_uri.has_value(); }
+
+  /*! \brief Whether this location supports filesystem-style path operations.
+   * \note Only absolute, authority-free magnet member paths are navigable.
+   */
+  bool SupportsPathOperations() const;
+
+  /*! \brief Whether path operations must retain the query as resource identity. */
+  bool PreservesQueryIdentity() const;
+
+  /*! \name Raw URI components
+   * Owned copies without decoding; safe across object mutation, copying and moving.
+   * Legacy adapters expose components of their current serialized spelling.
+   * Presence predicates distinguish absent components from present empty components.
+   * Native filenames have no URI authority, query or fragment.
+   * \{ */
+  std::string GetRawScheme() const;
+  std::string GetRawAuthority() const;
+  std::string GetRawPath() const;
+  std::string GetRawQuery() const;
+  std::string GetRawFragment() const;
+  bool HasAuthority() const;
+  bool HasQuery() const;
+  bool HasFragment() const;
+  /*! \} */
+
+  /*! \brief Copy raw bytes after the scheme colon and before the fragment delimiter.
+   * \return Includes the query and its delimiter; empty for native input.
+   */
+  std::string GetSchemeSpecificPart() const;
+
+  /*! \brief Borrow a lossless URI's scheme-specific bytes without allocation.
+   * \return Includes the query and its delimiter, excludes the fragment;
+   *         empty for native paths and legacy URLs.
+   * \note The view is invalidated by mutation, moving from, or destruction of this object.
+   */
+  std::string_view GetSchemeSpecificPartView() const
   {
-    m_strHostName = strHostName;
+    return m_uri ? m_uri->GetSchemeSpecificPart() : std::string_view{};
   }
 
-  void SetUserName(const std::string& strUserName)
+  /*! \brief Replace a lossless URI's raw path, preserving all other components.
+   * \return False without changes for unsupported policy or invalid path syntax.
+   * \note With an authority, paths must be empty or slash-prefixed; without one,
+   *       they cannot start with "//". Magnet paths must be empty or absolute.
+   */
+  bool SetURIPath(std::string path);
+
+  /*! \brief Replace the raw query of a lossless URI without a map or form decoding.
+   * \param query No value removes the delimiter; an empty value retains an empty ?.
+   * \return False without changes for legacy storage or invalid query syntax.
+   * \note Duplicate/empty fields, plus signs and percent-escape spelling are retained.
+   */
+  bool SetRawQuery(std::optional<std::string> query);
+  /*! \brief Replace the legacy filename or lossless navigable raw path.
+   * \note Non-file identifiers are unchanged. Use SetURIPath to observe failure.
+   *       Legacy authority/credential/port setters likewise leave lossless forms unchanged.
+   */
+  void SetFileName(std::string strFileName);
+  void SetHostName(std::string strHostName)
   {
-    m_strUserName = strUserName;
+    if (!m_uri)
+      m_strHostName = std::move(strHostName);
   }
 
-  void SetDomain(const std::string& strDomain)
+  void SetUserName(std::string strUserName)
   {
-    m_strDomain = strDomain;
+    if (!m_uri)
+      m_strUserName = std::move(strUserName);
   }
 
-  void SetPassword(const std::string& strPassword)
+  void SetDomain(std::string strDomain)
   {
-    m_strPassword = strPassword;
+    if (!m_uri)
+      m_strDomain = std::move(strDomain);
   }
 
-  void SetProtocol(const std::string& strProtocol);
-  void SetOptions(const std::string& strOptions);
-  void SetProtocolOptions(const std::string& strOptions);
+  void SetPassword(std::string strPassword)
+  {
+    if (!m_uri)
+      m_strPassword = std::move(strPassword);
+  }
+
+  /*! \brief Change the scheme, preserving component bytes for lossless forms.
+   * \note Invalid scheme tokens leave the object unchanged. An empty scheme switches
+   *       to native path bytes and clears URI state. Transitions to established scheme://
+   *       adapters reapply their normalization; authority-free forms remain lossless.
+   */
+  void SetProtocol(std::string strProtocol);
+  /*! \brief Set legacy options; lossless URI forms reject this operation unchanged.
+   * \note Legacy map/transport-option setters also reject lossless forms with a warning.
+   *       Read-only map access is empty for those forms; use raw component access instead.
+   */
+  void SetOptions(std::string strOptions);
+  void SetProtocolOptions(std::string strOptions);
   void SetPort(int port)
   {
-    m_iPort = port;
+    if (!m_uri)
+      m_iPort = port;
   }
 
-  bool HasPort() const
-  {
-    return (m_iPort != 0);
-  }
+  bool HasPort() const { return (m_iPort != 0); }
 
-  int GetPort() const
-  {
-    return m_iPort;
-  }
+  int GetPort() const { return m_iPort; }
 
-  const std::string& GetHostName() const
-  {
-    return m_strHostName;
-  }
+  const std::string& GetHostName() const { return m_strHostName; }
 
-  const std::string& GetDomain() const
-  {
-    return m_strDomain;
-  }
+  const std::string& GetDomain() const { return m_strDomain; }
 
-  const std::string& GetUserName() const
-  {
-    return m_strUserName;
-  }
+  const std::string& GetUserName() const { return m_strUserName; }
 
-  const std::string& GetPassWord() const
-  {
-    return m_strPassword;
-  }
+  const std::string& GetPassWord() const { return m_strPassword; }
 
-  const std::string& GetFileName() const
-  {
-    return m_strFileName;
-  }
+  /*! \brief Return the compatibility filename, or the raw path for navigable lossless URIs.
+   * \note Non-file identifiers have no filename, share or filetype. The reference
+   *       belongs to this object and may change on mutation; use GetRawPath for URI bodies.
+   */
+  const std::string& GetFileName() const { return m_strFileName; }
 
-  const std::string& GetProtocol() const
-  {
-    return m_strProtocol;
-  }
+  /*! \brief Return the normalized lower-case scheme; Get() retains lossless source spelling.
+   */
+  const std::string& GetProtocol() const { return m_strProtocol; }
 
-  const std::string GetTranslatedProtocol() const;
+  std::string GetTranslatedProtocol() const;
 
-  const std::string& GetFileType() const
-  {
-    return m_strFileType;
-  }
+  const std::string& GetFileType() const { return m_strFileType; }
 
-  const std::string& GetShareName() const
-  {
-      return m_strShareName;
-  }
+  const std::string& GetShareName() const { return m_strShareName; }
 
-  const std::string& GetOptions() const
-  {
-    return m_strOptions;
-  }
+  /*! \brief Return legacy options, or the raw lossless query including its leading ?.
+   * \note Lossless fragments are separate and the legacy options map remains empty.
+   *       This reference belongs to the object and may change on mutation.
+   */
+  const std::string& GetOptions() const { return m_strOptions; }
 
-  const std::string& GetProtocolOptions() const
-  {
-    return m_strProtocolOptions;
-  }
+  const std::string& GetProtocolOptions() const { return m_strProtocolOptions; }
 
-  const std::string GetFileNameWithoutPath() const; /* return the filename excluding path */
+  std::string GetFileNameWithoutPath() const; /* return the filename excluding path */
 
+  /*! \brief Return / for URI paths; native and legacy embedded filenames retain native separators.
+   */
   char GetDirectorySeparator() const;
 
+  /*! \brief Serialize with legacy normalization or exact lossless URI bytes. */
   std::string Get() const;
+  /*! \brief Serialize without legacy options, or without a lossless URI's query and fragment.
+   * \warning Explicitly discards query identity; structural navigation should use SetURIPath.
+   */
   std::string GetWithoutOptions() const;
+  /*! \brief Serialize without credentials, optionally replacing them with redaction labels.
+   * \param redact Also replaces data resources and their wrappers with bounded text when true.
+   * \note Non-redacted data retains its complete source. Raw URI components are not decoded.
+   */
   std::string GetWithoutUserDetails(bool redact = false) const;
+  /*! \brief Return the legacy filename prefix, or lossless URI bytes preceding the path.
+   * \return Empty for non-file identifiers; lossless query and fragment are omitted.
+   */
   std::string GetWithoutFilename() const;
   std::string GetRedacted() const;
-  static std::string GetRedacted(const std::string& path);
+  /*! \brief Redact credentials and complete data bodies, including malformed candidates.
+   * \note Kodi logging policy replaces a data resource, or an image, parent-in-hostname,
+   *       or stack wrapper containing one, with scheme:[REDACTED] without copying its body.
+   *       Get() and GetWithoutUserDetails(false) retain data bytes.
+   */
+  static std::string GetRedacted(std::string_view path);
+  /*! \brief Test Kodi local-location compatibility, not the presence of a URI authority.
+   * \note A new identifier without a hostname does not imply a native file or backend.
+   */
   bool IsLocal() const;
   bool IsLocalHost() const;
-  static bool IsFileOnly(const std::string &url); ///< return true if there are no directories in the url.
-  static bool IsFullPath(const std::string &url); ///< return true if the url includes the full path
-  static std::string Decode(const std::string& strURLData);
-  static std::string Encode(const std::string& strURLData);
+  /*! \brief Test Kodi absolute-location compatibility, independently of handler availability.
+   * \note Recognized identifiers and native roots qualify; drive-relative C:foo retains
+   *       its historical true result. Interior :// text does not create an outer scheme.
+   */
+  static bool IsFullPath(const std::string& url);
+  static std::string Decode(std::string_view strURLData);
+  static std::string Encode(std::string_view strURLData);
 
   /*! \brief Check whether a URL is a given URL scheme.
    Comparison is case-insensitive as per RFC1738
    \param type a lower-case scheme name, e.g. "smb".
    \return true if the url is of the given scheme, false otherwise.
    */
-  bool IsProtocol(const char *type) const
-  {
-    return IsProtocolEqual(m_strProtocol, type);
-  }
+  bool IsProtocol(std::string_view type) const { return IsProtocolEqual(m_strProtocol, type); }
 
   /*! \brief Check whether a URL protocol is a given URL scheme.
    Both parameters MUST be lower-case.  Typically this would be called using
@@ -158,7 +246,7 @@ public:
    \param type a lower-case scheme name, e.g. "smb".
    \return true if the url is of the given scheme, false otherwise.
    */
-  static bool IsProtocolEqual(const std::string& protocol, const char *type);
+  static bool IsProtocolEqual(const std::string& protocol, std::string_view type);
 
   /*! \brief Check whether a URL is a given filetype.
    Comparison is effectively case-insensitive as both the parameter
@@ -166,26 +254,64 @@ public:
    \param type a lower-case filetype, e.g. "mp3".
    \return true if the url is of the given filetype, false otherwise.
    */
-  bool IsFileType(const char *type) const
-  {
-    return m_strFileType == type;
-  }
+  bool IsFileType(std::string_view type) const { return m_strFileType == type; }
 
-  void GetOptions(std::map<std::string, std::string> &options) const;
-  bool HasOption(const std::string &key) const;
-  bool GetOption(const std::string &key, std::string &value) const;
-  std::string GetOption(const std::string &key) const;
-  void SetOption(const std::string &key, const std::string &value);
-  void RemoveOption(const std::string &key);
+  void GetOptions(std::map<std::string, std::string>& options) const;
+  bool HasOption(const std::string& key) const;
+  bool GetOption(const std::string& key, std::string& value) const;
+  std::string GetOption(const std::string& key) const;
+  void SetOption(const std::string& key, const std::string& value);
+  void RemoveOption(const std::string& key);
 
-  void GetProtocolOptions(std::map<std::string, std::string> &options) const;
-  bool HasProtocolOption(const std::string &key) const;
-  bool GetProtocolOption(const std::string &key, std::string &value) const;
-  std::string GetProtocolOption(const std::string &key) const;
-  void SetProtocolOption(const std::string &key, const std::string &value);
-  void RemoveProtocolOption(const std::string &key);
+  void GetProtocolOptions(std::map<std::string, std::string>& options) const;
+  bool HasProtocolOption(const std::string& key) const;
+  bool GetProtocolOption(const std::string& key, std::string& value) const;
+  std::string GetProtocolOption(const std::string& key) const;
+  void SetProtocolOption(const std::string& key, const std::string& value);
+  void RemoveProtocolOption(const std::string& key);
 
-protected:
+  bool HasExtension(std::string_view extensions) const;
+  std::string GetExtension() const;
+  bool IsStack() const;
+  bool IsMultiPath() const;
+  bool IsFavourite() const;
+  bool IsPlugin() const;
+  bool IsScript() const;
+  bool IsAddonsPath() const;
+  bool IsSourcesPath() const;
+  bool IsCDDA() const;
+  bool IsISO9660() const;
+  bool IsMusicDb() const;
+  bool IsVideoDb() const;
+  bool IsBlurayPath() const;
+  bool IsAndroidApp() const;
+  bool IsLibraryFolder() const;
+  bool IsUPnP() const;
+  bool IsAPK() const;
+  bool IsZIP() const; // also checks for comic books!
+  bool IsArchive() const;
+  bool IsCBZ() const;
+  bool IsCBR() const;
+  bool IsDiscImage() const;
+  bool IsPicture() const;
+
+  bool HasParentInHostname() const;
+  bool HasEncodedHostname() const;
+  bool HasEncodedFilename() const;
+
+  bool IsLibraryContent() const;
+
+  bool IsBDFile() const;
+  bool IsDVDFile() const;
+  bool IsOpticalMediaFile() const;
+
+private:
+  friend class CURIRedactor;
+
+  void StoreURI(std::string uri);
+  void UpdateURIProjection();
+  void UpdateFileName(std::string filename);
+  std::optional<CURI> m_uri;
   int m_iPort = 0;
   std::string m_strHostName;
   std::string m_strShareName;

@@ -10,25 +10,56 @@ set(HEADERS BaseRenderBuffer.h
             RenderBufferManager.h
 )
 
-if(OPENGL_FOUND OR OPENGLES_FOUND)
+if(TARGET ${APP_NAME_LC}::OpenGl)
+  list(APPEND SOURCES RenderBufferOpenGL.cpp
+                      RenderBufferPoolOpenGL.cpp)
+  list(APPEND HEADERS RenderBufferOpenGL.h
+                      RenderBufferPoolOpenGL.h)
+endif()
+
+if(TARGET ${APP_NAME_LC}::OpenGLES)
   list(APPEND SOURCES RenderBufferOpenGLES.cpp
                       RenderBufferPoolOpenGLES.cpp)
   list(APPEND HEADERS RenderBufferOpenGLES.h
                       RenderBufferPoolOpenGLES.h)
 endif()
 
-if(OPENGL_FOUND)
-  list(APPEND SOURCES RenderBufferOpenGL.cpp
-                      RenderBufferPoolOpenGL.cpp)
-  list(APPEND HEADERS RenderBufferOpenGL.cpp
-                      RenderBufferPoolOpenGL.cpp)
-endif()
-
-if(("gbm" IN_LIST CORE_PLATFORM_NAME_LC OR "wayland" IN_LIST CORE_PLATFORM_NAME_LC) AND EGL_FOUND)
+if(("gbm" IN_LIST CORE_PLATFORM_NAME_LC OR "wayland" IN_LIST CORE_PLATFORM_NAME_LC) AND TARGET ${APP_NAME_LC}::EGL)
   list(APPEND SOURCES RenderBufferDMA.cpp
                       RenderBufferPoolDMA.cpp)
   list(APPEND HEADERS RenderBufferDMA.h
                       RenderBufferPoolDMA.h)
+
+  if(TARGET ${APP_NAME_LC}::OpenGl)
+    list(APPEND SOURCES RenderBufferDMAOpenGL.cpp
+                        RenderBufferPoolDMAOpenGL.cpp)
+    list(APPEND HEADERS RenderBufferDMAOpenGL.h
+                        RenderBufferPoolDMAOpenGL.h)
+  endif()
+
+  if(TARGET ${APP_NAME_LC}::OpenGLES)
+    list(APPEND SOURCES RenderBufferDMAOpenGLES.cpp
+                        RenderBufferPoolDMAOpenGLES.cpp)
+    list(APPEND HEADERS RenderBufferDMAOpenGLES.h
+                        RenderBufferPoolDMAOpenGLES.h)
+  endif()
+endif()
+
+# GPU capture requires framebuffer blits and fence syncs (desktop GL or GLES3).
+set(FBO_GL_SUPPORTED FALSE)
+if(TARGET ${APP_NAME_LC}::OpenGl)
+  set(FBO_GL_SUPPORTED TRUE)
+elseif(TARGET ${APP_NAME_LC}::OpenGLES)
+  get_target_property(FBO_GLES_DEFS ${APP_NAME_LC}::OpenGLES INTERFACE_COMPILE_DEFINITIONS)
+  if(FBO_GLES_DEFS MATCHES "HAS_GLES=3")
+    set(FBO_GL_SUPPORTED TRUE)
+  endif()
+endif()
+if(FBO_GL_SUPPORTED AND (TARGET ${APP_NAME_LC}::EGL OR CORE_SYSTEM_NAME STREQUAL "osx"))
+  list(APPEND SOURCES RenderBufferFBO.cpp
+                      RenderBufferPoolFBO.cpp)
+  list(APPEND HEADERS RenderBufferFBO.h
+                      RenderBufferPoolFBO.h)
 endif()
 
 core_add_library(rp-buffers)

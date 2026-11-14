@@ -8,11 +8,12 @@
 
 #include "DialogGameVideoSelect.h"
 
-#include "Application.h"
 #include "FileItem.h"
+#include "FileItemList.h"
 #include "ServiceBroker.h"
 #include "cores/RetroPlayer/guibridge/GUIGameRenderManager.h"
 #include "cores/RetroPlayer/guibridge/GUIGameVideoHandle.h"
+#include "games/dialogs/DialogGameDefines.h"
 #include "guilib/GUIBaseContainer.h"
 #include "guilib/GUIComponent.h"
 #include "guilib/GUIMessage.h"
@@ -28,10 +29,6 @@
 
 using namespace KODI;
 using namespace GAME;
-
-#define CONTROL_HEADING 1
-#define CONTROL_THUMBS 11
-#define CONTROL_DESCRIPTION 12
 
 CDialogGameVideoSelect::CDialogGameVideoSelect(int windowId)
   : CGUIDialog(windowId, "DialogSelect.xml"),
@@ -77,24 +74,51 @@ bool CDialogGameVideoSelect::OnMessage(CGUIMessage& message)
     case GUI_MSG_CLICKED:
     {
       const int actionId = message.GetParam1();
+      const int controlId = message.GetSenderId();
+      if (!m_viewControl->HasControl(controlId))
+        break;
+
+      const int selectedItem = m_viewControl->GetSelectedItem();
+      if (selectedItem < 0)
+        break;
+
+      OnItemFocus(static_cast<unsigned int>(selectedItem));
+
       if (actionId == ACTION_SELECT_ITEM || actionId == ACTION_MOUSE_LEFT_CLICK)
       {
-        const int controlId = message.GetSenderId();
-        if (m_viewControl->HasControl(controlId))
-        {
-          using namespace MESSAGING;
-
-          // Changed from sending ACTION_SHOW_OSD to closing the dialog
-          Close();
-
+        if (OnClickAction())
           return true;
-        }
       }
+      else if (actionId == ACTION_CONTEXT_MENU || actionId == ACTION_MOUSE_RIGHT_CLICK)
+      {
+        if (OnMenuAction())
+          return true;
+      }
+      else if (actionId == ACTION_CREATE_BOOKMARK)
+      {
+        if (OnOverwriteAction())
+          return true;
+      }
+      else if (actionId == ACTION_RENAME_ITEM)
+      {
+        if (OnRenameAction())
+          return true;
+      }
+      else if (actionId == ACTION_DELETE_ITEM)
+      {
+        if (OnDeleteAction())
+          return true;
+      }
+
       break;
     }
     case GUI_MSG_REFRESH_LIST:
     {
-      OnRefreshList();
+      if (message.GetControlId() == CONTROL_VIDEO_THUMBS)
+      {
+        RefreshList();
+        return true;
+      }
       break;
     }
     default:
@@ -106,7 +130,7 @@ bool CDialogGameVideoSelect::OnMessage(CGUIMessage& message)
 
 void CDialogGameVideoSelect::FrameMove()
 {
-  CGUIBaseContainer* thumbs = dynamic_cast<CGUIBaseContainer*>(GetControl(CONTROL_THUMBS));
+  CGUIBaseContainer* thumbs = dynamic_cast<CGUIBaseContainer*>(GetControl(CONTROL_VIDEO_THUMBS));
   if (thumbs != nullptr)
     OnItemFocus(thumbs->GetSelectedItem());
 
@@ -118,7 +142,7 @@ void CDialogGameVideoSelect::OnWindowLoaded()
   CGUIDialog::OnWindowLoaded();
 
   m_viewControl->SetParentWindow(GetID());
-  m_viewControl->AddView(GetControl(CONTROL_THUMBS));
+  m_viewControl->AddView(GetControl(CONTROL_VIDEO_THUMBS));
 }
 
 void CDialogGameVideoSelect::OnWindowUnload()
@@ -136,11 +160,11 @@ void CDialogGameVideoSelect::OnInitWindow()
 
   Update();
 
-  CGUIMessage msg(GUI_MSG_SETFOCUS, GetID(), CONTROL_THUMBS);
+  CGUIMessage msg(GUI_MSG_SETFOCUS, GetID(), CONTROL_VIDEO_THUMBS);
   OnMessage(msg);
 
   std::string heading = GetHeading();
-  SET_CONTROL_LABEL(CONTROL_HEADING, heading);
+  SET_CONTROL_LABEL(CONTROL_VIDEO_HEADING, heading);
 
   FrameMove();
 }
@@ -167,7 +191,7 @@ void CDialogGameVideoSelect::Update()
   // Empty the list ready for population
   Clear();
 
-  OnRefreshList();
+  RefreshList();
 
   // CServiceBroker::GetWinSystem()->GetGfxContext().Unlock();
 }
@@ -178,7 +202,7 @@ void CDialogGameVideoSelect::Clear()
   m_vecItems->Clear();
 }
 
-void CDialogGameVideoSelect::OnRefreshList()
+void CDialogGameVideoSelect::RefreshList()
 {
   m_vecItems->Clear();
 
@@ -189,6 +213,10 @@ void CDialogGameVideoSelect::OnRefreshList()
   auto focusedIndex = GetFocusedItem();
   m_viewControl->SetSelectedItem(focusedIndex);
   OnItemFocus(focusedIndex);
+
+  // Refresh the panel container
+  CGUIMessage message(GUI_MSG_REFRESH_THUMBS, GetID(), CONTROL_VIDEO_THUMBS);
+  CServiceBroker::GetGUI()->GetWindowManager().SendThreadMessage(message, GetID());
 }
 
 void CDialogGameVideoSelect::SaveSettings()
@@ -205,7 +233,7 @@ void CDialogGameVideoSelect::SaveSettings()
 
 void CDialogGameVideoSelect::OnDescriptionChange(const std::string& description)
 {
-  CGUIMessage msg(GUI_MSG_LABEL_SET, GetID(), CONTROL_DESCRIPTION);
+  CGUIMessage msg(GUI_MSG_LABEL_SET, GetID(), CONTROL_VIDEO_THUMBS);
   msg.SetLabel(description);
   CServiceBroker::GetGUI()->GetWindowManager().SendThreadMessage(msg, GetID());
 }

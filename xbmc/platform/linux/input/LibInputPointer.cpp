@@ -8,14 +8,14 @@
 
 #include "LibInputPointer.h"
 
-#include "AppInboundProtocol.h"
 #include "ServiceBroker.h"
+#include "application/AppInboundProtocol.h"
 #include "input/mouse/MouseStat.h"
 #include "utils/log.h"
 #include "windowing/GraphicContext.h"
+#include "windowing/WinSystem.h"
 
 #include <algorithm>
-#include <string.h>
 
 #include <linux/input.h>
 

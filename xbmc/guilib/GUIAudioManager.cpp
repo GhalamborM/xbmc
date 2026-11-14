@@ -11,29 +11,31 @@
 #include "ServiceBroker.h"
 #include "addons/AddonManager.h"
 #include "addons/Skin.h"
+#include "addons/addoninfo/AddonType.h"
 #include "cores/AudioEngine/Interfaces/AE.h"
 #include "filesystem/Directory.h"
-#include "input/Key.h"
 #include "input/WindowTranslator.h"
+#include "input/actions/Action.h"
 #include "input/actions/ActionIDs.h"
 #include "input/actions/ActionTranslator.h"
 #include "settings/Settings.h"
 #include "settings/SettingsComponent.h"
 #include "settings/lib/Setting.h"
-#include "threads/SingleLock.h"
 #include "utils/URIUtils.h"
-#include "utils/XBMCTinyXML.h"
+#include "utils/XBMCTinyXML2.h"
 #include "utils/log.h"
 
-CGUIAudioManager::CGUIAudioManager()
-{
-  m_settings = CServiceBroker::GetSettingsComponent()->GetSettings();
+#include <mutex>
 
+using namespace KODI;
+
+CGUIAudioManager::CGUIAudioManager()
+  : m_settings(CServiceBroker::GetSettingsComponent()->GetSettings())
+{
   m_bEnabled = false;
 
-  m_settings->RegisterCallback(this, {
-    CSettings::SETTING_LOOKANDFEEL_SOUNDSKIN,
-  });
+  m_settings->RegisterCallback(this, {CSettings::SETTING_LOOKANDFEEL_SOUNDSKIN,
+                                      CSettings::SETTING_AUDIOOUTPUT_GUISOUNDVOLUME});
 }
 
 CGUIAudioManager::~CGUIAudioManager()
@@ -69,6 +71,11 @@ bool CGUIAudioManager::OnSettingUpdate(const std::shared_ptr<CSetting>& setting,
     else if (std::static_pointer_cast<CSettingString>(setting)->GetValue() == "OFF")
       std::static_pointer_cast<CSettingString>(setting)->SetValue("");
   }
+  if (setting->GetId() == CSettings::SETTING_AUDIOOUTPUT_GUISOUNDVOLUME)
+  {
+    int vol = m_settings->GetInt(CSettings::SETTING_AUDIOOUTPUT_GUISOUNDVOLUME);
+    SetVolume(0.01f * vol);
+  }
   return true;
 }
 
@@ -79,13 +86,13 @@ void CGUIAudioManager::Initialize()
 
 void CGUIAudioManager::DeInitialize()
 {
-  CSingleLock lock(m_cs);
+  std::unique_lock lock(m_cs);
   UnLoad();
 }
 
 void CGUIAudioManager::Stop()
 {
-  CSingleLock lock(m_cs);
+  std::unique_lock lock(m_cs);
   for (const auto& windowSound : m_windowSoundMap)
   {
     if (windowSound.second.initSound)
@@ -103,7 +110,7 @@ void CGUIAudioManager::Stop()
 // \brief Play a sound associated with a CAction
 void CGUIAudioManager::PlayActionSound(const CAction& action)
 {
-  CSingleLock lock(m_cs);
+  std::unique_lock lock(m_cs);
 
   // it's not possible to play gui sounds when passthrough is active
   if (!m_bEnabled)
@@ -114,14 +121,18 @@ void CGUIAudioManager::PlayActionSound(const CAction& action)
     return;
 
   if (it->second)
+  {
+    int vol = m_settings->GetInt(CSettings::SETTING_AUDIOOUTPUT_GUISOUNDVOLUME);
+    it->second->SetVolume(0.01f * vol);
     it->second->Play();
+  }
 }
 
 // \brief Play a sound associated with a window and its event
 // Events: SOUND_INIT, SOUND_DEINIT
 void CGUIAudioManager::PlayWindowSound(int id, WINDOW_SOUND event)
 {
-  CSingleLock lock(m_cs);
+  std::unique_lock lock(m_cs);
 
   // it's not possible to play gui sounds when passthrough is active
   if (!m_bEnabled)
@@ -145,13 +156,15 @@ void CGUIAudioManager::PlayWindowSound(int id, WINDOW_SOUND event)
   if (!sound)
     return;
 
+  int vol = m_settings->GetInt(CSettings::SETTING_AUDIOOUTPUT_GUISOUNDVOLUME);
+  sound->SetVolume(0.01f * vol);
   sound->Play();
 }
 
 // \brief Play a sound given by filename
 void CGUIAudioManager::PlayPythonSound(const std::string& strFileName, bool useCached /*= true*/)
 {
-  CSingleLock lock(m_cs);
+  std::unique_lock lock(m_cs);
 
   // it's not possible to play gui sounds when passthrough is active
   if (!m_bEnabled)
@@ -177,6 +190,8 @@ void CGUIAudioManager::PlayPythonSound(const std::string& strFileName, bool useC
   if (!sound)
     return;
 
+  int vol = m_settings->GetInt(CSettings::SETTING_AUDIOOUTPUT_GUISOUNDVOLUME);
+  sound->SetVolume(0.01f * vol);
   sound->Play();
   m_pythonSounds.emplace(strFileName, std::move(sound));
 }
@@ -198,8 +213,8 @@ std::string GetSoundSkinPath()
     return "";
 
   ADDON::AddonPtr addon;
-  if (!CServiceBroker::GetAddonMgr().GetAddon(value, addon, ADDON::ADDON_RESOURCE_UISOUNDS,
-                                              ADDON::OnlyEnabled::YES))
+  if (!CServiceBroker::GetAddonMgr().GetAddon(value, addon, ADDON::AddonType::RESOURCE_UISOUNDS,
+                                              ADDON::OnlyEnabled::CHOICE_YES))
   {
     CLog::Log(LOGINFO, "Unknown sounds addon '{}'. Setting default sounds.", value);
     setting->Reset();
@@ -211,7 +226,7 @@ std::string GetSoundSkinPath()
 // \brief Load the config file (sounds.xml) for nav sounds
 bool CGUIAudioManager::Load()
 {
-  CSingleLock lock(m_cs);
+  std::unique_lock lock(m_cs);
   UnLoad();
 
   m_strMediaDir = GetSoundSkinPath();
@@ -222,18 +237,18 @@ bool CGUIAudioManager::Load()
   std::string strSoundsXml = URIUtils::AddFileToFolder(m_strMediaDir, "sounds.xml");
 
   //  Load our xml file
-  CXBMCTinyXML xmlDoc;
+  CXBMCTinyXML2 xmlDoc;
 
   CLog::Log(LOGINFO, "Loading {}", strSoundsXml);
 
   //  Load the config file
   if (!xmlDoc.LoadFile(strSoundsXml))
   {
-    CLog::Log(LOGINFO, "{}, Line {}\n{}", strSoundsXml, xmlDoc.ErrorRow(), xmlDoc.ErrorDesc());
+    CLog::Log(LOGINFO, "{}, Line {}\n{}", strSoundsXml, xmlDoc.ErrorLineNum(), xmlDoc.ErrorStr());
     return false;
   }
 
-  TiXmlElement* pRoot = xmlDoc.RootElement();
+  const tinyxml2::XMLElement* pRoot = xmlDoc.RootElement();
   std::string strValue = pRoot->Value();
   if ( strValue != "sounds")
   {
@@ -242,21 +257,21 @@ bool CGUIAudioManager::Load()
   }
 
   //  Load sounds for actions
-  TiXmlElement* pActions = pRoot->FirstChildElement("actions");
+  const tinyxml2::XMLElement* pActions = pRoot->FirstChildElement("actions");
   if (pActions)
   {
-    TiXmlNode* pAction = pActions->FirstChild("action");
+    const tinyxml2::XMLNode* pAction = pActions->FirstChildElement("action");
 
     while (pAction)
     {
-      TiXmlNode* pIdNode = pAction->FirstChild("name");
+      const tinyxml2::XMLNode* pIdNode = pAction->FirstChildElement("name");
       unsigned int id = ACTION_NONE;    // action identity
       if (pIdNode && pIdNode->FirstChild())
       {
-        CActionTranslator::TranslateString(pIdNode->FirstChild()->Value(), id);
+        ACTION::CActionTranslator::TranslateString(pIdNode->FirstChild()->Value(), id);
       }
 
-      TiXmlNode* pFileNode = pAction->FirstChild("file");
+      const tinyxml2::XMLNode* pFileNode = pAction->FirstChildElement("file");
       std::string strFile;
       if (pFileNode && pFileNode->FirstChild())
         strFile += pFileNode->FirstChild()->Value();
@@ -274,16 +289,16 @@ bool CGUIAudioManager::Load()
   }
 
   //  Load window specific sounds
-  TiXmlElement* pWindows = pRoot->FirstChildElement("windows");
+  const tinyxml2::XMLElement* pWindows = pRoot->FirstChildElement("windows");
   if (pWindows)
   {
-    TiXmlNode* pWindow = pWindows->FirstChild("window");
+    const tinyxml2::XMLNode* pWindow = pWindows->FirstChildElement("window");
 
     while (pWindow)
     {
       int id = 0;
 
-      TiXmlNode* pIdNode = pWindow->FirstChild("name");
+      const tinyxml2::XMLNode* pIdNode = pWindow->FirstChildElement("name");
       if (pIdNode)
       {
         if (pIdNode->FirstChild())
@@ -306,7 +321,7 @@ bool CGUIAudioManager::Load()
 
 std::shared_ptr<IAESound> CGUIAudioManager::LoadSound(const std::string& filename)
 {
-  CSingleLock lock(m_cs);
+  std::unique_lock lock(m_cs);
   const auto it = m_soundCache.find(filename);
   if (it != m_soundCache.end())
   {
@@ -331,13 +346,13 @@ std::shared_ptr<IAESound> CGUIAudioManager::LoadSound(const std::string& filenam
 }
 
 // \brief Load a window node of the config file (sounds.xml)
-std::shared_ptr<IAESound> CGUIAudioManager::LoadWindowSound(TiXmlNode* pWindowNode,
+std::shared_ptr<IAESound> CGUIAudioManager::LoadWindowSound(const tinyxml2::XMLNode* pWindowNode,
                                                             const std::string& strIdentifier)
 {
   if (!pWindowNode)
     return NULL;
 
-  TiXmlNode* pFileNode = pWindowNode->FirstChild(strIdentifier);
+  const tinyxml2::XMLNode* pFileNode = pWindowNode->FirstChildElement(strIdentifier.c_str());
   if (pFileNode && pFileNode->FirstChild())
     return LoadSound(URIUtils::AddFileToFolder(m_strMediaDir, pFileNode->FirstChild()->Value()));
 
@@ -351,14 +366,14 @@ void CGUIAudioManager::Enable(bool bEnable)
   if (CServiceBroker::GetSettingsComponent()->GetSettings()->GetString(CSettings::SETTING_LOOKANDFEEL_SOUNDSKIN).empty())
     bEnable = false;
 
-  CSingleLock lock(m_cs);
+  std::unique_lock lock(m_cs);
   m_bEnabled = bEnable;
 }
 
 // \brief Sets the volume of all playing sounds
 void CGUIAudioManager::SetVolume(float level)
 {
-  CSingleLock lock(m_cs);
+  std::unique_lock lock(m_cs);
 
   {
     for (const auto& actionSound : m_actionSoundMap)

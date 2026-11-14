@@ -10,13 +10,15 @@
 
 #include "GUIInfoManager.h"
 #include "GUIMessage.h"
+#include "ServiceBroker.h"
 #include "guilib/GUIComponent.h"
 #include "guilib/guiinfo/GUIInfoLabels.h"
 #include "utils/MathUtils.h"
-#include "utils/StringUtils.h"
-#include "utils/XBMCTinyXML.h"
+#include "windowing/WinSystem.h"
 
 #include <algorithm>
+
+#include <tinyxml.h>
 
 using namespace KODI::GUILIB;
 
@@ -46,12 +48,11 @@ CGUITextBox::CGUITextBox(int parentID, int controlID, float posX, float posY, fl
     SetMonoFont(labelInfoMono->font);
 }
 
-CGUITextBox::CGUITextBox(const CGUITextBox &from)
-: CGUIControl(from), CGUITextLayout(from)
+CGUITextBox::CGUITextBox(const CGUITextBox& from)
+  : CGUIControl(from), CGUITextLayout(from), m_autoScrollCondition(from.m_autoScrollCondition)
 {
   m_pageControl = from.m_pageControl;
   m_scrollTime = from.m_scrollTime;
-  m_autoScrollCondition = from.m_autoScrollCondition;
   m_autoScrollTime = from.m_autoScrollTime;
   m_autoScrollDelay = from.m_autoScrollDelay;
   m_minHeight = from.m_minHeight;
@@ -129,7 +130,7 @@ void CGUITextBox::Process(unsigned int currentTime, CDirtyRegionList &dirtyregio
   // update our auto-scrolling as necessary
   if (m_autoScrollTime && m_lines.size() > m_itemsPerPage)
   {
-    if (!m_autoScrollCondition || m_autoScrollCondition->Get())
+    if (!m_autoScrollCondition || m_autoScrollCondition->Get(INFO::DEFAULT_CONTEXT))
     {
       if (m_lastRenderTime)
         m_autoScrollDelayTime += currentTime - m_lastRenderTime;
@@ -198,6 +199,10 @@ void CGUITextBox::Process(unsigned int currentTime, CDirtyRegionList &dirtyregio
 
 void CGUITextBox::Render()
 {
+  if (CServiceBroker::GetWinSystem()->GetGfxContext().GetRenderOrder() ==
+      RENDER_ORDER_FRONT_TO_BACK)
+    return;
+
   // render the repeat anim as appropriate
   if (m_autoScrollRepeatAnim)
     CServiceBroker::GetWinSystem()->GetGfxContext().SetTransform(m_cachedTextMatrix);
@@ -228,8 +233,6 @@ void CGUITextBox::Render()
     // alignment correction
     if (alignment & XBFONT_CENTER_X)
       posX += m_width * 0.5f;
-    if (alignment & XBFONT_RIGHT)
-      posX += m_width;
 
     if (m_font)
     {
@@ -237,15 +240,19 @@ void CGUITextBox::Render()
       int current = offset;
 
       // set the main text color
-      if (m_colors.size())
+      if (!m_colors.empty())
         m_colors[0] = m_label.textColor;
 
       while (posY < m_posY + m_renderHeight && current < (int)m_lines.size())
       {
+        const CGUIString& lineString = m_lines[current];
         uint32_t align = alignment;
-        if (m_lines[current].m_text.size() && m_lines[current].m_carriageReturn)
+
+        if (!lineString.m_text.empty() && lineString.m_carriageReturn)
           align &= ~XBFONT_JUSTIFIED; // last line of a paragraph shouldn't be justified
-        m_font->DrawText(posX, posY, m_colors, m_label.shadowColor, m_lines[current].m_text, align, m_width);
+
+        m_font->DrawVScrollingText(posX, posY, m_colors, m_label.shadowColor, lineString.m_text,
+                                   align, m_width, m_scrollSpeed != 0.0f);
         posY += m_itemHeight;
         current++;
       }
@@ -388,6 +395,12 @@ void CGUITextBox::ResetAutoScrolling()
     m_autoScrollRepeatAnim->ResetAnimation();
 }
 
+void CGUITextBox::AssignDepth()
+{
+  CGUIControl::AssignDepth();
+  m_cachedTextMatrix.depth = m_cachedTransform.depth;
+}
+
 unsigned int CGUITextBox::GetRows() const
 {
   return m_lines.size();
@@ -395,7 +408,7 @@ unsigned int CGUITextBox::GetRows() const
 
 int CGUITextBox::GetNumPages() const
 {
-  return (GetRows() + m_itemsPerPage - 1) / m_itemsPerPage;
+  return m_itemsPerPage > 0 ? (GetRows() + m_itemsPerPage - 1) / m_itemsPerPage : 0;
 }
 
 int CGUITextBox::GetCurrentPage() const

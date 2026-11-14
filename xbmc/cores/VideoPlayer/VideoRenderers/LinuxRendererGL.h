@@ -13,22 +13,17 @@
 #include "system_gl.h"
 
 #include "FrameBufferObject.h"
-#include "guilib/Shader.h"
 #include "cores/VideoSettings.h"
-#include "RenderFlags.h"
 #include "RenderInfo.h"
-#include "windowing/GraphicContext.h"
 #include "BaseRenderer.h"
 #include "ColorManager.h"
-#include "threads/Event.h"
-#include "VideoShaders/ShaderFormats.h"
 #include "utils/Geometry.h"
 
 extern "C" {
 #include <libavutil/mastering_display_metadata.h>
+#include <libavutil/pixdesc.h>
 }
 
-class CRenderCapture;
 class CRenderSystemGL;
 
 class CTexture;
@@ -73,25 +68,26 @@ public:
   void AddVideoPicture(const VideoPicture &picture, int index) override;
   void UnInit() override;
   bool Flush(bool saveBuffers) override;
-  void SetBufferSize(int numBuffers) override { m_NumYV12Buffers = numBuffers; }
+  void SetBufferSize(int numBuffers) override { m_NumYUVBuffers = numBuffers; }
   void ReleaseBuffer(int idx) override;
   void RenderUpdate(int index, int index2, bool clear, unsigned int flags, unsigned int alpha) override;
   void Update() override;
-  bool RenderCapture(CRenderCapture* capture) override;
   CRenderInfo GetRenderInfo() override;
   bool ConfigChanged(const VideoPicture &picture) override;
 
   // Feature support
   bool SupportsMultiPassRendering() override;
-  bool Supports(ERENDERFEATURE feature) override;
-  bool Supports(ESCALINGMETHOD method) override;
+  bool Supports(ERENDERFEATURE feature) const override;
+  bool Supports(ESCALINGMETHOD method) const override;
 
-  CRenderCapture* GetRenderCapture() override;
+  bool IsGuiLayer() override;
+  bool VideoBypassesFramebuffer() override { return false; }
 
 protected:
 
   bool Render(unsigned int flags, int renderBuffer);
   void ClearBackBuffer();
+  void ClearBackBufferQuad();
   void DrawBlackBars();
 
   bool ValidateRenderer();
@@ -107,17 +103,17 @@ protected:
   virtual void DeleteTexture(int index);
   virtual bool CreateTexture(int index);
 
-  bool UploadYV12Texture(int index);
-  void DeleteYV12Texture(int index);
-  bool CreateYV12Texture(int index);
+  bool UploadPlanarYUVTexture(int index);
+  void DeletePlanarYUVTexture(int index);
+  bool CreatePlanarYUVTexture(int index);
 
   bool UploadNV12Texture(int index);
   void DeleteNV12Texture(int index);
   bool CreateNV12Texture(int index);
 
-  bool UploadYUV422PackedTexture(int index);
-  void DeleteYUV422PackedTexture(int index);
-  bool CreateYUV422PackedTexture(int index);
+  bool UploadPackedYUVTexture(int index);
+  void DeletePackedYUVTexture(int index);
+  bool CreatePackedYUVTexture(int index);
 
   void CalculateTextureSourceRects(int source, int num_planes);
 
@@ -151,19 +147,23 @@ protected:
     float width, height;
   } m_fbo;
 
-  int m_iYV12RenderBuffer = 0;
-  int m_NumYV12Buffers = 0;
+  GLint m_intermediateFormat{GL_RGBA8};
+  GLint m_intermediateType{GL_UNSIGNED_BYTE};
+  bool m_intermediateGammaCorrection{false};
+
+  int m_iYUVRenderBuffer = 0;
+  int m_NumYUVBuffers = 0;
 
   bool m_bConfigured = false;
   bool m_bValidated = false;
-  GLenum m_textureTarget;
+  GLenum m_textureTarget = GL_TEXTURE_2D;
   int m_renderMethod = RENDER_GLSL;
   RenderQuality m_renderQuality = RQ_SINGLEPASS;
   CRenderSystemGL *m_renderSystem = nullptr;
 
   // Raw data used by renderer
   int m_currentField = FIELD_FULL;
-  int m_reloadShaders = 0;
+  bool m_reloadShaders = false;
 
   struct CYuvPlane
   {
@@ -193,6 +193,8 @@ protected:
 
     AVColorPrimaries m_srcPrimaries;
     AVColorSpace m_srcColSpace;
+    AVColorTransferCharacteristic m_srcColTransfer;
+
     int m_srcBits = 8;
     int m_srcTextureBits = 8;
     bool m_srcFullRange;
@@ -203,7 +205,7 @@ protected:
     AVContentLightMetadata lightMetadata;
   };
 
-  // YV12 decoder textures
+  // YUV decoder textures
   // field index 0 is full image, 1 is odd scanlines, 2 is even scanlines
   CPictureBuffer m_buffers[NUM_BUFFERS];
 
@@ -216,14 +218,21 @@ protected:
   bool m_fullRange;
   AVColorPrimaries m_srcPrimaries;
   bool m_toneMap = false;
-  int m_toneMapMethod = 0;
-  float m_clearColour = 0.0f;
+  ETONEMAPMETHOD m_toneMapMethod = VS_TONEMAPMETHOD_OFF;
+  // PQ/HLG streams get hue and saturation from the YUV shader in linear light
+  AVColorTransferCharacteristic m_hueSatTransfer{AVCOL_TRC_UNSPECIFIED};
+  // SDR streams get gamma from the YUV shader
+  bool m_useGamma{false};
+  bool m_streamIsHDR{false};
+  bool m_passthroughHDR = false;
+  bool m_hdrFboActive{false};
   bool m_pboSupported = true;
   bool m_pboUsed = false;
   bool m_nonLinStretch = false;
   bool m_nonLinStretchGui = false;
   float m_pixelRatio = 0.0f;
-  CRect m_viewRect;
+  CRect m_lastViewRect;
+  CRect m_lastSourceRect;
 
   // color management
   std::unique_ptr<CColorManager> m_ColorManager;

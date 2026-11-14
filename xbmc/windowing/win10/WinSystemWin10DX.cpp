@@ -17,6 +17,8 @@
 
 #include "platform/win32/WIN32Util.h"
 
+using namespace std::chrono_literals;
+
 void CWinSystemWin10DX::Register()
 {
   KODI::WINDOWING::CWindowSystemFactory::RegisterWindowSystem(CreateWinSystem);
@@ -47,7 +49,7 @@ void CWinSystemWin10DX::PresentRenderImpl(bool rendered)
   }
 
   if (!rendered)
-    KODI::TIME::Sleep(40);
+    KODI::TIME::Sleep(40ms);
 }
 
 bool CWinSystemWin10DX::CreateNewWindow(const std::string& name, bool fullScreen, RESOLUTION_INFO& res)
@@ -58,6 +60,14 @@ bool CWinSystemWin10DX::CreateNewWindow(const std::string& name, bool fullScreen
 
   m_deviceResources = DX::DeviceResources::Get();
   m_deviceResources->SetWindow(m_coreWindow);
+
+  // saves threadId of current thread (UI thread)
+  m_uiThreadId = GetCurrentThreadId();
+
+  // calls these methods to make sure cached values are properly initialized
+  // and can be used later when called from other thread
+  IsHDRDisplay();
+  HasSystemSdrPeakLuminance();
 
   if (CWinSystemWin10::CreateNewWindow(name, fullScreen, res) && m_deviceResources->HasValidDevice())
   {
@@ -164,7 +174,14 @@ void CWinSystemWin10DX::InitHooks(IDXGIOutput* pOutput)
 
 bool CWinSystemWin10DX::IsHDRDisplay()
 {
-  return false; // use tone mapping by default on Xbox
+  if (m_uiThreadId == GetCurrentThreadId())
+  {
+    const HDR_STATUS hdrStatus = CWIN32Util::GetWindowsHDRStatus();
+    m_cachedHdrStatus = hdrStatus;
+    return (hdrStatus != HDR_STATUS::HDR_UNSUPPORTED);
+  }
+
+  return (m_cachedHdrStatus != HDR_STATUS::HDR_UNSUPPORTED);
 }
 
 HDR_STATUS CWinSystemWin10DX::GetOSHDRStatus()
@@ -180,6 +197,23 @@ HDR_STATUS CWinSystemWin10DX::ToggleHDR()
 bool CWinSystemWin10DX::IsHDROutput() const
 {
   return m_deviceResources->IsHDROutput();
+}
+
+KODI::UTILS::Eotf CWinSystemWin10DX::GetEotf() const
+{
+  return IsTransferPQ() ? KODI::UTILS::Eotf::PQ : KODI::UTILS::Eotf::TRADITIONAL_SDR;
+}
+
+KODI::UTILS::Colorimetry CWinSystemWin10DX::GetColorimetry() const
+{
+  return IsTransferPQ() ? KODI::UTILS::Colorimetry::BT2020_RGB : KODI::UTILS::Colorimetry::DEFAULT;
+}
+
+int CWinSystemWin10DX::GetOutputBitDepth() const
+{
+  const bool is10bit =
+      m_deviceResources->GetBackBuffer().GetFormat() == DXGI_FORMAT_R10G10B10A2_UNORM;
+  return is10bit ? 10 : 8;
 }
 
 bool CWinSystemWin10DX::IsTransferPQ() const

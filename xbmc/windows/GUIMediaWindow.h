@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2005-2018 Team Kodi
+ *  Copyright (C) 2005-2026 Team Kodi
  *  This file is part of Kodi - https://kodi.tv
  *
  *  SPDX-License-Identifier: GPL-2.0-or-later
@@ -19,10 +19,9 @@
 
 class CFileItemList;
 class CGUIViewState;
-namespace
-{
-class CGetDirectoryItems;
-}
+enum class SourceType;
+
+class TiXmlElement;
 
 // base class for all media windows
 class CGUIMediaWindow : public CGUIWindow
@@ -51,7 +50,7 @@ public:
   virtual bool IsFiltered();
   virtual bool IsSameStartFolder(const std::string &dir);
 
-  virtual std::string GetRootPath() const { return ""; }
+  virtual std::string GetRootPath() { return ""; }
 
   const CFileItemList &CurrentDirectory() const;
   const CGUIViewState *GetViewState() const;
@@ -75,8 +74,8 @@ protected:
   virtual bool OnSelect(int item);
   virtual bool OnPopupMenu(int iItem);
 
-  virtual void GetContextButtons(int itemNumber, CContextButtons &buttons);
-  virtual bool OnContextButton(int itemNumber, CONTEXT_BUTTON button);
+  virtual void GetContextButtons(int itemNumber, CContextButtons& buttons) {}
+  virtual bool OnContextButton(int itemNumber, CONTEXT_BUTTON button) { return false; }
   virtual bool OnAddMediaSource() { return false; }
 
   virtual void FormatItemLabels(CFileItemList &items, const LABEL_MASKS &labelMasks);
@@ -127,7 +126,7 @@ protected:
    \param filter the filter to use.
    \sa FilterItems
    */
-  void OnFilterItems(const std::string &filter);
+  virtual void OnFilterItems(const std::string& filter);
 
   /* \brief Retrieve the filtered item list
    \param filter filter to apply
@@ -145,7 +144,7 @@ protected:
   virtual bool GetAdvanceFilteredItems(CFileItemList &items);
 
   // check for a disc or connection
-  virtual bool HaveDiscOrConnection(const std::string& strPath, int iDriveType);
+  virtual bool HaveDiscOrConnection(const std::string& strPath, SourceType iDriveType);
   void ShowShareErrorMessage(CFileItem* pItem) const;
 
   void SaveSelectedItemInHistory();
@@ -159,9 +158,7 @@ protected:
   virtual void OnDeleteItem(int iItem);
   void OnRenameItem(int iItem);
   bool WaitForNetwork() const;
-  bool GetDirectoryItems(CURL &url, CFileItemList &items, bool useDir);
-  bool WaitGetDirectoryItems(CGetDirectoryItems &items);
-  void CancelUpdateItems();
+  bool GetDirectoryItems(CURL& url, CFileItemList& items, bool useDir);
 
   /*! \brief Translate the folder to start in from the given quick path
    \param url the folder the user wants
@@ -176,6 +173,12 @@ protected:
   static std::string RemoveParameterFromPath(const std::string &strDirectory, const std::string &strParameter);
 
   bool ProcessRenderLoop(bool renderOnly);
+
+  /*!
+   * \brief Helper function to remove the disc cache of <p> directory and possible dependencies
+   * \param[in] directory Directory
+   */
+  void RemoveDiscCache(const std::string& directory) const;
 
   XFILE::CVirtualDirectory m_rootDir;
   CGUIViewControl m_viewControl;
@@ -200,15 +203,12 @@ protected:
   protected:
     std::atomic_bool &m_update;
   };
-  CEvent m_updateEvent;
-  std::atomic_bool m_updateAborted = {false};
-  std::atomic_bool m_updateJobActive = {false};
 
   // save control state on window exit
   int m_iLastControl;
   std::string m_startDirectory;
 
-  CSmartPlaylist m_filter;
+  KODI::PLAYLIST::CSmartPlaylist m_filter;
   bool m_canFilterAdvanced;
   /*! \brief Contains the path used for filtering (including any active filter)
 
@@ -223,5 +223,8 @@ protected:
    \sa Update
    */
   std::string m_strFilterPath;
+  // Last library filter node and the db path of its items; that db path is loaded through the node
+  std::string m_libraryFilterNodePath;
+  std::string m_libraryFilterDbPath;
   bool m_backgroundLoad = false;
 };

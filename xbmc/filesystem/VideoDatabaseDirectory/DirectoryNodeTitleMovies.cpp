@@ -8,13 +8,17 @@
 
 #include "DirectoryNodeTitleMovies.h"
 
+#include "FileItem.h"
+#include "FileItemList.h"
 #include "QueryParams.h"
+#include "utils/ItemProperties.h"
 #include "video/VideoDatabase.h"
 
 using namespace XFILE::VIDEODATABASEDIRECTORY;
 
-CDirectoryNodeTitleMovies::CDirectoryNodeTitleMovies(const std::string& strName, CDirectoryNode* pParent)
-  : CDirectoryNode(NODE_TYPE_TITLE_MOVIES, strName, pParent)
+CDirectoryNodeTitleMovies::CDirectoryNodeTitleMovies(const std::string& strName,
+                                                     CDirectoryNode* pParent)
+  : CDirectoryNode(NodeType::TITLE_MOVIES, strName, pParent)
 {
 
 }
@@ -28,9 +32,20 @@ bool CDirectoryNodeTitleMovies::GetContent(CFileItemList& items) const
   CQueryParams params;
   CollectQueryParams(params);
 
-  bool bSuccess=videodatabase.GetMoviesNav(BuildPath(), items, params.GetGenreId(), params.GetYear(), params.GetActorId(), params.GetDirectorId(), params.GetStudioId(), params.GetCountryId(), params.GetSetId(), params.GetTagId());
+  const int details =
+      items.GetProperty(KODI::ITEM::PROPERTY::SET_VIDEODB_DETAILS).asInteger32(VideoDbDetailsNone);
+
+  bool bSuccess = videodatabase.GetMoviesNav(
+      BuildPath(), items, params.GetGenreId(), params.GetYear(), params.GetActorId(),
+      params.GetDirectorId(), params.GetStudioId(), params.GetCountryId(), params.GetSetId(),
+      params.GetTagId(), SortDescription(), details);
 
   videodatabase.Close();
 
   return bSuccess;
+}
+
+NodeType CDirectoryNodeTitleMovies::GetChildType() const
+{
+  return NodeType::MOVIE_ASSET_TYPES;
 }

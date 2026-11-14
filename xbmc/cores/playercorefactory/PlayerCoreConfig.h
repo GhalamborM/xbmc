@@ -8,44 +8,27 @@
 
 #pragma once
 
-#include "cores/ExternalPlayer/ExternalPlayer.h"
-#include "cores/IPlayer.h"
-#include "cores/RetroPlayer/RetroPlayer.h"
-#include "cores/VideoPlayer/VideoPlayer.h"
-#include "cores/paplayer/PAPlayer.h"
-#ifdef HAS_UPNP
-#include "network/upnp/UPnPPlayer.h"
-#endif
-#include "utils/XBMCTinyXML.h"
-#include "utils/log.h"
+#include <memory>
+#include <string>
 
-#include <utility>
+class IPlayer;
+class IPlayerCallback;
+class CXBMCTinyXML2;
+
+namespace tinyxml2
+{
+class XMLElement;
+} // namespace tinyxml2
 
 class CPlayerCoreConfig
 {
 public:
   CPlayerCoreConfig(std::string name,
                     std::string type,
-                    const TiXmlElement* pConfig,
-                    const std::string& id = "")
-    : m_name(std::move(name)), m_id(id), m_type(std::move(type))
-  {
-    m_bPlaysAudio = false;
-    m_bPlaysVideo = false;
+                    const tinyxml2::XMLElement* pConfig,
+                    const std::string& id = "");
 
-    if (pConfig)
-    {
-      m_config.reset(static_cast<TiXmlElement*>(pConfig->Clone()));
-      const char *sAudio = pConfig->Attribute("audio");
-      const char *sVideo = pConfig->Attribute("video");
-      m_bPlaysAudio = sAudio && StringUtils::CompareNoCase(sAudio, "true") == 0;
-      m_bPlaysVideo = sVideo && StringUtils::CompareNoCase(sVideo, "true") == 0;
-    }
-
-    CLog::Log(LOGDEBUG, "CPlayerCoreConfig::<ctor>: created player {}", m_name);
-  }
-
-  ~CPlayerCoreConfig() = default;
+  ~CPlayerCoreConfig();
 
   const std::string& GetName() const
   {
@@ -67,52 +50,15 @@ public:
     return m_bPlaysVideo;
   }
 
-  std::shared_ptr<IPlayer> CreatePlayer(IPlayerCallback& callback) const
-  {
-    std::shared_ptr<IPlayer> player;
+  bool PlaysGame() const { return m_bPlaysGame; }
 
-    if (m_type.compare("video") == 0)
-    {
-      player = std::make_shared<CVideoPlayer>(callback);
-    }
-    else if (m_type.compare("music") == 0)
-    {
-      player = std::make_shared<PAPlayer>(callback);
-    }
-    else if (m_type.compare("game") == 0)
-    {
-      player = std::make_shared<KODI::RETRO::CRetroPlayer>(callback);
-    }
-    else if (m_type.compare("external") == 0)
-    {
-      player = std::make_shared<CExternalPlayer>(callback);
-    }
-
-#if defined(HAS_UPNP)
-    else if (m_type.compare("remote") == 0)
-    {
-      player = std::make_shared<UPNP::CUPnPPlayer>(callback, m_id.c_str());
-    }
-#endif
-    else
-      return nullptr;
-
-    if (!player)
-      return nullptr;
-
-    player->m_name = m_name;
-    player->m_type = m_type;
-
-    if (player->Initialize(m_config.get()))
-      return player;
-
-    return nullptr;
-  }
+  std::shared_ptr<IPlayer> CreatePlayer(IPlayerCallback& callback) const;
 
   std::string m_name;
   std::string m_id; // uuid for upnp
   std::string m_type;
-  bool m_bPlaysAudio;
-  bool m_bPlaysVideo;
-  std::unique_ptr<TiXmlElement> m_config;
+  bool m_bPlaysAudio{false};
+  bool m_bPlaysVideo{false};
+  bool m_bPlaysGame{false};
+  std::unique_ptr<CXBMCTinyXML2> m_config;
 };

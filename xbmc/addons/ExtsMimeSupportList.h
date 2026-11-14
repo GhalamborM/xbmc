@@ -8,21 +8,23 @@
 
 #pragma once
 
-#include "addons/AddonEvents.h"
-#include "addons/IAddon.h"
 #include "addons/IAddonSupportList.h"
 #include "threads/CriticalSection.h"
 
+#include <map>
+#include <memory>
+#include <string>
 #include <utility>
+#include <vector>
 
 namespace ADDON
 {
+enum class AddonType;
 class CAddonMgr;
+class CAddonInfo;
 }
 
-namespace KODI
-{
-namespace ADDONS
+namespace KODI::ADDONS
 {
 
 /*!
@@ -36,8 +38,8 @@ namespace ADDONS
 class CExtsMimeSupportList : public KODI::ADDONS::IAddonSupportList
 {
 public:
-  CExtsMimeSupportList(ADDON::CAddonMgr& addonMgr);
-  ~CExtsMimeSupportList();
+  explicit CExtsMimeSupportList(ADDON::CAddonMgr& addonMgr);
+  ~CExtsMimeSupportList() override;
 
   /*!
    * @brief Filter selection values.
@@ -77,7 +79,7 @@ public:
   struct SupportValues
   {
     // Type of stored addon to check on scan
-    ADDON::TYPE m_addonType{ADDON::ADDON_UNKNOWN};
+    ADDON::AddonType m_addonType{};
 
     // Related addon info class
     std::shared_ptr<ADDON::CAddonInfo> m_addonInfo;
@@ -94,12 +96,12 @@ public:
     // List of supported file extensions by addon
     // First: Extension name
     // Second: With @ref SupportValue defined content
-    std::map<std::string, SupportValue> m_supportedExtensions;
+    std::map<std::string, SupportValue, std::less<>> m_supportedExtensions;
 
     // List of supported mimetypes by addon
     // First: Mimetype name
     // Second: With @ref SupportValue defined content
-    std::map<std::string, SupportValue> m_supportedMimetypes;
+    std::map<std::string, SupportValue, std::less<>> m_supportedMimetypes;
   };
 
   /*!
@@ -132,7 +134,7 @@ public:
    * @param[in] select To filter the listed information by type
    * @return List of @ref ADDON::CAddonInfo where support related extension
    */
-  std::vector<std::pair<ADDON::TYPE, std::shared_ptr<ADDON::CAddonInfo>>>
+  std::vector<std::pair<ADDON::AddonType, std::shared_ptr<ADDON::CAddonInfo>>>
   GetExtensionSupportedAddonInfos(const std::string& ext, FilterSelect select);
 
   /*!
@@ -150,7 +152,7 @@ public:
    * @param[in] select To filter the listed information by type
    * @return List of @ref ADDON::CAddonInfo where support related mimetype
    */
-  std::vector<std::pair<ADDON::TYPE, std::shared_ptr<ADDON::CAddonInfo>>>
+  std::vector<std::pair<ADDON::AddonType, std::shared_ptr<ADDON::CAddonInfo>>>
   GetMimetypeSupportedAddonInfos(const std::string& mimetype, FilterSelect select);
 
   /*!
@@ -164,11 +166,10 @@ public:
   std::vector<KODI::ADDONS::AddonSupportEntry> GetSupportedExtsAndMimeTypes(
       const std::string& addonId) override;
 
-protected:
+private:
   void Update(const std::string& id);
-  void OnEvent(const ADDON::AddonEvent& event);
 
-  static SupportValues ScanAddonProperties(ADDON::TYPE type,
+  static SupportValues ScanAddonProperties(ADDON::AddonType type,
                                            const std::shared_ptr<ADDON::CAddonInfo>& addonInfo);
 
   CCriticalSection m_critSection;
@@ -177,5 +178,4 @@ protected:
   ADDON::CAddonMgr& m_addonMgr;
 };
 
-} /* namespace ADDONS */
-} /* namespace KODI */
+} // namespace KODI::ADDONS

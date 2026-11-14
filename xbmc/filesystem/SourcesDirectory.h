@@ -9,11 +9,13 @@
 #pragma once
 
 #include "IDirectory.h"
+#include "media/MediaSection.h"
 
+#include <optional>
+#include <string>
 #include <vector>
 
 class CMediaSource;
-typedef std::vector<CMediaSource> VECSOURCES;
 
 namespace XFILE
 {
@@ -23,8 +25,14 @@ namespace XFILE
     CSourcesDirectory(void);
     ~CSourcesDirectory(void) override;
     bool GetDirectory(const CURL& url, CFileItemList &items) override;
-    bool GetDirectory(const VECSOURCES &sources, CFileItemList &items);
+    bool GetDirectory(const std::vector<CMediaSource>& sources, CFileItemList& items);
     bool Exists(const CURL& url) override;
     bool AllowAll() const override { return true; }
+
+    //! \brief The path listing the sources of \p section, e.g. sources://video/.
+    static std::string PathOf(KODI::MEDIA::MediaSection section);
+
+    //! \brief The section whose sources \p path lists. Nullopt for any other path.
+    static std::optional<KODI::MEDIA::MediaSection> SectionOf(const std::string& path);
   };
 }

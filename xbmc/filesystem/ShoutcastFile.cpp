@@ -22,6 +22,7 @@
 #include "music/tags/MusicInfoTag.h"
 #include "settings/AdvancedSettings.h"
 #include "settings/SettingsComponent.h"
+#include "threads/SingleLock.h"
 #include "utils/CharsetConverter.h"
 #include "utils/HTMLUtil.h"
 #include "utils/JSONVariantParser.h"
@@ -30,10 +31,11 @@
 #include "utils/UrlOptions.h"
 
 #include <climits>
+#include <memory>
+#include <mutex>
 
 using namespace XFILE;
 using namespace MUSIC_INFO;
-using namespace KODI::MESSAGING;
 using namespace std::chrono_literals;
 
 CShoutcastFile::CShoutcastFile() :
@@ -93,7 +95,7 @@ bool CShoutcastFile::Open(const CURL& url)
   bool result = m_file.Open(url2);
   if (result)
   {
-    m_fileCharset = m_file.GetProperty(XFILE::FILE_PROPERTY_CONTENT_CHARSET);
+    m_fileCharset = m_file.GetProperty(FileProperty::CONTENT_CHARSET);
 
     icyTitle = m_file.GetHttpHeader().GetValue("icy-name");
     if (icyTitle.empty())
@@ -117,14 +119,14 @@ bool CShoutcastFile::Open(const CURL& url)
 
   if (result)
   {
-    CSingleLock lock(m_tagSection);
+    std::unique_lock lock(m_tagSection);
 
-    m_masterTag.reset(new CMusicInfoTag());
+    m_masterTag = std::make_shared<CMusicInfoTag>();
     m_masterTag->SetStationName(icyTitle);
     m_masterTag->SetGenre(icyGenre);
     m_masterTag->SetLoaded(true);
 
-    m_tags.push({1, m_masterTag});
+    m_tags.emplace(1, m_masterTag);
     m_tagChange.Set();
   }
 
@@ -171,7 +173,7 @@ void CShoutcastFile::Close()
   m_title.clear();
 
   {
-    CSingleLock lock(m_tagSection);
+    std::unique_lock lock(m_tagSection);
     while (!m_tags.empty())
       m_tags.pop();
     m_masterTag.reset();
@@ -212,10 +214,15 @@ bool CShoutcastFile::ExtractTagInfo(const char* buf)
         if (StringUtils::StartsWithNoCase(streamUrlData, "http://") ||
             StringUtils::StartsWithNoCase(streamUrlData, "https://"))
         {
-          // Bauer Media Radio listenapi null event to erase current data
-          if (!StringUtils::EndsWithNoCase(streamUrlData, "eventdata/-1"))
+          const CURL dataURL(streamUrlData);
+          // Check if StreamUrl is a direct image URL (e.g., Radio Paradise)
+          if (dataURL.IsPicture())
           {
-            const CURL dataURL(streamUrlData);
+            coverURL = streamUrlData;
+          }
+          // Bauer Media Radio listenapi null event to erase current data
+          else if (!StringUtils::EndsWithNoCase(streamUrlData, "eventdata/-1"))
+          {
             XFILE::CCurlFile http;
             std::string extData;
 
@@ -295,14 +302,14 @@ bool CShoutcastFile::ExtractTagInfo(const char* buf)
       if (!CServiceBroker::GetSettingsComponent()->GetAdvancedSettings()->m_bShoutcastArt)
         coverURL.clear();
 
-      CSingleLock lock(m_tagSection);
+      std::unique_lock lock(m_tagSection);
 
       const std::shared_ptr<CMusicInfoTag> tag = std::make_shared<CMusicInfoTag>(*m_masterTag);
       tag->SetArtist(artistInfo);
       tag->SetTitle(title);
       tag->SetStationArt(coverURL);
 
-      m_tags.push({m_file.GetPosition(), tag});
+      m_tags.emplace(m_file.GetPosition(), tag);
       m_tagChange.Set();
     }
   }
@@ -321,11 +328,11 @@ void CShoutcastFile::ReadTruncated(char* buf2, int size)
   }
 }
 
-int CShoutcastFile::IoControl(EIoControl control, void* payload)
+int CShoutcastFile::IoControl(IOControl control, void* payload)
 {
-  if (control == IOCTRL_SET_CACHE && m_cacheReader == nullptr)
+  if (control == IOControl::SET_CACHE && m_cacheReader == nullptr)
   {
-    CSingleLock lock(m_tagSection);
+    std::unique_lock lock(m_tagSection);
     m_cacheReader = static_cast<CFileCache*>(payload);
     Create();
   }
@@ -339,7 +346,7 @@ void CShoutcastFile::Process()
   {
     if (m_tagChange.Wait(500ms))
     {
-      CSingleLock lock(m_tagSection);
+      std::unique_lock lock(m_tagSection);
       while (!m_bStop && !m_tags.empty())
       {
         const TagInfo& front = m_tags.front();
@@ -352,8 +359,8 @@ void CShoutcastFile::Process()
         {
           CFileItem* item = new CFileItem(*front.second); // will be deleted by msg receiver
           m_tags.pop();
-          CApplicationMessenger::GetInstance().PostMsg(TMSG_UPDATE_CURRENT_ITEM, 1, -1,
-                                                       static_cast<void*>(item));
+          CServiceBroker::GetAppMessenger()->PostMsg(TMSG_UPDATE_CURRENT_ITEM, 1, -1,
+                                                     static_cast<void*>(item));
         }
       }
     }

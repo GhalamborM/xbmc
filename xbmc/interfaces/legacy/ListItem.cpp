@@ -17,12 +17,15 @@
 #include "pictures/PictureInfoTag.h"
 #include "settings/AdvancedSettings.h"
 #include "settings/SettingsComponent.h"
+#include "utils/ArtTypes.h"
+#include "utils/LangCodeExpander.h"
 #include "utils/StringUtils.h"
 #include "utils/Variant.h"
 #include "utils/log.h"
 #include "video/VideoInfoTag.h"
 
 #include <cstdlib>
+#include <memory>
 #include <sstream>
 #include <utility>
 
@@ -39,7 +42,7 @@ namespace XBMCAddon
       item.reset();
 
       // create CFileItem
-      item.reset(new CFileItem());
+      item = std::make_shared<CFileItem>();
       if (!item) // not sure if this is really possible
         return;
 
@@ -110,8 +113,9 @@ namespace XBMCAddon
       String ret;
       {
         XBMCAddonUtils::GuiLock lock(languageHook, m_offscreen);
-        if (item->m_dateTime.IsValid())
-          ret = item->m_dateTime.GetAsW3CDateTime();
+        const CDateTime& dateTime{item->GetDateTime()};
+        if (dateTime.IsValid())
+          ret = dateTime.GetAsW3CDateTime();
       }
 
       return ret;
@@ -159,7 +163,7 @@ namespace XBMCAddon
       if (!item)
         return;
 
-      std::map<String, String> uniqueIDs;
+      std::map<String, String, std::less<>> uniqueIDs;
       for (const auto& it : dictionary)
         uniqueIDs.emplace(it.first, it.second);
 
@@ -230,7 +234,7 @@ namespace XBMCAddon
       }
       else if (lowerKey == "mimetype")
       { // special case for mime type - don't actually stored in a property,
-        item->SetMimeType(value.c_str());
+        item->SetMimeType(value);
       }
       else if (lowerKey == "totaltime")
       {
@@ -255,7 +259,7 @@ namespace XBMCAddon
       else if (lowerKey == "specialsort")
         setSpecialSortRaw(value);
       else if (lowerKey == "fanart_image")
-        item->SetArt("fanart", value);
+        item->SetArt(KODI::ART::TYPE::FANART, value);
       else
         addPropertyRaw(lowerKey, value);
     }
@@ -275,7 +279,7 @@ namespace XBMCAddon
       if (lowerKey == "startoffset")
       { // special case for start offset - don't actually store in a property,
         // we store it in item.m_lStartOffset instead
-        value = StringUtils::Format("{:f}", CUtil::ConvertMilliSecsToSecs(item->m_lStartOffset));
+        value = StringUtils::Format("{:f}", CUtil::ConvertMilliSecsToSecs(item->GetStartOffset()));
       }
       else if (lowerKey == "totaltime")
       {
@@ -296,7 +300,7 @@ namespace XBMCAddon
         value = StringUtils::Format("{:f}", GetVideoInfoTag()->GetResumePoint().timeInSeconds);
       }
       else if (lowerKey == "fanart_image")
-        value = item->GetArt("fanart");
+        value = item->GetArt(KODI::ART::TYPE::FANART);
       else
         value = item->GetProperty(lowerKey).asString();
 
@@ -312,7 +316,7 @@ namespace XBMCAddon
     bool ListItem::isFolder() const
     {
       XBMCAddonUtils::GuiLock lock(languageHook, m_offscreen);
-      return item->m_bIsFolder;
+      return item->IsFolder();
     }
 
     String ListItem::getUniqueID(const char* key)
@@ -362,6 +366,32 @@ namespace XBMCAddon
     {
       XBMCAddonUtils::GuiLock lock(languageHook, m_offscreen);
       setContentLookupRaw(enable);
+    }
+
+    void ListItem::setFileTitle(const String& title)
+    {
+      XBMCAddonUtils::GuiLock lock(languageHook, m_offscreen);
+      setTitleRaw(title);
+    }
+
+    void ListItem::setCount(int count)
+    {
+      XBMCAddonUtils::GuiLock lock(languageHook, m_offscreen);
+      setCountRaw(count);
+    }
+
+    void ListItem::setSize(int64_t size)
+    {
+      XBMCAddonUtils::GuiLock lock(languageHook, m_offscreen);
+      setSizeRaw(size);
+    }
+
+    void ListItem::setOverlay(int overlay)
+    {
+      if (overlay < 0 || overlay > 8)
+        throw ListItemException("setOverlay: overlay must be in the range 0 to 8, not %d", overlay);
+      XBMCAddonUtils::GuiLock lock(languageHook, m_offscreen);
+      item->SetOverlayImage(static_cast<CGUIListItem::GUIIconOverlay>(overlay));
     }
 
     String ListItem::getPath()
@@ -508,6 +538,8 @@ namespace XBMCAddon
               InfoTagVideo::setSetOverviewRaw(videotag, value);
             else if (key == "tag")
               InfoTagVideo::setTagsRaw(videotag, getVideoStringArray(alt, key, value));
+            else if (key == "videoassettitle")
+              InfoTagVideo::setVideoAssetTitleRaw(videotag, value);
             else if (key == "imdbnumber")
               InfoTagVideo::setIMDBNumberRaw(videotag, value);
             else if (key == "code")
@@ -612,7 +644,7 @@ namespace XBMCAddon
                                                            getMusicStringArray(alt, key, value));
             else if (key == "comment")
               InfoTagMusic::setCommentRaw(musictag, value);
-            else if (key != "mediatype")
+            else
               CLog::Log(LOGERROR, "NEWADDON Unknown Music Info Key \"{}\"", key);
           }
 
@@ -756,6 +788,10 @@ namespace XBMCAddon
 
     void ListItem::setAvailableFanart(const std::vector<Properties>& images)
     {
+      CLog::Log(LOGWARNING,
+                "ListItem.setAvailableFanart() is deprecated and might be removed in future Kodi "
+                "versions. Please use InfoTagVideo.setAvailableFanart().");
+
       XBMCAddonUtils::GuiLock lock(languageHook, m_offscreen);
       auto infoTag = GetVideoInfoTag();
       infoTag->m_fanart.Clear();
@@ -829,7 +865,7 @@ namespace XBMCAddon
           else if (key == "stereomode")
             video->m_strStereoMode = value;
           else if (key == "language")
-            video->m_strLanguage = value;
+            video->m_strLanguage = CLangCodeExpander::AsISO6392B(value);
         }
         xbmc::InfoTagVideo::addStreamRaw(infoTag, video);
       }
@@ -844,7 +880,7 @@ namespace XBMCAddon
           if (key == "codec")
             audio->m_strCodec = value;
           else if (key == "language")
-            audio->m_strLanguage = value;
+            audio->m_strLanguage = CLangCodeExpander::AsISO6392B(value);
           else if (key == "channels")
             audio->m_iChannels = strtol(value.c_str(), nullptr, 10);
         }
@@ -859,7 +895,7 @@ namespace XBMCAddon
           const String& value = it.second;
 
           if (key == "language")
-            subtitle->m_strLanguage = value;
+            subtitle->m_strLanguage = CLangCodeExpander::AsISO6392B(value);
         }
         xbmc::InfoTagVideo::addStreamRaw(infoTag, subtitle);
       }
@@ -901,17 +937,13 @@ namespace XBMCAddon
     xbmc::InfoTagPicture* ListItem::getPictureInfoTag()
     {
       XBMCAddonUtils::GuiLock lock(languageHook, m_offscreen);
-      if (item->HasPictureInfoTag())
-        return new xbmc::InfoTagPicture(item->GetPictureInfoTag(), m_offscreen);
-      return new xbmc::InfoTagPicture();
+      return new xbmc::InfoTagPicture(item->GetPictureInfoTag(), m_offscreen);
     }
 
     xbmc::InfoTagGame* ListItem::getGameInfoTag()
     {
       XBMCAddonUtils::GuiLock lock(languageHook, m_offscreen);
-      if (item->HasGameInfoTag())
-        return new xbmc::InfoTagGame(item->GetGameInfoTag(), m_offscreen);
-      return new xbmc::InfoTagGame();
+      return new xbmc::InfoTagGame(item->GetGameInfoTag(), m_offscreen);
     }
 
     std::vector<std::string> ListItem::getStringArray(const InfoLabelValue& alt,
@@ -974,9 +1006,9 @@ namespace XBMCAddon
       return item->GetMusicInfoTag();
     }
 
-    void ListItem::setTitleRaw(std::string title)
+    void ListItem::setTitleRaw(const std::string& title)
     {
-      item->m_strTitle = std::move(title);
+      item->SetTitle(title);
     }
 
     void ListItem::setPathRaw(const std::string& path)
@@ -986,12 +1018,12 @@ namespace XBMCAddon
 
     void ListItem::setCountRaw(int count)
     {
-      item->m_iprogramCount = count;
+      item->SetProgramCount(count);
     }
 
     void ListItem::setSizeRaw(int64_t size)
     {
-      item->m_dwSize = size;
+      item->SetSize(size);
     }
 
     void ListItem::setDateTimeRaw(const std::string& dateTime)
@@ -1001,21 +1033,27 @@ namespace XBMCAddon
         int year = strtol(dateTime.substr(dateTime.size() - 4).c_str(), nullptr, 10);
         int month = strtol(dateTime.substr(3, 4).c_str(), nullptr, 10);
         int day = strtol(dateTime.substr(0, 2).c_str(), nullptr, 10);
-        item->m_dateTime.SetDate(year, month, day);
+        CDateTime dt{item->GetDateTime()};
+        dt.SetDate(year, month, day);
+        item->SetDateTime(dt);
       }
       else
-        item->m_dateTime.SetFromW3CDateTime(dateTime);
+      {
+        CDateTime dt;
+        dt.SetFromW3CDateTime(dateTime);
+        item->SetDateTime(dt);
+      }
     }
 
     void ListItem::setIsFolderRaw(bool isFolder)
     {
-      item->m_bIsFolder = isFolder;
+      item->SetFolder(isFolder);
     }
 
     void ListItem::setStartOffsetRaw(double startOffset)
     {
       // we store the offset in frames, or 1/75th of a second
-      item->m_lStartOffset = CUtil::ConvertSecsToMilliSecs(startOffset);
+      item->SetStartOffset(CUtil::ConvertSecsToMilliSecs(startOffset));
     }
 
     void ListItem::setMimeTypeRaw(const std::string& mimetype)
@@ -1028,9 +1066,9 @@ namespace XBMCAddon
       StringUtils::ToLower(specialSort);
 
       if (specialSort == "bottom")
-        item->SetSpecialSort(SortSpecialOnBottom);
+        item->SetSpecialSort(SortSpecial::BOTTOM);
       else if (specialSort == "top")
-        item->SetSpecialSort(SortSpecialOnTop);
+        item->SetSpecialSort(SortSpecial::TOP);
     }
 
     void ListItem::setContentLookupRaw(bool enable)

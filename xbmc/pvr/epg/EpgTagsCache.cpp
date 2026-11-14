@@ -16,6 +16,8 @@
 #include "pvr/epg/EpgInfoTag.h"
 #include "utils/log.h"
 
+#include <algorithm>
+
 using namespace PVR;
 
 namespace
@@ -37,19 +39,19 @@ void CPVREpgTagsCache::SetChannelData(const std::shared_ptr<CPVREpgChannelData>&
 
 std::shared_ptr<CPVREpgInfoTag> CPVREpgTagsCache::GetLastEndedTag()
 {
-  Refresh(true);
+  Refresh();
   return m_lastEndedTag;
 }
 
-std::shared_ptr<CPVREpgInfoTag> CPVREpgTagsCache::GetNowActiveTag(bool bUpdateIfNeeded)
+std::shared_ptr<CPVREpgInfoTag> CPVREpgTagsCache::GetNowActiveTag()
 {
-  Refresh(bUpdateIfNeeded);
+  Refresh();
   return m_nowActiveTag;
 }
 
 std::shared_ptr<CPVREpgInfoTag> CPVREpgTagsCache::GetNextStartingTag()
 {
-  Refresh(true);
+  Refresh();
   return m_nextStartingTag;
 }
 
@@ -64,7 +66,7 @@ void CPVREpgTagsCache::Reset()
   m_nextStartingTag.reset();
 }
 
-void CPVREpgTagsCache::Refresh(bool bUpdateIfNeeded)
+bool CPVREpgTagsCache::Refresh()
 {
   const CDateTime activeTime =
       CServiceBroker::GetPVRManager().PlaybackState()->GetChannelPlaybackTime(
@@ -72,58 +74,63 @@ void CPVREpgTagsCache::Refresh(bool bUpdateIfNeeded)
 
   if (m_nowActiveStart.IsValid() && m_nowActiveEnd.IsValid() && m_nowActiveStart <= activeTime &&
       m_nowActiveEnd > activeTime)
-    return;
+    return false;
 
-  if (bUpdateIfNeeded)
+  const std::shared_ptr<const CPVREpgInfoTag> prevNowActiveTag = m_nowActiveTag;
+
+  m_lastEndedTag.reset();
+  m_nowActiveTag.reset();
+  m_nextStartingTag.reset();
+
+  const auto it = std::ranges::find_if(
+      m_changedTags, [&activeTime](const auto& tag)
+      { return tag.second->StartAsUTC() <= activeTime && tag.second->EndAsUTC() > activeTime; });
+
+  if (it != m_changedTags.cend())
   {
-    m_lastEndedTag.reset();
-    m_nowActiveTag.reset();
-    m_nextStartingTag.reset();
+    m_nowActiveTag = (*it).second;
+    m_nowActiveStart = m_nowActiveTag->StartAsUTC();
+    m_nowActiveEnd = m_nowActiveTag->EndAsUTC();
+  }
 
-    for (const auto& tag : m_changedTags)
+  if (!m_nowActiveTag && m_database)
+  {
+    const std::vector<std::shared_ptr<CPVREpgInfoTag>> tags =
+        m_database->GetEpgTagsByMinEndMaxStartTime(m_iEpgID, activeTime + ONE_SECOND, activeTime);
+    if (!tags.empty())
     {
-      if (tag.second->StartAsUTC() <= activeTime && tag.second->EndAsUTC() > activeTime)
-      {
-        m_nowActiveTag = tag.second;
-        m_nowActiveStart = m_nowActiveTag->StartAsUTC();
-        m_nowActiveEnd = m_nowActiveTag->EndAsUTC();
-        break;
-      }
-    }
+      if (tags.size() > 1)
+        CLog::LogF(LOGWARNING, "Got multiple results. Picking up the first.");
 
-    if (!m_nowActiveTag && m_database)
-    {
-      const std::vector<std::shared_ptr<CPVREpgInfoTag>> tags =
-          m_database->GetEpgTagsByMinEndMaxStartTime(m_iEpgID, activeTime + ONE_SECOND, activeTime);
-      if (!tags.empty())
-      {
-        if (tags.size() > 1)
-          CLog::LogF(LOGWARNING, "Got multiple results. Picking up the first.");
-
-        m_nowActiveTag = tags.front();
-        m_nowActiveTag->SetChannelData(m_channelData);
-        m_nowActiveStart = m_nowActiveTag->StartAsUTC();
-        m_nowActiveEnd = m_nowActiveTag->EndAsUTC();
-      }
-    }
-
-    RefreshLastEndedTag(activeTime);
-    RefreshNextStartingTag(activeTime);
-
-    if (!m_nowActiveTag)
-    {
-      // we're in a gap. remember start and end time of that gap to avoid unneeded db load.
-      if (m_lastEndedTag)
-        m_nowActiveStart = m_lastEndedTag->EndAsUTC();
-      else
-        m_nowActiveStart = activeTime - CDateTimeSpan(1000, 0, 0, 0); // fake start far in the past
-
-      if (m_nextStartingTag)
-        m_nowActiveEnd = m_nextStartingTag->StartAsUTC();
-      else
-        m_nowActiveEnd = activeTime + CDateTimeSpan(1000, 0, 0, 0); // fake end far in the future
+      m_nowActiveTag = tags.front();
+      m_nowActiveTag->SetChannelData(m_channelData);
+      m_nowActiveStart = m_nowActiveTag->StartAsUTC();
+      m_nowActiveEnd = m_nowActiveTag->EndAsUTC();
     }
   }
+
+  RefreshLastEndedTag(activeTime);
+  RefreshNextStartingTag(activeTime);
+
+  if (!m_nowActiveTag)
+  {
+    // we're in a gap. remember start and end time of that gap to avoid unneeded db load.
+    if (m_lastEndedTag)
+      m_nowActiveStart = m_lastEndedTag->EndAsUTC();
+    else
+      m_nowActiveStart = activeTime - CDateTimeSpan(1000, 0, 0, 0); // fake start far in the past
+
+    if (m_nextStartingTag)
+      m_nowActiveEnd = m_nextStartingTag->StartAsUTC();
+    else
+      m_nowActiveEnd = activeTime + CDateTimeSpan(1000, 0, 0, 0); // fake end far in the future
+  }
+
+  const bool tagChanged =
+      m_nowActiveTag && (!prevNowActiveTag || *prevNowActiveTag != *m_nowActiveTag);
+  const bool tagRemoved = !m_nowActiveTag && prevNowActiveTag;
+
+  return (tagChanged || tagRemoved);
 }
 
 void CPVREpgTagsCache::RefreshLastEndedTag(const CDateTime& activeTime)
@@ -135,15 +142,13 @@ void CPVREpgTagsCache::RefreshLastEndedTag(const CDateTime& activeTime)
       m_lastEndedTag->SetChannelData(m_channelData);
   }
 
-  for (auto it = m_changedTags.rbegin(); it != m_changedTags.rend(); ++it)
+  for (auto it = m_changedTags.crbegin(); it != m_changedTags.crend(); ++it)
   {
-    if (it->second->WasActive())
+    if (it->second->WasActive() &&
+        (!m_lastEndedTag || m_lastEndedTag->EndAsUTC() < it->second->EndAsUTC()))
     {
-      if (!m_lastEndedTag || m_lastEndedTag->EndAsUTC() < it->second->EndAsUTC())
-      {
-        m_lastEndedTag = it->second;
-        break;
-      }
+      m_lastEndedTag = it->second;
+      break;
     }
   }
 }
@@ -157,15 +162,13 @@ void CPVREpgTagsCache::RefreshNextStartingTag(const CDateTime& activeTime)
       m_nextStartingTag->SetChannelData(m_channelData);
   }
 
-  for (const auto& tag : m_changedTags)
+  for (const auto& [_, tag] : m_changedTags)
   {
-    if (tag.second->IsUpcoming())
+    if (tag->IsUpcoming() &&
+        (!m_nextStartingTag || m_nextStartingTag->StartAsUTC() > tag->StartAsUTC()))
     {
-      if (!m_nextStartingTag || m_nextStartingTag->StartAsUTC() > tag.second->StartAsUTC())
-      {
-        m_nextStartingTag = tag.second;
-        break;
-      }
+      m_nextStartingTag = tag;
+      break;
     }
   }
 }

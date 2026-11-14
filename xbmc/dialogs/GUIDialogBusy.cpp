@@ -10,14 +10,16 @@
 
 #include "ServiceBroker.h"
 #include "guilib/GUIComponent.h"
-#include "guilib/GUIProgressControl.h"
 #include "guilib/GUIWindowManager.h"
 #include "threads/IRunnable.h"
+#include "threads/SystemClock.h"
 #include "threads/Thread.h"
+#include "utils/log.h"
+
+#include <algorithm>
+#include <optional>
 
 using namespace std::chrono_literals;
-
-#define PROGRESS_CONTROL 10
 
 class CBusyWaiter : public CThread
 {
@@ -25,7 +27,7 @@ class CBusyWaiter : public CThread
   IRunnable *m_runnable;
 public:
   explicit CBusyWaiter(IRunnable *runnable) :
-  CThread(runnable, "waiting"), m_done(new CEvent()),  m_runnable(runnable) { }
+  CThread(runnable, "waiting"), m_done(std::make_shared<CEvent>()),  m_runnable(runnable) { }
 
   ~CBusyWaiter() override { StopThread(); }
 
@@ -73,73 +75,107 @@ bool CGUIDialogBusy::Wait(IRunnable *runnable, unsigned int displaytime, bool al
   return true;
 }
 
-bool CGUIDialogBusy::WaitOnEvent(CEvent &event, unsigned int displaytime /* = 100 */, bool allowCancel /* = true */)
+bool CGUIDialogBusy::WaitOnEvent(CEvent& event,
+                                 unsigned int displaytime /* = 100 */,
+                                 bool allowCancel /* = true */)
 {
+  return DoWaitOnEvent(event, displaytime, allowCancel, {}) == WaitResult::COMPLETED;
+}
+
+CGUIDialogBusy::WaitResult CGUIDialogBusy::WaitOnEventFor(CEvent& event,
+                                                          std::chrono::milliseconds timeout,
+                                                          unsigned int displaytime /* = 100 */,
+                                                          bool allowCancel /* = true */)
+{
+  return DoWaitOnEvent(event, displaytime, allowCancel, timeout);
+}
+
+CGUIDialogBusy::WaitResult CGUIDialogBusy::DoWaitOnEvent(
+    CEvent& event,
+    unsigned int displaytime,
+    bool allowCancel,
+    std::optional<std::chrono::milliseconds> timeout)
+{
+  XbmcThreads::EndTime<> deadline;
+  if (timeout)
+    deadline.Set(*timeout);
+
+  const auto initialWait{timeout ? std::min(std::chrono::milliseconds(displaytime), *timeout)
+                                 : std::chrono::milliseconds(displaytime)};
+
   bool cancelled = false;
-  if (!event.Wait(std::chrono::milliseconds(displaytime)))
+  bool timedout = false;
+  if (!event.Wait(initialWait))
   {
-    // throw up the progress
-    CGUIDialogBusy* dialog = CServiceBroker::GetGUI()->GetWindowManager().GetWindow<CGUIDialogBusy>(WINDOW_DIALOG_BUSY);
+    // Nothing below can change the answer once the deadline has passed, and the dialog is not
+    // worth looking up to abandon it.
+    if (timeout && deadline.IsTimePast())
+      return WaitResult::TIMED_OUT;
+
+    auto* dialog = static_cast<CGUIDialogBusy*>(
+        CServiceBroker::GetGUI()->GetWindowManager().GetWindow(WINDOW_DIALOG_BUSY));
     if (dialog)
     {
-      if (dialog->IsDialogRunning())
+      const uint32_t level = ++dialog->m_waiters;
+      if (level == 1)
       {
-        throw std::logic_error("busy dialog already running");
+        dialog->Open();
       }
-
-      dialog->Open();
 
       while (!event.Wait(1ms))
       {
-        dialog->ProcessRenderLoop(false);
-        if (allowCancel && dialog->IsCanceled())
+        if (level == dialog->m_waiters)
+          dialog->ProcessRenderLoop(false);
+        if (allowCancel && dialog->m_cancelled)
         {
           cancelled = true;
           break;
         }
+        if (timeout && deadline.IsTimePast())
+        {
+          timedout = true;
+          break;
+        }
       }
 
-      dialog->Close(true);
+      if (--dialog->m_waiters == 0)
+      {
+        dialog->Close(true); // Force close.
+        dialog->ProcessRenderLoop(false); // Force repaint.
+      }
+    }
+    else if (timeout)
+    {
+      timedout = !event.Wait(deadline.GetTimeLeft());
     }
   }
-  return !cancelled;
+  if (cancelled)
+    return WaitResult::CANCELLED;
+  return timedout ? WaitResult::TIMED_OUT : WaitResult::COMPLETED;
 }
 
 CGUIDialogBusy::CGUIDialogBusy(void)
   : CGUIDialog(WINDOW_DIALOG_BUSY, "DialogBusy.xml", DialogModalityType::MODAL)
 {
   m_loadType = LOAD_ON_GUI_INIT;
-  m_bCanceled = false;
-  m_progress = -1;
 }
 
 CGUIDialogBusy::~CGUIDialogBusy(void) = default;
 
 void CGUIDialogBusy::Open_Internal(bool bProcessRenderLoop, const std::string& param /* = "" */)
 {
-  m_bCanceled = false;
   m_bLastVisible = true;
-  m_progress = -1;
+  m_cancelled = false;
 
   CGUIDialog::Open_Internal(false, param);
 }
-
 
 void CGUIDialogBusy::DoProcess(unsigned int currentTime, CDirtyRegionList &dirtyregions)
 {
   bool visible = CServiceBroker::GetGUI()->GetWindowManager().IsModalDialogTopmost(WINDOW_DIALOG_BUSY);
   if(!visible && m_bLastVisible)
-    dirtyregions.push_back(CDirtyRegion(m_renderRegion));
+    dirtyregions.emplace_back(m_renderRegion);
   m_bLastVisible = visible;
-
-  // update the progress control if available
-  CGUIControl *control = GetControl(PROGRESS_CONTROL);
-  if (control && control->GetControlType() == CGUIControl::GUICONTROL_PROGRESS)
-  {
-    CGUIProgressControl *progress = static_cast<CGUIProgressControl*>(control);
-    progress->SetPercentage(m_progress);
-    progress->SetVisible(m_progress > -1);
-  }
 
   CGUIDialog::DoProcess(currentTime, dirtyregions);
 }
@@ -153,11 +189,6 @@ void CGUIDialogBusy::Render()
 
 bool CGUIDialogBusy::OnBack(int actionID)
 {
-  m_bCanceled = true;
+  m_cancelled = true;
   return true;
-}
-
-void CGUIDialogBusy::SetProgress(float percent)
-{
-  m_progress = percent;
 }
